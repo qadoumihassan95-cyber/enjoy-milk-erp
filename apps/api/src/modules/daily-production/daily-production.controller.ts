@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../core/auth/current-user.decorator';
+import { Roles } from '../../core/auth/roles.decorator';
 import type { AuthenticatedUser } from '../../core/auth/jwt.strategy';
 import { DailyProductionService } from './daily-production.service';
 
@@ -86,6 +87,7 @@ export class DailyProductionController {
     return this.service.cancel(user.tenantId, user.id, id);
   }
 
+  @Roles('MANAGER')
   @Delete(':id')
   delete(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.service.delete(user.tenantId, id);

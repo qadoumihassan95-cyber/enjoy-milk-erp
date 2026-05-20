@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../core/auth/current-user.decorator';
+import { Roles } from '../../core/auth/roles.decorator';
 import type { AuthenticatedUser } from '../../core/auth/jwt.strategy';
 import { SimpleOrdersService } from './simple-orders.service';
 
@@ -61,6 +62,7 @@ export class SimpleOrdersController {
     return this.service.addPayment(user.tenantId, id, +body.amount);
   }
 
+  @Roles('MANAGER')
   @Delete(':id')
   delete(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.service.delete(user.tenantId, user.id, id);

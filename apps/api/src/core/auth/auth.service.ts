@@ -1,6 +1,7 @@
 import {
   Injectable,
   UnauthorizedException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -75,6 +76,37 @@ export class AuthService {
     });
     if (!user) throw new UnauthorizedException();
     return this.sanitizeUser(user);
+  }
+
+  /** تغيير كلمة المرور للمستخدم الحالي */
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException();
+
+    const ok = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!ok) throw new BadRequestException('كلمة المرور الحالية غير صحيحة');
+
+    if (newPassword.length < 6)
+      throw new BadRequestException('كلمة المرور الجديدة قصيرة جداً');
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+
+    // إلغاء كل الجلسات الأخرى لإجبار إعادة الدخول
+    await this.prisma.session.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+
+    this.logger.log(`Password changed: ${user.email}`);
+    return { ok: true };
   }
 
   private async issueTokens(user: any, ip?: string, userAgent?: string) {

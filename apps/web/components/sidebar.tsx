@@ -12,6 +12,7 @@ import {
   FileBadge2,
   LogOut,
   Settings,
+  History,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth';
@@ -26,6 +27,8 @@ const NAV = [
   { href: '/finance', label: 'المالية', icon: Wallet },
   { href: '/employees', label: 'الموظفون', icon: Users },
   { href: '/licenses', label: 'الرخص', icon: FileBadge2 },
+  { href: '/activity', label: 'سجل العمليات', icon: History },
+  { href: '/settings', label: 'الإعدادات', icon: Settings },
 ];
 
 export function Sidebar() {
