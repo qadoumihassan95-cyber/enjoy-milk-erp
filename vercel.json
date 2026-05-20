@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "buildCommand": "cd apps/web && pnpm install --frozen-lockfile && pnpm exec next build",
+  "outputDirectory": "apps/web/.next",
+  "installCommand": "echo 'handled by buildCommand'",
+  "framework": "nextjs",
+  "rootDirectory": "apps/web",
+  "env": {
+    "NEXT_PUBLIC_API_URL": "@enjoymilk_api_url"
+  }
+}

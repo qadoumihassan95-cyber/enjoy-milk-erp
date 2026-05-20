@@ -1,0 +1,37 @@
+# =============================================================================
+# Fly.io config for Web
+# Deploy:  fly launch --copy-config --config fly.web.toml --name enjoymilk-web --no-deploy
+#          fly deploy --config fly.web.toml
+# =============================================================================
+
+app = "enjoymilk-web"
+primary_region = "fra"
+
+[build]
+  dockerfile = "apps/web/Dockerfile"
+  [build.args]
+    NEXT_PUBLIC_API_URL = "https://enjoymilk-api.fly.dev"
+
+[env]
+  PORT = "3000"
+  NODE_ENV = "production"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[http_service.checks]]
+  grace_period = "15s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/login"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512

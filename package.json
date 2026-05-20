@@ -1,0 +1,30 @@
+{
+  "name": "enjoy-milk-erp",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Cloud-based ERP for powder milk manufacturing",
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"pnpm --filter api dev\" \"pnpm --filter web dev\"",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "prisma:generate": "pnpm --filter api prisma:generate",
+    "prisma:migrate": "pnpm --filter api prisma:migrate",
+    "prisma:seed": "pnpm --filter api prisma:seed",
+    "prisma:studio": "pnpm --filter api prisma:studio",
+    "setup": "pnpm install && pnpm prisma:generate && pnpm prisma:migrate && pnpm prisma:seed"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "prettier": "^3.1.1",
+    "prisma": "5.22.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "packageManager": "pnpm@8.15.0",
+  "dependencies": {
+    "@prisma/client": "5.22.0"
+  }
+}

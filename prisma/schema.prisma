@@ -1,0 +1,803 @@
+// =============================================================================
+// Enjoy Milk ERP — Prisma Schema (MVP Production-Ready)
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── CORE ──────────────────────────────────────────────────────────────
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  legalName String?
+  currency  String   @default("JOD")
+  timezone  String   @default("Asia/Amman")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  users User[]
+}
+
+model User {
+  id           String    @id @default(cuid())
+  tenantId     String
+  email        String    @unique
+  fullName     String
+  passwordHash String
+  role         UserRole  @default(OPERATOR)
+  active       Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  sessions Session[]
+
+  @@index([tenantId, active])
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  MANAGER
+  ACCOUNTANT
+  WAREHOUSE
+  OPERATOR
+  HR
+}
+
+model Session {
+  id           String    @id @default(cuid())
+  userId       String
+  refreshToken String    @unique
+  ip           String?
+  userAgent    String?
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─── INVENTORY ─────────────────────────────────────────────────────────
+
+model Warehouse {
+  id        String        @id @default(cuid())
+  tenantId  String
+  code      String
+  name      String
+  type      WarehouseType @default(GENERAL)
+  active    Boolean       @default(true)
+  createdAt DateTime      @default(now())
+
+  stockLevels   StockLevel[]
+  movementsFrom StockMovement[] @relation("MovementFrom")
+  movementsTo   StockMovement[] @relation("MovementTo")
+
+  @@unique([tenantId, code])
+}
+
+enum WarehouseType {
+  POWDER_BULK       // بودرة مستوردة
+  PACKAGING         // مواد تغليف
+  FINISHED_GOODS    // منتجات جاهزة
+  QUARANTINE        // حجر صحي
+  GENERAL
+}
+
+model Item {
+  id              String           @id @default(cuid())
+  tenantId        String
+  sku             String
+  barcode         String?
+  name            String
+  type            ItemType
+  unit            String           @default("PCS")
+  netWeightGrams  Int?
+  packagingFormat PackagingFormat?
+  packsPerCarton  Int?
+  shelfLifeDays   Int?
+  reorderLevel    Decimal?         @db.Decimal(18, 4)
+  costPrice       Decimal?         @db.Decimal(18, 4)
+  sellPrice       Decimal?         @db.Decimal(18, 2)
+  active          Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  batches      Batch[]
+  stockLevels  StockLevel[]
+  movements    StockMovement[]
+  formulas     PackagingFormulaItem[]
+  outputItem   PackagingFormula[]     @relation("formulaOutput")
+
+  @@unique([tenantId, sku])
+  @@index([tenantId, type, active])
+  @@index([barcode])
+}
+
+enum ItemType {
+  POWDER_BULK     // البودرة المستوردة
+  PACKAGING       // كراتين، أكياس، تينات
+  POWDER_RETAIL   // المنتج النهائي المعبّأ
+  CONSUMABLE      // مستهلكات
+}
+
+enum PackagingFormat {
+  SACHET
+  TIN
+  POUCH
+  JAR
+  BULK_BAG
+}
+
+model Batch {
+  id             String    @id @default(cuid())
+  tenantId       String
+  itemId         String
+  code           String
+  productionDate DateTime?
+  expiryDate     DateTime?
+  qcStatus       QcStatus  @default(PASSED)
+  notes          String?
+  createdAt      DateTime  @default(now())
+
+  item        Item            @relation(fields: [itemId], references: [id])
+  stockLevels StockLevel[]
+  movements   StockMovement[]
+
+  @@unique([tenantId, code])
+  @@index([itemId, expiryDate])
+}
+
+enum QcStatus {
+  PENDING
+  PASSED
+  FAILED
+  ON_HOLD
+}
+
+model StockLevel {
+  id          String   @id @default(cuid())
+  tenantId    String
+  itemId      String
+  warehouseId String
+  batchId     String?
+  quantity    Decimal  @db.Decimal(18, 4) @default(0)
+  updatedAt   DateTime @updatedAt
+
+  item      Item      @relation(fields: [itemId], references: [id])
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+  batch     Batch?    @relation(fields: [batchId], references: [id])
+
+  @@unique([itemId, warehouseId, batchId])
+  @@index([tenantId, warehouseId])
+}
+
+model StockMovement {
+  id              String       @id @default(cuid())
+  tenantId        String
+  type            MovementType
+  itemId          String
+  batchId         String?
+  fromWarehouseId String?
+  toWarehouseId   String?
+  quantity        Decimal      @db.Decimal(18, 4)
+  reasonCode      String?
+  refType         String?
+  refId           String?
+  notes           String?
+  performedById   String?
+  performedAt     DateTime     @default(now())
+
+  item          Item       @relation(fields: [itemId], references: [id])
+  batch         Batch?     @relation(fields: [batchId], references: [id])
+  fromWarehouse Warehouse? @relation("MovementFrom", fields: [fromWarehouseId], references: [id])
+  toWarehouse   Warehouse? @relation("MovementTo", fields: [toWarehouseId], references: [id])
+
+  @@index([tenantId, performedAt])
+  @@index([itemId, performedAt])
+}
+
+enum MovementType {
+  IN
+  OUT
+  TRANSFER
+  ADJUSTMENT
+  WASTE
+  RETURN
+}
+
+// ─── REPACKAGING (الإنتاج) ─────────────────────────────────────────────
+
+model ProductionLine {
+  id        String   @id @default(cuid())
+  tenantId  String
+  code      String
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  machines     Machine[]
+  repackOrders RepackOrder[]
+
+  @@unique([tenantId, code])
+}
+
+model Machine {
+  id              String      @id @default(cuid())
+  tenantId        String
+  lineId          String
+  code            String
+  name            String
+  type            MachineType?
+  capacityPerHour Decimal?    @db.Decimal(18, 4)
+  active          Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+
+  line       ProductionLine @relation(fields: [lineId], references: [id])
+  repackRuns RepackRun[]
+
+  @@unique([tenantId, code])
+}
+
+enum MachineType {
+  SACHET_FILLER
+  TIN_FILLER
+  POUCH_FILLER
+  CARTONING
+  LABELING
+  WEIGHING
+  METAL_DETECTOR
+}
+
+model PackagingFormula {
+  id           String   @id @default(cuid())
+  tenantId     String
+  code         String
+  name         String
+  outputItemId String
+  outputQty    Decimal  @db.Decimal(18, 4)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  outputItem   Item                   @relation("formulaOutput", fields: [outputItemId], references: [id])
+  items        PackagingFormulaItem[]
+  repackOrders RepackOrder[]
+
+  @@unique([tenantId, code])
+}
+
+model PackagingFormulaItem {
+  id        String  @id @default(cuid())
+  formulaId String
+  itemId    String
+  quantity  Decimal @db.Decimal(18, 4)
+  unit      String
+  isPrimary Boolean @default(false)
+
+  formula PackagingFormula @relation(fields: [formulaId], references: [id], onDelete: Cascade)
+  item    Item             @relation(fields: [itemId], references: [id])
+
+  @@index([formulaId])
+}
+
+model RepackOrder {
+  id          String            @id @default(cuid())
+  tenantId    String
+  number      String
+  formulaId   String
+  lineId      String
+  plannedQty  Decimal           @db.Decimal(18, 4)
+  status      RepackOrderStatus @default(PLANNED)
+  notes       String?
+  createdById String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  formula PackagingFormula @relation(fields: [formulaId], references: [id])
+  line    ProductionLine   @relation(fields: [lineId], references: [id])
+  runs    RepackRun[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+}
+
+enum RepackOrderStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model RepackRun {
+  id              String          @id @default(cuid())
+  tenantId        String
+  orderId         String
+  machineId       String
+  startedAt       DateTime        @default(now())
+  endedAt         DateTime?
+  outputUnits     Decimal         @db.Decimal(18, 4) @default(0)
+  wasteUnits      Decimal         @db.Decimal(18, 4) @default(0)
+  downtimeMinutes Int             @default(0)
+  yieldPct        Decimal?        @db.Decimal(7, 4)
+  status          RepackRunStatus @default(IN_PROGRESS)
+  notes           String?
+  startedById     String?
+  endedById       String?
+
+  order   RepackOrder @relation(fields: [orderId], references: [id])
+  machine Machine     @relation(fields: [machineId], references: [id])
+
+  @@index([tenantId, startedAt])
+  @@index([machineId, status])
+}
+
+enum RepackRunStatus {
+  IN_PROGRESS
+  COMPLETED
+  ABORTED
+}
+
+// ─── CUSTOMERS & SALES ─────────────────────────────────────────────────
+
+model Customer {
+  id           String   @id @default(cuid())
+  tenantId     String
+  code         String
+  name         String
+  type         String   @default("RETAIL")
+  phone        String?
+  email        String?
+  address      String?
+  creditLimit  Decimal  @db.Decimal(18, 2) @default(0)
+  paymentTerms Int      @default(0)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  orders   SalesOrder[]
+  payments Payment[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, active])
+}
+
+model SalesOrder {
+  id           String           @id @default(cuid())
+  tenantId     String
+  number       String
+  customerId   String
+  orderDate    DateTime         @default(now())
+  deliveryDate DateTime?
+  status       SalesOrderStatus @default(DRAFT)
+  subtotal     Decimal          @db.Decimal(18, 2) @default(0)
+  total        Decimal          @db.Decimal(18, 2) @default(0)
+  paid         Decimal          @db.Decimal(18, 2) @default(0)
+  balance      Decimal          @db.Decimal(18, 2) @default(0)
+  notes        String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  customer Customer    @relation(fields: [customerId], references: [id])
+  lines    OrderLine[]
+  payments Payment[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, customerId, status])
+}
+
+enum SalesOrderStatus {
+  DRAFT
+  CONFIRMED
+  DELIVERED
+  PAID
+  CANCELLED
+}
+
+model OrderLine {
+  id        String  @id @default(cuid())
+  orderId   String
+  itemId    String
+  quantity  Decimal @db.Decimal(18, 4)
+  unitPrice Decimal @db.Decimal(18, 2)
+  lineTotal Decimal @db.Decimal(18, 2)
+
+  order SalesOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+model Payment {
+  id           String        @id @default(cuid())
+  tenantId     String
+  customerId   String
+  orderId      String?
+  number       String
+  amount       Decimal       @db.Decimal(18, 2)
+  method       PaymentMethod @default(CASH)
+  cashboxId    String?
+  receivedAt   DateTime      @default(now())
+  notes        String?
+  receivedById String?
+
+  customer Customer    @relation(fields: [customerId], references: [id])
+  order    SalesOrder? @relation(fields: [orderId], references: [id])
+  cashbox  Cashbox?    @relation(fields: [cashboxId], references: [id])
+
+  @@unique([tenantId, number])
+  @@index([tenantId, customerId])
+}
+
+enum PaymentMethod {
+  CASH
+  CHEQUE
+  BANK_TRANSFER
+  CARD
+}
+
+// ─── FINANCE ───────────────────────────────────────────────────────────
+
+model Cashbox {
+  id        String   @id @default(cuid())
+  tenantId  String
+  code      String
+  name      String
+  balance   Decimal  @db.Decimal(18, 2) @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  movements CashMovement[]
+  payments  Payment[]
+
+  @@unique([tenantId, code])
+}
+
+model CashMovement {
+  id            String           @id @default(cuid())
+  tenantId      String
+  cashboxId     String
+  type          CashMovementType
+  amount        Decimal          @db.Decimal(18, 2)
+  description   String?
+  refType       String?
+  refId         String?
+  performedById String?
+  performedAt   DateTime         @default(now())
+
+  cashbox Cashbox @relation(fields: [cashboxId], references: [id])
+
+  @@index([tenantId, cashboxId, performedAt])
+}
+
+enum CashMovementType {
+  IN
+  OUT
+  TRANSFER
+}
+
+model Cheque {
+  id         String       @id @default(cuid())
+  tenantId   String
+  type       ChequeType
+  number     String
+  bankName   String?
+  amount     Decimal      @db.Decimal(18, 2)
+  issueDate  DateTime
+  dueDate    DateTime
+  status     ChequeStatus @default(IN_HAND)
+  customerId String?
+  notes      String?
+  createdAt  DateTime     @default(now())
+
+  @@unique([tenantId, type, number])
+  @@index([tenantId, status, dueDate])
+}
+
+enum ChequeType {
+  RECEIVED
+  ISSUED
+}
+
+enum ChequeStatus {
+  IN_HAND
+  DEPOSITED
+  CASHED
+  RETURNED
+  CANCELLED
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  tenantId    String
+  number      String
+  category    String
+  amount      Decimal  @db.Decimal(18, 2)
+  description String
+  expenseDate DateTime @default(now())
+  cashboxId   String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, number])
+  @@index([tenantId, expenseDate])
+}
+
+// ─── HR ────────────────────────────────────────────────────────────────
+
+model Employee {
+  id         String    @id @default(cuid())
+  tenantId   String
+  code       String
+  fullName   String
+  nationalId String?
+  phone      String?
+  email      String?
+  department String?
+  position   String?
+  hireDate   DateTime?
+  baseSalary Decimal?  @db.Decimal(18, 2)
+  active     Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  attendance AttendanceRecord[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, active])
+}
+
+model AttendanceRecord {
+  id          String           @id @default(cuid())
+  tenantId    String
+  employeeId  String
+  date        DateTime         @db.Date
+  checkIn     DateTime?
+  checkOut    DateTime?
+  lateMin     Int              @default(0)
+  overtimeMin Int              @default(0)
+  status      AttendanceStatus @default(PRESENT)
+  notes       String?
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@unique([employeeId, date])
+  @@index([tenantId, date])
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LEAVE
+  LATE
+  HALF_DAY
+  HOLIDAY
+}
+
+// ─── COMPLIANCE ────────────────────────────────────────────────────────
+
+model License {
+  id         String        @id @default(cuid())
+  tenantId   String
+  type       String
+  number     String
+  issueDate  DateTime
+  expiryDate DateTime
+  status     LicenseStatus @default(VALID)
+  notes      String?
+  createdAt  DateTime      @default(now())
+
+  @@unique([tenantId, type, number])
+  @@index([tenantId, expiryDate])
+}
+
+enum LicenseStatus {
+  VALID
+  EXPIRING_SOON
+  EXPIRED
+}
+
+// ─── AUDIT ─────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  tenantId    String
+  actorUserId String?
+  action      String
+  resource    String
+  resourceId  String?
+  before      Json?
+  after       Json?
+  ip          String?
+  occurredAt  DateTime @default(now())
+
+  @@index([tenantId, resource, occurredAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── DAILY PRODUCTION (ورقة الإنتاج اليومية) ─────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// تنظيم الأقسام:
+//   1) المواد المسحوبة من المستودع الخام:
+//      - الكرتون  (CartonUsage)
+//      - الألمنيوم (AluminumUsage)
+//      - الحليب   (MilkUsage)
+//   2) المواد المنتجة      (ProducedItem)
+//   3) التوالف              (ProductionWaste)
+//   4) ملاحظات              (حقل notes في DailyProduction)
+//
+// عند POST:
+//   • خصم كل المواد الخام من المخزون
+//   • إضافة المواد المنتجة لمخزون المنتجات الجاهزة
+//   • خصم التوالف من المخزون
+//   • حساب رصيد المخزون بعد الإنتاج تلقائياً
+// ═══════════════════════════════════════════════════════════════════════════
+
+model DailyProduction {
+  id             String   @id @default(cuid())
+  tenantId       String
+  productionDate DateTime @db.Date
+  shift          String?
+  operatorName   String?
+  operatorId     String?
+  machineNumber  Int?              // اختياري — يمكن ربط الورقة بماكينة محددة
+  notes          String?           // ملاحظات (textarea كبير)
+  status         String   @default("DRAFT")  // DRAFT | POSTED | CANCELLED
+  postedAt       DateTime?
+  postedById     String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  cartonUsage   ProductionCartonUsage[]
+  aluminumUsage ProductionAluminumUsage[]
+  milkUsage     ProductionMilkUsage[]
+  produced      ProductionProducedItem[]
+  wastages      ProductionWaste[]
+
+  @@index([tenantId, productionDate])
+  @@index([tenantId, status])
+}
+
+// ── (1) الكرتون المسحوب من المستودع الخام ─────────────────
+model ProductionCartonUsage {
+  id                String  @id @default(cuid())
+  tenantId          String
+  dailyProductionId String
+  itemId            String?            // ربط بصنف من المخزون (اختياري)
+  itemName          String             // اسم الصنف (نص حر)
+  quantity          Decimal @db.Decimal(18, 4)
+  warehouseId       String?
+
+  dailyProduction DailyProduction @relation(fields: [dailyProductionId], references: [id], onDelete: Cascade)
+
+  @@index([dailyProductionId])
+  @@index([tenantId, itemId])
+}
+
+// ── (2) الألمنيوم المسحوب من المستودع الخام ───────────────
+model ProductionAluminumUsage {
+  id                String  @id @default(cuid())
+  tenantId          String
+  dailyProductionId String
+  itemId            String?
+  itemName          String
+  quantity          Decimal @db.Decimal(18, 4)
+  warehouseId       String?
+
+  dailyProduction DailyProduction @relation(fields: [dailyProductionId], references: [id], onDelete: Cascade)
+
+  @@index([dailyProductionId])
+  @@index([tenantId, itemId])
+}
+
+// ── (3) الحليب الخام المسحوب (عدد + كمية) ────────────────
+model ProductionMilkUsage {
+  id                String  @id @default(cuid())
+  tenantId          String
+  dailyProductionId String
+  itemId            String?
+  itemName          String?            // اختياري — للسهولة
+  count             Int     @default(0)         // العدد (عدد العبوات/البراميل)
+  quantity          Decimal @db.Decimal(18, 4)  // الكمية (لتر / كغ)
+  unit              String  @default("L")
+  warehouseId       String?
+
+  dailyProduction DailyProduction @relation(fields: [dailyProductionId], references: [id], onDelete: Cascade)
+
+  @@index([dailyProductionId])
+  @@index([tenantId, itemId])
+}
+
+// ── (4) المواد المنتجة (الصنف + عدد الطبالي + مجموع الكراتين) ─
+model ProductionProducedItem {
+  id                String  @id @default(cuid())
+  tenantId          String
+  dailyProductionId String
+  itemId            String?            // ربط بمنتج من المخزون
+  itemName          String             // الصنف
+  palletsCount      Int     @default(0)  // عدد الطبالي
+  cartonsTotal      Int     @default(0)  // مجموع الكراتين
+  warehouseId       String?
+  notes             String?
+
+  dailyProduction DailyProduction @relation(fields: [dailyProductionId], references: [id], onDelete: Cascade)
+
+  @@index([dailyProductionId])
+  @@index([tenantId, itemId])
+}
+
+// ── (5) التوالف ────────────────────────────────────────────
+model ProductionWaste {
+  id                String  @id @default(cuid())
+  tenantId          String
+  dailyProductionId String
+  itemId            String?
+  itemName          String             // الصنف
+  quantity          Decimal @db.Decimal(18, 4)  // العدد / الوزن
+  unit              String  @default("PCS")    // PCS | KG | L
+  warehouseId       String?
+  reason            String?
+
+  dailyProduction DailyProduction @relation(fields: [dailyProductionId], references: [id], onDelete: Cascade)
+
+  @@index([dailyProductionId])
+  @@index([tenantId, itemId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── SIMPLE ORDERS (طلبيات مبسّطة — بدون فواتير) ───────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// طلبية بسيطة: اسم العميل + هاتف + منطقة + منتجات + مدفوع/متبقي
+// خصم المخزون فوراً عند الإنشاء، إرجاع عند الحذف/التعديل
+// ═══════════════════════════════════════════════════════════════════════════
+
+model SimpleOrder {
+  id            String   @id @default(cuid())
+  tenantId      String
+  number        String              // ORD-2026-001
+  customerId    String?             // اختياري — ربط مع Customer
+  customerName  String              // نص حر للسهولة
+  customerPhone String?
+  region        String?             // المنطقة
+  orderDate     DateTime  @default(now())
+  total         Decimal  @db.Decimal(18, 2) @default(0)
+  paid          Decimal  @db.Decimal(18, 2) @default(0)
+  balance       Decimal  @db.Decimal(18, 2) @default(0)
+  status        String   @default("UNPAID")  // UNPAID | PARTIAL | PAID | CANCELLED
+  notes         String?
+  createdById   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  lines SimpleOrderLine[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+  @@index([tenantId, orderDate])
+}
+
+model SimpleOrderLine {
+  id          String   @id @default(cuid())
+  orderId     String
+  itemId      String?            // ربط بالمخزون (اختياري)
+  productName String             // نص حر
+  size        String?            // الحجم
+  quantity    Decimal  @db.Decimal(18, 4)
+  unitPrice   Decimal  @db.Decimal(18, 2)
+  lineTotal   Decimal  @db.Decimal(18, 2)
+
+  order SimpleOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([itemId])
+}

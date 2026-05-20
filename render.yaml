@@ -1,0 +1,73 @@
+# =============================================================================
+# Render.com — Blueprint (Enjoy Milk ERP)
+# الاستخدام: Render Dashboard → New → Blueprint → اربط الـ repo → يقرأ هذا الملف
+# يُنشئ: قاعدة بيانات Postgres + خدمة API (NestJS) + خدمة Web (Next.js)
+# =============================================================================
+
+databases:
+  - name: enjoymilk-db
+    plan: free
+    databaseName: enjoymilk
+    user: enjoymilk
+    region: frankfurt
+
+services:
+  # ─── API (NestJS + Prisma) ───────────────────────────────────────────────
+  - type: web
+    name: enjoymilk-api
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # قاعدة البيانات — تُربط تلقائياً من قاعدة Render أعلاه
+      - key: DATABASE_URL
+        fromDatabase:
+          name: enjoymilk-db
+          property: connectionString
+      # أسرار JWT — يولّدها Render تلقائياً (لا تكتبها يدوياً)
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 15m
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 7d
+      # عنوان الواجهة (CORS) — اضبطه يدوياً بعد نشر الـ web (https://enjoymilk-web.onrender.com)
+      - key: APP_URL
+        sync: false
+      # ─── Telegram Bot ───
+      # توكن البوت من @BotFather (سري) — أدخله يدوياً
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      # سر التحقق من الـ webhook — يولّده Render تلقائياً
+      - key: TELEGRAM_WEBHOOK_SECRET
+        generateValue: true
+      # معرّفات الدردشة المصرّح لها (مفصولة بفواصل) — اختياري، أدخله يدوياً
+      - key: TELEGRAM_ALLOWED_CHAT_IDS
+        sync: false
+      # PUBLIC_API_URL غير مطلوب — يُستخدم RENDER_EXTERNAL_URL تلقائياً
+
+  # ─── Web (Next.js) ───────────────────────────────────────────────────────
+  - type: web
+    name: enjoymilk-web
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./apps/web/Dockerfile
+    dockerContext: .
+    healthCheckPath: /login
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # عنوان الـ API — اضبطه يدوياً بعد نشر الـ api (https://enjoymilk-api.onrender.com)
+      # ملاحظة: متغيّر NEXT_PUBLIC_* يُحقن وقت البناء (build arg) ووقت التشغيل
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
