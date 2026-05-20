@@ -41,6 +41,7 @@ COPY --from=builder --chown=app:app /app/node_modules ./node_modules
 COPY --from=builder --chown=app:app /app/apps/api/node_modules ./apps/api/node_modules
 COPY --from=builder --chown=app:app /app/apps/api/dist ./apps/api/dist
 COPY --from=builder --chown=app:app /app/apps/api/package.json ./apps/api/
+COPY --from=builder --chown=app:app /app/apps/api/tsconfig.json ./apps/api/
 COPY --from=builder --chown=app:app /app/prisma ./prisma
 COPY --from=builder --chown=app:app /app/package.json /app/pnpm-workspace.yaml ./
 
@@ -53,5 +54,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
 
 # tini = proper PID 1 (clean signal handling for graceful restart)
 ENTRYPOINT ["/sbin/tini","--"]
-# On boot: apply pending migrations, then start the API.
-CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy --schema=./prisma/schema.prisma && node apps/api/dist/main.js"]
+# On boot: (1) apply pending migrations, (2) seed once (idempotent — upserts,
+# لا يصفّر كلمات المرور), (3) start the API. الـ seed غير حرج: لو فشل، الـ API يكمل.
+CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy --schema=./prisma/schema.prisma && (cd apps/api && node node_modules/.bin/ts-node --transpile-only ../../prisma/seed.ts || echo 'seed step skipped (non-fatal)') && node apps/api/dist/main.js"]
