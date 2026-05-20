@@ -827,7 +827,7 @@ function BalanceCard({ title, icon, rows }: any) {
           {rows.map((r: any) => (
             <div key={r.id} className="flex justify-between text-xs bg-white rounded px-2 py-1.5 border border-zinc-200">
               <span className="truncate">{r.name}</span>
-              <span className="font-black" data-numeric>{r.balance.toLocaleString('en-US')} {r.unit}</span>
+              <span className="font-black" data-numeric>{Number(r.balance ?? 0).toLocaleString('en-US')} {r.unit}</span>
             </div>
           ))}
         </div>
