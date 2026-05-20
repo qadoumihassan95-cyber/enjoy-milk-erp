@@ -27,10 +27,14 @@ COPY apps/api/src apps/api/src
 RUN cd apps/api && pnpm exec nest build
 
 # Precompile the seed to plain JS (bulletproof — لا نعتمد على ts-node وقت التشغيل)
+# نستخدم ';' لأن tsc يُنتج JS حتى مع أخطاء أنواع (require تُحل وقت التشغيل عبر NODE_PATH)،
+# ثم نتحقق أن الملف أُنتج فعلاً.
 RUN node apps/api/node_modules/typescript/bin/tsc prisma/seed.ts \
       --outDir prisma --module commonjs --target ES2021 \
       --esModuleInterop --skipLibCheck --moduleResolution node \
-    && test -f prisma/seed.js
+      --noEmitOnError false --types node \
+      --typeRoots apps/api/node_modules/@types ; \
+    test -f prisma/seed.js
 
 # ─── Runtime ─────────────────────────────────────────────────────────────────
 # We keep the full node_modules (incl. prisma CLI) so `prisma migrate deploy`
