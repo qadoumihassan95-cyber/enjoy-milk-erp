@@ -35,9 +35,11 @@ export class TelegramService implements OnModuleInit {
   ) {
     // trim() يزيل أي مسافات/أسطر زائدة قد تُلصق مع التوكن (سبب شائع لـ 401)
     this.token = (this.config.get<string>('TELEGRAM_BOT_TOKEN') ?? '').trim();
-    this.webhookSecret = (
-      this.config.get<string>('TELEGRAM_WEBHOOK_SECRET') ?? ''
-    ).trim();
+    // Telegram يقبل في secret_token فقط [A-Za-z0-9_-]. نزيل أي أحرف أخرى
+    // (مثل / و = و + التي يولّدها Render في القيم base64) — لتفادي خطأ 400.
+    this.webhookSecret = (this.config.get<string>('TELEGRAM_WEBHOOK_SECRET') ?? '')
+      .trim()
+      .replace(/[^A-Za-z0-9_-]/g, '');
     // PUBLIC_API_URL أو RENDER_EXTERNAL_URL (يحقنه Render تلقائياً) — لتسجيل الـ webhook
     this.publicApiUrl = (
       this.config.get<string>('PUBLIC_API_URL') ??
