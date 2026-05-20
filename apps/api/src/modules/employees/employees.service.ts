@@ -166,6 +166,93 @@ export class EmployeesService {
     });
   }
 
+  /**
+   * كشف رواتب الشهر — حساب تلقائي:
+   *   اليومية = الراتب / أيام العمل (26)
+   *   الساعة  = اليومية / 8
+   *   خصم الغياب     = أيام الغياب × اليومية
+   *   خصم التأخير    = ساعات التأخير × الساعة
+   *   أجر الإضافي    = ساعات الإضافي × الساعة × 1.5
+   *   الصافي = الأساسي − خصم الغياب − خصم التأخير + أجر الإضافي
+   */
+  async getPayroll(tenantId: string, monthStr?: string) {
+    const ref = monthStr ? new Date(monthStr + '-01') : new Date();
+    const start = new Date(ref.getFullYear(), ref.getMonth(), 1);
+    const end = new Date(ref.getFullYear(), ref.getMonth() + 1, 1);
+    const WORKING_DAYS = 26;
+    const round = (n: number) => Math.round(n * 100) / 100;
+
+    const [employees, records] = await Promise.all([
+      this.prisma.employee.findMany({ where: { tenantId, active: true } }),
+      this.prisma.attendanceRecord.findMany({
+        where: { tenantId, date: { gte: start, lt: end } },
+      }),
+    ]);
+
+    const byEmp = new Map<
+      string,
+      { present: number; absent: number; lateMin: number; overtimeMin: number }
+    >();
+    for (const r of records) {
+      const e =
+        byEmp.get(r.employeeId) ?? { present: 0, absent: 0, lateMin: 0, overtimeMin: 0 };
+      if (r.status === 'ABSENT') e.absent++;
+      else if (r.checkIn || r.status === 'PRESENT' || r.status === 'LATE') e.present++;
+      e.lateMin += r.lateMin || 0;
+      e.overtimeMin += r.overtimeMin || 0;
+      byEmp.set(r.employeeId, e);
+    }
+
+    const rows = employees.map((emp) => {
+      const base = Number(emp.baseSalary ?? 0);
+      const s = byEmp.get(emp.id) ?? { present: 0, absent: 0, lateMin: 0, overtimeMin: 0 };
+      const dailyRate = base / WORKING_DAYS;
+      const hourlyRate = dailyRate / 8;
+      const absenceDeduction = s.absent * dailyRate;
+      const lateDeduction = (s.lateMin / 60) * hourlyRate;
+      const overtimePay = (s.overtimeMin / 60) * hourlyRate * 1.5;
+      const net = base - absenceDeduction - lateDeduction + overtimePay;
+      return {
+        employeeId: emp.id,
+        code: emp.code,
+        fullName: emp.fullName,
+        department: emp.department,
+        position: emp.position,
+        baseSalary: round(base),
+        presentDays: s.present,
+        absentDays: s.absent,
+        lateHours: round(s.lateMin / 60),
+        overtimeHours: round(s.overtimeMin / 60),
+        absenceDeduction: round(absenceDeduction),
+        lateDeduction: round(lateDeduction),
+        overtimePay: round(overtimePay),
+        net: round(net),
+      };
+    });
+
+    const totals = rows.reduce(
+      (t, r) => ({
+        baseSalary: t.baseSalary + r.baseSalary,
+        deductions: t.deductions + r.absenceDeduction + r.lateDeduction,
+        overtimePay: t.overtimePay + r.overtimePay,
+        net: t.net + r.net,
+      }),
+      { baseSalary: 0, deductions: 0, overtimePay: 0, net: 0 },
+    );
+
+    return {
+      month: start.toISOString().slice(0, 7),
+      workingDays: WORKING_DAYS,
+      rows,
+      totals: {
+        baseSalary: round(totals.baseSalary),
+        deductions: round(totals.deductions),
+        overtimePay: round(totals.overtimePay),
+        net: round(totals.net),
+      },
+    };
+  }
+
   async getDailyStats(tenantId: string) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);

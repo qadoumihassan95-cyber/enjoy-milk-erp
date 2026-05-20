@@ -30,6 +30,16 @@ export class EmployeesController {
     return this.service.getDailyStats(user.tenantId);
   }
 
+  /** كشف رواتب الشهر (حساب تلقائي) — للمدراء/المحاسب/الموارد البشرية */
+  @Get('payroll')
+  @Roles('MANAGER', 'ACCOUNTANT', 'HR')
+  payroll(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('month') month?: string,
+  ) {
+    return this.service.getPayroll(user.tenantId, month);
+  }
+
   @Get(':id')
   get(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.service.get(user.tenantId, id);

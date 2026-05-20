@@ -142,69 +142,103 @@ export class TelegramService implements OnModuleInit {
     }
   }
 
-  async sendMessage(chatId: number | string, text: string) {
+  async sendMessage(chatId: number | string, text: string, replyMarkup?: any) {
     return this.callApi('sendMessage', {
       chat_id: chatId,
       text,
       parse_mode: 'HTML',
       disable_web_page_preview: true,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     });
+  }
+
+  /** لوحة الأزرار الرئيسية */
+  private mainMenu() {
+    return {
+      inline_keyboard: [
+        [
+          { text: '📊 إنتاج اليوم', callback_data: '/production' },
+          { text: '📦 المخزون', callback_data: '/stock' },
+        ],
+        [
+          { text: '🛒 الطلبيات', callback_data: '/orders' },
+          { text: '🏪 رصيد المستودع', callback_data: '/balance' },
+        ],
+        [{ text: '🔄 تحديث القائمة', callback_data: '/menu' }],
+      ],
+    };
   }
 
   // ─── Update handling ──────────────────────────────────────────
   async handleUpdate(update: any): Promise<void> {
     try {
+      // (1) ضغطة زر تفاعلي (Inline button)
+      if (update?.callback_query) {
+        const cq = update.callback_query;
+        const chatId = cq.message?.chat?.id;
+        const data: string = cq.data ?? '';
+        // نُعلم Telegram أننا استلمنا الضغطة (يزيل دائرة التحميل)
+        await this.callApi('answerCallbackQuery', { callback_query_id: cq.id });
+        if (!chatId) return;
+        if (this.isBlocked(chatId)) return this.rejectChat(chatId);
+        await this.routeCommand(chatId, data);
+        return;
+      }
+
+      // (2) رسالة نصية
       const message = update?.message ?? update?.edited_message;
       if (!message) return;
-
       const chatId = message.chat?.id;
       const text: string = (message.text ?? '').trim();
       if (!chatId || !text) return;
 
-      // التحقق من الصلاحية
-      if (
-        this.allowedChatIds.size > 0 &&
-        !this.allowedChatIds.has(String(chatId))
-      ) {
-        this.logger.warn(`دردشة غير مصرّح بها: ${chatId}`);
-        await this.sendMessage(
-          chatId,
-          `⛔️ غير مصرّح لك باستخدام هذا البوت.\nمعرّف الدردشة: <code>${chatId}</code>\nأرسله للمسؤول لإضافتك.`,
-        );
-        return;
-      }
+      if (this.isBlocked(chatId)) return this.rejectChat(chatId);
 
       const command = text.split(/\s+/)[0].toLowerCase().replace(/@.*$/, '');
-
-      switch (command) {
-        case '/start':
-          await this.cmdStart(chatId);
-          break;
-        case '/help':
-          await this.cmdHelp(chatId);
-          break;
-        case '/production':
-        case '/prod':
-          await this.cmdProduction(chatId);
-          break;
-        case '/stock':
-        case '/inventory':
-          await this.cmdStock(chatId);
-          break;
-        case '/orders':
-          await this.cmdOrders(chatId);
-          break;
-        case '/balance':
-          await this.cmdBalance(chatId);
-          break;
-        default:
-          await this.sendMessage(
-            chatId,
-            'أمر غير معروف. أرسل /help لعرض الأوامر المتاحة.',
-          );
-      }
+      await this.routeCommand(chatId, command);
     } catch (err) {
       this.logger.error('خطأ في معالجة التحديث', (err as Error)?.stack);
+    }
+  }
+
+  private isBlocked(chatId: number | string): boolean {
+    return (
+      this.allowedChatIds.size > 0 && !this.allowedChatIds.has(String(chatId))
+    );
+  }
+
+  private async rejectChat(chatId: number | string) {
+    this.logger.warn(`دردشة غير مصرّح بها: ${chatId}`);
+    await this.sendMessage(
+      chatId,
+      `⛔️ غير مصرّح لك باستخدام هذا البوت.\nمعرّف الدردشة: <code>${chatId}</code>\nأرسله للمسؤول لإضافتك.`,
+    );
+  }
+
+  /** توجيه الأمر (يأتي من رسالة أو من ضغطة زر) */
+  private async routeCommand(chatId: number, command: string) {
+    switch (command) {
+      case '/start':
+        return this.cmdStart(chatId);
+      case '/help':
+      case '/menu':
+        return this.cmdHelp(chatId);
+      case '/production':
+      case '/prod':
+        return this.cmdProduction(chatId);
+      case '/stock':
+      case '/inventory':
+        return this.cmdStock(chatId);
+      case '/orders':
+        return this.cmdOrders(chatId);
+      case '/balance':
+        return this.cmdBalance(chatId);
+      default:
+        return this.sendMessage(
+          chatId,
+          'أمر غير معروف. اختر من القائمة:',
+          this.mainMenu(),
+        );
     }
   }
 
@@ -229,19 +263,18 @@ export class TelegramService implements OnModuleInit {
       chatId,
       `🥛 <b>أهلاً بك في بوت Enjoy Milk ERP</b>\n` +
         `مصنع قصراوي إخوان\n\n` +
-        `أرسل /help لعرض الأوامر المتاحة.`,
+        `اختر من القائمة بالأسفل 👇`,
+      this.mainMenu(),
     );
   }
 
   private async cmdHelp(chatId: number) {
     await this.sendMessage(
       chatId,
-      `<b>📋 الأوامر المتاحة:</b>\n\n` +
-        `/production — تقرير إنتاج اليوم\n` +
-        `/stock — الأصناف منخفضة المخزون\n` +
-        `/orders — الطلبيات غير المدفوعة\n` +
-        `/balance — رصيد المستودع\n` +
-        `/help — هذه القائمة`,
+      `<b>📋 القائمة الرئيسية</b>\n\n` +
+        `اضغط أي زر، أو استخدم الأوامر:\n` +
+        `/production · /stock · /orders · /balance`,
+      this.mainMenu(),
     );
   }
 

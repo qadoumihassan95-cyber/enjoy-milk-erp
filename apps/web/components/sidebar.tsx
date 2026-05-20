@@ -13,6 +13,7 @@ import {
   LogOut,
   Settings,
   History,
+  Banknote,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth';
@@ -26,6 +27,7 @@ const NAV = [
   { href: '/customers', label: 'العملاء', icon: ShoppingBag },
   { href: '/finance', label: 'المالية', icon: Wallet },
   { href: '/employees', label: 'الموظفون', icon: Users },
+  { href: '/payroll', label: 'الرواتب', icon: Banknote },
   { href: '/licenses', label: 'الرخص', icon: FileBadge2 },
   { href: '/activity', label: 'سجل العمليات', icon: History },
   { href: '/settings', label: 'الإعدادات', icon: Settings },
