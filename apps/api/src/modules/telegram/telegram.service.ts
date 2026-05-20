@@ -33,9 +33,11 @@ export class TelegramService implements OnModuleInit {
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
   ) {
-    this.token = this.config.get<string>('TELEGRAM_BOT_TOKEN') ?? '';
-    this.webhookSecret =
-      this.config.get<string>('TELEGRAM_WEBHOOK_SECRET') ?? '';
+    // trim() يزيل أي مسافات/أسطر زائدة قد تُلصق مع التوكن (سبب شائع لـ 401)
+    this.token = (this.config.get<string>('TELEGRAM_BOT_TOKEN') ?? '').trim();
+    this.webhookSecret = (
+      this.config.get<string>('TELEGRAM_WEBHOOK_SECRET') ?? ''
+    ).trim();
     // PUBLIC_API_URL أو RENDER_EXTERNAL_URL (يحقنه Render تلقائياً) — لتسجيل الـ webhook
     this.publicApiUrl = (
       this.config.get<string>('PUBLIC_API_URL') ??
