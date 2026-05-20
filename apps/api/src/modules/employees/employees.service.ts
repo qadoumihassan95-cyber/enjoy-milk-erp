@@ -56,6 +56,7 @@ export class EmployeesService {
         email: data.email,
         department: data.department,
         position: data.position,
+        notes: data.notes,
         baseSalary: data.baseSalary ? new Prisma.Decimal(data.baseSalary) : undefined,
       },
     });

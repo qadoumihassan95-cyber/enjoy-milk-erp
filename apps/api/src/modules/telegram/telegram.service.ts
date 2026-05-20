@@ -5,7 +5,7 @@ import { EmployeesService } from '../employees/employees.service';
 import { FinanceService } from '../finance/finance.service';
 
 interface Conversation {
-  flow: 'expense';
+  flow: 'expense' | 'employee' | 'editsalary' | 'note';
   step: string;
   data: Record<string, any>;
 }
@@ -180,6 +180,10 @@ export class TelegramService implements OnModuleInit {
           { text: '👥 الحضور والدوام', callback_data: '/attendance' },
           { text: '💸 إضافة مصروف', callback_data: '/addexpense' },
         ],
+        [
+          { text: '🧑‍💼 إدارة الموظفين', callback_data: '/employees' },
+          { text: '📈 التقرير المالي', callback_data: '/report' },
+        ],
         [{ text: '🔄 تحديث القائمة', callback_data: '/menu' }],
       ],
     };
@@ -198,12 +202,18 @@ export class TelegramService implements OnModuleInit {
         if (!chatId) return;
         if (this.isBlocked(chatId)) return this.rejectChat(chatId);
 
-        // أزرار خاصة: اختيار موظف / تسجيل حضور
+        // أزرار خاصة: اختيار موظف / تسجيل حضور / إدارة موظف
         if (data.startsWith('emp:')) return this.showEmployeeActions(chatId, data.slice(4));
         if (data.startsWith('att:')) {
           const [, empId, action] = data.split(':');
           return this.recordAttendance(chatId, empId, action);
         }
+        if (data.startsWith('mgmt:')) return this.showEmployeeMgmt(chatId, data.slice(5));
+        if (data.startsWith('empview:')) return this.viewEmployee(chatId, data.slice(8));
+        if (data.startsWith('empsal:')) return this.startEditSalary(chatId, data.slice(7));
+        if (data.startsWith('empnote:')) return this.startAddNote(chatId, data.slice(8));
+        if (data.startsWith('empdelyes:')) return this.deleteEmployee(chatId, data.slice(10));
+        if (data.startsWith('empdel:')) return this.confirmDeleteEmployee(chatId, data.slice(7));
         await this.routeCommand(chatId, data);
         return;
       }
@@ -276,6 +286,12 @@ export class TelegramService implements OnModuleInit {
       case '/addexpense':
       case '/expense':
         return this.startExpenseFlow(chatId);
+      case '/employees':
+        return this.cmdEmployees(chatId);
+      case '/addemployee':
+        return this.startAddEmployee(chatId);
+      case '/report':
+        return this.cmdReport(chatId);
       default:
         return this.sendMessage(
           chatId,
@@ -351,6 +367,145 @@ export class TelegramService implements OnModuleInit {
     }
   }
 
+  // ─── إدارة الموظفين الكاملة من البوت ──────────────────────────
+  private async cmdEmployees(chatId: number) {
+    const tenantId = await this.resolveTenantId();
+    if (!tenantId) return this.sendMessage(chatId, '⚠️ لا توجد بيانات.');
+    const emps = await this.prisma.employee.findMany({
+      where: { tenantId, active: true },
+      orderBy: { fullName: 'asc' },
+      take: 50,
+      select: { id: true, fullName: true },
+    });
+    const rows = emps.map((e) => [
+      { text: e.fullName, callback_data: `mgmt:${e.id}` },
+    ]);
+    rows.push([{ text: '➕ إضافة موظف جديد', callback_data: '/addemployee' }]);
+    await this.sendMessage(chatId, '🧑‍💼 <b>إدارة الموظفين</b>\nاختر موظفاً أو أضف جديداً:', {
+      inline_keyboard: rows,
+    });
+  }
+
+  private async showEmployeeMgmt(chatId: number, empId: string) {
+    const emp = await this.prisma.employee.findUnique({
+      where: { id: empId },
+      select: { fullName: true },
+    });
+    if (!emp) return this.sendMessage(chatId, 'الموظف غير موجود.');
+    await this.sendMessage(chatId, `👤 <b>${emp.fullName}</b>\nاختر العملية:`, {
+      inline_keyboard: [
+        [
+          { text: '👁 عرض البيانات', callback_data: `empview:${empId}` },
+          { text: '💰 تعديل الراتب', callback_data: `empsal:${empId}` },
+        ],
+        [
+          { text: '📝 إضافة ملاحظة', callback_data: `empnote:${empId}` },
+          { text: '🗑 حذف', callback_data: `empdel:${empId}` },
+        ],
+        [{ text: '« رجوع', callback_data: '/employees' }],
+      ],
+    });
+  }
+
+  private async viewEmployee(chatId: number, empId: string) {
+    const tenantId = await this.resolveTenantId();
+    if (!tenantId) return this.sendMessage(chatId, '⚠️ لا توجد بيانات.');
+    const e = await this.prisma.employee.findFirst({ where: { id: empId, tenantId } });
+    if (!e) return this.sendMessage(chatId, 'الموظف غير موجود.');
+    await this.sendMessage(
+      chatId,
+      `👤 <b>${e.fullName}</b>\n` +
+        `الكود: <code>${e.code}</code>\n` +
+        `القسم: ${e.department || '—'}\n` +
+        `المنصب: ${e.position || '—'}\n` +
+        `الهاتف: ${e.phone || '—'}\n` +
+        `الراتب: <b>${this.fmt(Number(e.baseSalary ?? 0))} د.أ</b>\n` +
+        `ملاحظات: ${e.notes || '—'}`,
+      { inline_keyboard: [[{ text: '« رجوع', callback_data: `mgmt:${empId}` }]] },
+    );
+  }
+
+  private async startEditSalary(chatId: number, empId: string) {
+    this.conversations.set(String(chatId), {
+      flow: 'editsalary',
+      step: 'amount',
+      data: { empId },
+    });
+    await this.sendMessage(chatId, '💰 أرسل <b>الراتب الجديد</b> (بالدينار). أو /menu للإلغاء.');
+  }
+
+  private async startAddNote(chatId: number, empId: string) {
+    this.conversations.set(String(chatId), {
+      flow: 'note',
+      step: 'text',
+      data: { empId },
+    });
+    await this.sendMessage(chatId, '📝 اكتب <b>الملاحظة</b>. أو /menu للإلغاء.');
+  }
+
+  private async confirmDeleteEmployee(chatId: number, empId: string) {
+    const e = await this.prisma.employee.findUnique({
+      where: { id: empId },
+      select: { fullName: true },
+    });
+    if (!e) return this.sendMessage(chatId, 'الموظف غير موجود.');
+    await this.sendMessage(chatId, `⚠️ تأكيد حذف <b>${e.fullName}</b>؟`, {
+      inline_keyboard: [
+        [
+          { text: '🗑 نعم، احذف', callback_data: `empdelyes:${empId}` },
+          { text: '« إلغاء', callback_data: `mgmt:${empId}` },
+        ],
+      ],
+    });
+  }
+
+  private async deleteEmployee(chatId: number, empId: string) {
+    const tenantId = await this.resolveTenantId();
+    if (!tenantId) return this.sendMessage(chatId, '⚠️ لا توجد بيانات.');
+    try {
+      await this.employees.delete(tenantId, empId);
+      await this.sendMessage(chatId, '✅ تم حذف الموظف.', this.mainMenu());
+    } catch {
+      await this.sendMessage(chatId, '⚠️ تعذّر الحذف.');
+    }
+  }
+
+  private async startAddEmployee(chatId: number) {
+    this.conversations.set(String(chatId), {
+      flow: 'employee',
+      step: 'name',
+      data: {},
+    });
+    await this.sendMessage(
+      chatId,
+      '➕ <b>إضافة موظف جديد</b>\n\nأرسل <b>الاسم الكامل</b>. أو /menu للإلغاء.',
+    );
+  }
+
+  // ─── التقرير المالي من البوت ──────────────────────────────────
+  private async cmdReport(chatId: number) {
+    const tenantId = await this.resolveTenantId();
+    if (!tenantId) return this.sendMessage(chatId, '⚠️ لا توجد بيانات.');
+    const r = await this.finance.getFinancialReport(tenantId);
+    const cats = Object.entries(r.byCategory)
+      .sort((a: any, b: any) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([c, a]: any) => `  • ${c}: ${this.fmt(a)}`)
+      .join('\n');
+    await this.sendMessage(
+      chatId,
+      `📈 <b>التقرير المالي (الشهر الحالي)</b>\n` +
+        `${r.from} → ${r.to}\n\n` +
+        `💰 المبيعات: <b>${this.fmt(r.totalSales)} د.أ</b>\n` +
+        `✅ المحصّل: ${this.fmt(r.collected)}\n` +
+        `⏳ مستحق (ديون): ${this.fmt(r.outstanding)}\n` +
+        `💸 المصاريف: ${this.fmt(r.totalExpenses)}\n` +
+        `${r.profit >= 0 ? '📈' : '📉'} <b>صافي الربح: ${this.fmt(r.profit)} د.أ</b> (${r.margin}%)\n` +
+        (cats ? `\n<b>أعلى المصاريف:</b>\n${cats}` : ''),
+      this.mainMenu(),
+    );
+  }
+
   // ─── إدارة: إضافة مصروف (محادثة خطوة بخطوة) ──────────────────
   private async startExpenseFlow(chatId: number) {
     this.conversations.set(String(chatId), {
@@ -403,6 +558,84 @@ export class TelegramService implements OnModuleInit {
         } catch (err) {
           this.logger.error('فشل إضافة المصروف', (err as Error)?.stack);
           return this.sendMessage(chatId, '⚠️ تعذّرت إضافة المصروف.');
+        }
+      }
+      return;
+    }
+
+    // ── تعديل راتب موظف ──
+    if (conv.flow === 'editsalary' && conv.step === 'amount') {
+      const salary = parseFloat(text.replace(/[^\d.]/g, ''));
+      if (isNaN(salary) || salary < 0) {
+        return this.sendMessage(chatId, '⚠️ راتب غير صحيح. أرسل رقماً.');
+      }
+      this.conversations.delete(key);
+      const tenantId = await this.resolveTenantId();
+      if (!tenantId) return this.sendMessage(chatId, '⚠️ لا توجد بيانات.');
+      try {
+        await this.employees.update(tenantId, conv.data.empId, { baseSalary: salary });
+        return this.sendMessage(
+          chatId,
+          `✅ تم تحديث الراتب إلى <b>${this.fmt(salary)} د.أ</b>`,
+          this.mainMenu(),
+        );
+      } catch {
+        return this.sendMessage(chatId, '⚠️ تعذّر تحديث الراتب.');
+      }
+    }
+
+    // ── إضافة ملاحظة لموظف ──
+    if (conv.flow === 'note' && conv.step === 'text') {
+      this.conversations.delete(key);
+      const tenantId = await this.resolveTenantId();
+      if (!tenantId) return this.sendMessage(chatId, '⚠️ لا توجد بيانات.');
+      try {
+        await this.employees.update(tenantId, conv.data.empId, { notes: text.trim() });
+        return this.sendMessage(chatId, '✅ تم حفظ الملاحظة.', this.mainMenu());
+      } catch {
+        return this.sendMessage(chatId, '⚠️ تعذّر حفظ الملاحظة.');
+      }
+    }
+
+    // ── إضافة موظف جديد (خطوات) ──
+    if (conv.flow === 'employee') {
+      if (conv.step === 'name') {
+        conv.data.fullName = text.trim();
+        conv.step = 'phone';
+        this.conversations.set(key, conv);
+        return this.sendMessage(chatId, 'أرسل <b>رقم الهاتف</b> (أو اكتب - للتخطي).');
+      }
+      if (conv.step === 'phone') {
+        conv.data.phone = text.trim() === '-' ? undefined : text.trim();
+        conv.step = 'department';
+        this.conversations.set(key, conv);
+        return this.sendMessage(chatId, 'أرسل <b>القسم</b> (أو - للتخطي).');
+      }
+      if (conv.step === 'department') {
+        conv.data.department = text.trim() === '-' ? undefined : text.trim();
+        conv.step = 'salary';
+        this.conversations.set(key, conv);
+        return this.sendMessage(chatId, 'أرسل <b>الراتب الأساسي</b> (بالدينار).');
+      }
+      if (conv.step === 'salary') {
+        const salary = parseFloat(text.replace(/[^\d.]/g, ''));
+        this.conversations.delete(key);
+        const tenantId = await this.resolveTenantId();
+        if (!tenantId) return this.sendMessage(chatId, '⚠️ لا توجد بيانات.');
+        try {
+          await this.employees.create(tenantId, {
+            fullName: conv.data.fullName,
+            phone: conv.data.phone,
+            department: conv.data.department,
+            baseSalary: isNaN(salary) ? undefined : salary,
+          });
+          return this.sendMessage(
+            chatId,
+            `✅ <b>تمت إضافة الموظف</b>\nالاسم: ${conv.data.fullName}\nالراتب: ${isNaN(salary) ? '—' : this.fmt(salary) + ' د.أ'}`,
+            this.mainMenu(),
+          );
+        } catch {
+          return this.sendMessage(chatId, '⚠️ تعذّرت إضافة الموظف.');
         }
       }
     }

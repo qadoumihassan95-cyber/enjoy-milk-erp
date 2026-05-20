@@ -546,6 +546,7 @@ model Employee {
   position   String?
   hireDate   DateTime?
   baseSalary Decimal?  @db.Decimal(18, 2)
+  notes      String?
   active     Boolean   @default(true)
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
