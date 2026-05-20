@@ -6,7 +6,7 @@
 
 databases:
   - name: enjoymilk-db
-    plan: free
+    plan: basic-256mb          # خطة مدفوعة (~$7/شهر) — تتفادى قيد "قاعدة مجانية واحدة"
     databaseName: enjoymilk
     user: enjoymilk
     region: frankfurt
