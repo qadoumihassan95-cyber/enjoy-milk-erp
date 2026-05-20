@@ -1,6 +1,28 @@
 import axios, { AxiosError } from 'axios';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+/**
+ * يحدّد رابط الـ API بترتيب أولويات مضمون:
+ *  1) NEXT_PUBLIC_API_URL إن ضُبط فعلاً (غير فارغ وغير localhost)
+ *  2) على Render: يشتق رابط الـ api من اسم الـ web (enjoymilk-web → enjoymilk-api)
+ *  3) محلياً: localhost:3001
+ * هذا يتفادى مشكلة عدم تمرير build-arg على Render.
+ */
+function resolveApiUrl(): string {
+  const env = process.env.NEXT_PUBLIC_API_URL;
+  const isBrowser = typeof window !== 'undefined';
+  const onRender =
+    isBrowser && window.location.hostname.endsWith('.onrender.com');
+
+  // إن كنّا على Render، تجاهل قيمة localhost المخبوزة خطأً واشتق الرابط الصحيح
+  if (onRender) {
+    if (env && !env.includes('localhost')) return env;
+    return `https://${window.location.hostname.replace('-web', '-api')}`;
+  }
+
+  return env || 'http://localhost:3001';
+}
+
+const API_URL = resolveApiUrl();
 
 export const api = axios.create({
   baseURL: `${API_URL}/api`,

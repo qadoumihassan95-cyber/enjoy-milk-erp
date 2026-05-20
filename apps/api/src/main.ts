@@ -7,15 +7,29 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 async function bootstrap() {
   const isProd = process.env.NODE_ENV === 'production';
 
+  // قائمة العناوين المسموح لها (CORS)
+  const allowedOrigins = (process.env.APP_URL?.split(',').map((s) => s.trim()) ?? [
+    'http://localhost:3000',
+  ]).filter(Boolean);
+
   const app = await NestFactory.create(AppModule, {
     // مستويات السجل: في الإنتاج نخفي debug/verbose لتقليل الضوضاء
     logger: isProd
       ? ['log', 'warn', 'error']
       : ['log', 'warn', 'error', 'debug', 'verbose'],
     cors: {
-      origin: process.env.APP_URL?.split(',').map((s) => s.trim()) ?? [
-        'http://localhost:3000',
-      ],
+      // نقبل: العناوين المضبوطة + localhost + أي نطاق onrender.com (الـ API محمي بـ JWT)
+      origin: (origin, callback) => {
+        if (
+          !origin ||
+          allowedOrigins.includes(origin) ||
+          /^https:\/\/[a-z0-9-]+\.onrender\.com$/i.test(origin) ||
+          /^http:\/\/localhost:\d+$/i.test(origin)
+        ) {
+          return callback(null, true);
+        }
+        return callback(null, false);
+      },
       credentials: true,
     },
   });
