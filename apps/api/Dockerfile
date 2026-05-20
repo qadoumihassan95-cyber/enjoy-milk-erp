@@ -26,6 +26,12 @@ COPY apps/api/tsconfig.json apps/api/nest-cli.json apps/api/
 COPY apps/api/src apps/api/src
 RUN cd apps/api && pnpm exec nest build
 
+# Precompile the seed to plain JS (bulletproof — لا نعتمد على ts-node وقت التشغيل)
+RUN node apps/api/node_modules/typescript/bin/tsc prisma/seed.ts \
+      --outDir prisma --module commonjs --target ES2021 \
+      --esModuleInterop --skipLibCheck --moduleResolution node \
+    && test -f prisma/seed.js
+
 # ─── Runtime ─────────────────────────────────────────────────────────────────
 # We keep the full node_modules (incl. prisma CLI) so `prisma migrate deploy`
 # can run at container start. Stable and predictable on Render.
@@ -56,4 +62,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
 ENTRYPOINT ["/sbin/tini","--"]
 # On boot: (1) apply pending migrations, (2) seed once (idempotent — upserts,
 # لا يصفّر كلمات المرور), (3) start the API. الـ seed غير حرج: لو فشل، الـ API يكمل.
-CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy --schema=./prisma/schema.prisma && (cd apps/api && node node_modules/.bin/ts-node --transpile-only ../../prisma/seed.ts || echo 'seed step skipped (non-fatal)') && node apps/api/dist/main.js"]
+CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy --schema=./prisma/schema.prisma && echo '=== SEED START ===' && (NODE_PATH=/app/apps/api/node_modules:/app/node_modules node prisma/seed.js || echo '=== SEED SKIPPED (non-fatal) ===') && echo '=== SEED END ===' && node apps/api/dist/main.js"]
