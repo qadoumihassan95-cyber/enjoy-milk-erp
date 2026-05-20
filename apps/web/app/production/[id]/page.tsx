@@ -90,6 +90,15 @@ export default function ProductionDetailPage() {
   );
   const productItems = (items ?? []).filter((i: any) => i.type === 'POWDER_RETAIL');
 
+  // إعادة جلب «أفضل جهد» — لا تؤثر على رسالة نجاح/فشل العملية
+  const safeRefetch = async () => {
+    try {
+      await refetch();
+    } catch {
+      /* تجاهل — البيانات حُفظت، فقط تعذّر التحديث الفوري */
+    }
+  };
+
   const saveAll = async () => {
     setSaving(true);
     try {
@@ -101,34 +110,38 @@ export default function ProductionDetailPage() {
         produced,
         wastages,
       });
-      await refetch();
-      alert('✓ تم الحفظ');
     } catch (e: any) {
-      alert(e?.response?.data?.message || 'فشل الحفظ');
-    } finally {
       setSaving(false);
+      alert(e?.response?.data?.message || 'تعذّر الحفظ — تحقق من الاتصال');
+      return;
     }
+    await safeRefetch();
+    setSaving(false);
+    alert('✓ تم الحفظ');
   };
 
   const doPost = async () => {
     if (!confirm('ترحيل اليوم وتطبيقه على المخزون؟')) return;
     try {
       await api.post(`/daily-production/${id}/post`);
-      await refetch();
-      alert('✓ تم الترحيل');
     } catch (e: any) {
-      alert(e?.response?.data?.message || 'فشل');
+      alert(e?.response?.data?.message || 'تعذّر الترحيل');
+      return;
     }
+    await safeRefetch();
+    alert('✓ تم الترحيل');
   };
 
   const doCancel = async () => {
     if (!confirm('إرجاع كل الكميات للمخزون؟')) return;
     try {
       await api.post(`/daily-production/${id}/cancel`);
-      await refetch();
     } catch (e: any) {
-      alert(e?.response?.data?.message || 'فشل');
+      alert(e?.response?.data?.message || 'تعذّر الإلغاء');
+      return;
     }
+    await safeRefetch();
+    alert('✓ تم إلغاء الترحيل');
   };
 
   // ─── Keyboard shortcuts: Ctrl+S = save, Ctrl+P = print ──

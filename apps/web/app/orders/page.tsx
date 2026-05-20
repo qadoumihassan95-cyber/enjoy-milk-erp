@@ -29,27 +29,39 @@ export default function OrdersPage() {
     queryFn: () => api.get('/orders/report').then((r) => r.data),
   });
 
+  // تحديث «أفضل جهد» — لا يؤثر على رسالة نجاح العملية
+  const safeRefresh = async () => {
+    try {
+      await refetch();
+      await qc.invalidateQueries({ queryKey: ['orders-report'] });
+    } catch {
+      /* تجاهل — العملية نجحت، فقط تعذّر التحديث الفوري */
+    }
+  };
+
   const addPayment = async (orderId: string) => {
     const v = prompt('أدخل المبلغ المدفوع:');
     if (!v) return;
     try {
       await api.post(`/orders/${orderId}/pay`, { amount: +v });
-      await refetch();
-      qc.invalidateQueries({ queryKey: ['orders-report'] });
     } catch (e: any) {
-      alert(e?.response?.data?.message || 'فشل');
+      alert(e?.response?.data?.message || 'تعذّر تسجيل الدفعة');
+      return;
     }
+    await safeRefresh();
+    alert('✓ تم تسجيل الدفعة');
   };
 
   const remove = async (orderId: string) => {
     if (!confirm('سيتم إرجاع الكمية للمخزون. حذف الطلبية؟')) return;
     try {
       await api.delete(`/orders/${orderId}`);
-      await refetch();
-      qc.invalidateQueries({ queryKey: ['orders-report'] });
     } catch (e: any) {
-      alert(e?.response?.data?.message || 'فشل الحذف');
+      alert(e?.response?.data?.message || 'تعذّر الحذف');
+      return;
     }
+    await safeRefresh();
+    alert('✓ تم حذف الطلبية');
   };
 
   return (

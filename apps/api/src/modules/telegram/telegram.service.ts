@@ -1,6 +1,14 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import { EmployeesService } from '../employees/employees.service';
+import { FinanceService } from '../finance/finance.service';
+
+interface Conversation {
+  flow: 'expense';
+  step: string;
+  data: Record<string, any>;
+}
 
 /**
  * Telegram Bot Service — Webhook-based, production-ready for Render.
@@ -28,10 +36,14 @@ export class TelegramService implements OnModuleInit {
   private readonly publicApiUrl: string;
   private readonly allowedChatIds: Set<string>;
   private readonly apiBase: string;
+  // حالة المحادثات قيد التنفيذ (لإضافة مصروف خطوة بخطوة)
+  private readonly conversations = new Map<string, Conversation>();
 
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly employees: EmployeesService,
+    private readonly finance: FinanceService,
   ) {
     // trim() يزيل أي مسافات/أسطر زائدة قد تُلصق مع التوكن (سبب شائع لـ 401)
     this.token = (this.config.get<string>('TELEGRAM_BOT_TOKEN') ?? '').trim();
@@ -164,6 +176,10 @@ export class TelegramService implements OnModuleInit {
           { text: '🛒 الطلبيات', callback_data: '/orders' },
           { text: '🏪 رصيد المستودع', callback_data: '/balance' },
         ],
+        [
+          { text: '👥 الحضور والدوام', callback_data: '/attendance' },
+          { text: '💸 إضافة مصروف', callback_data: '/addexpense' },
+        ],
         [{ text: '🔄 تحديث القائمة', callback_data: '/menu' }],
       ],
     };
@@ -181,6 +197,13 @@ export class TelegramService implements OnModuleInit {
         await this.callApi('answerCallbackQuery', { callback_query_id: cq.id });
         if (!chatId) return;
         if (this.isBlocked(chatId)) return this.rejectChat(chatId);
+
+        // أزرار خاصة: اختيار موظف / تسجيل حضور
+        if (data.startsWith('emp:')) return this.showEmployeeActions(chatId, data.slice(4));
+        if (data.startsWith('att:')) {
+          const [, empId, action] = data.split(':');
+          return this.recordAttendance(chatId, empId, action);
+        }
         await this.routeCommand(chatId, data);
         return;
       }
@@ -194,8 +217,22 @@ export class TelegramService implements OnModuleInit {
 
       if (this.isBlocked(chatId)) return this.rejectChat(chatId);
 
-      const command = text.split(/\s+/)[0].toLowerCase().replace(/@.*$/, '');
-      await this.routeCommand(chatId, command);
+      // إذا كان أمراً (يبدأ بـ /) — أوقف أي محادثة جارية ووجّهه
+      if (text.startsWith('/')) {
+        this.conversations.delete(String(chatId));
+        const command = text.split(/\s+/)[0].toLowerCase().replace(/@.*$/, '');
+        await this.routeCommand(chatId, command);
+        return;
+      }
+
+      // إذا كانت هناك محادثة جارية (مثل إضافة مصروف) — مرّر النص لها
+      if (this.conversations.has(String(chatId))) {
+        await this.handleConversationInput(chatId, text);
+        return;
+      }
+
+      // نص غير معروف — اعرض القائمة
+      await this.sendMessage(chatId, 'اختر من القائمة:', this.mainMenu());
     } catch (err) {
       this.logger.error('خطأ في معالجة التحديث', (err as Error)?.stack);
     }
@@ -233,6 +270,12 @@ export class TelegramService implements OnModuleInit {
         return this.cmdOrders(chatId);
       case '/balance':
         return this.cmdBalance(chatId);
+      case '/attendance':
+      case '/hr':
+        return this.cmdAttendance(chatId);
+      case '/addexpense':
+      case '/expense':
+        return this.startExpenseFlow(chatId);
       default:
         return this.sendMessage(
           chatId,
@@ -240,6 +283,138 @@ export class TelegramService implements OnModuleInit {
           this.mainMenu(),
         );
     }
+  }
+
+  // ─── إدارة: الحضور والدوام من البوت ───────────────────────────
+  /** يعرض الموظفين كأزرار لاختيار من نُسجّل حضوره */
+  private async cmdAttendance(chatId: number) {
+    const tenantId = await this.resolveTenantId();
+    if (!tenantId) return this.sendMessage(chatId, '⚠️ لا توجد بيانات.');
+
+    const emps = await this.prisma.employee.findMany({
+      where: { tenantId, active: true },
+      orderBy: { fullName: 'asc' },
+      take: 50,
+      select: { id: true, fullName: true },
+    });
+    if (emps.length === 0)
+      return this.sendMessage(chatId, 'لا يوجد موظفون مسجّلون.');
+
+    const rows = emps.map((e) => [
+      { text: e.fullName, callback_data: `emp:${e.id}` },
+    ]);
+    await this.sendMessage(chatId, '👥 <b>اختر الموظف لتسجيل دوامه:</b>', {
+      inline_keyboard: rows,
+    });
+  }
+
+  /** أزرار العمليات لموظف محدد */
+  private async showEmployeeActions(chatId: number, empId: string) {
+    const emp = await this.prisma.employee.findUnique({
+      where: { id: empId },
+      select: { fullName: true },
+    });
+    if (!emp) return this.sendMessage(chatId, 'الموظف غير موجود.');
+
+    await this.sendMessage(chatId, `👤 <b>${emp.fullName}</b>\nاختر العملية:`, {
+      inline_keyboard: [
+        [
+          { text: '✅ حضور', callback_data: `att:${empId}:PRESENT` },
+          { text: '⛔️ غياب', callback_data: `att:${empId}:ABSENT` },
+        ],
+        [
+          { text: '⏰ تأخير', callback_data: `att:${empId}:LATE` },
+          { text: '➕ عمل إضافي (ساعة)', callback_data: `att:${empId}:OT` },
+        ],
+        [{ text: '« رجوع', callback_data: '/attendance' }],
+      ],
+    });
+  }
+
+  /** تسجيل الحضور فعلياً عبر EmployeesService (مرتبط بالرواتب) */
+  private async recordAttendance(chatId: number, empId: string, action: string) {
+    const tenantId = await this.resolveTenantId();
+    if (!tenantId) return this.sendMessage(chatId, '⚠️ لا توجد بيانات.');
+    try {
+      if (action === 'OT') {
+        await this.employees.markAttendance(tenantId, empId, { overtimeMin: 60 });
+        await this.sendMessage(chatId, '✅ سُجّلت ساعة عمل إضافي.', this.mainMenu());
+      } else {
+        await this.employees.markAttendance(tenantId, empId, { status: action });
+        const label =
+          action === 'PRESENT' ? 'حضور' : action === 'ABSENT' ? 'غياب' : 'تأخير';
+        await this.sendMessage(chatId, `✅ سُجّل: ${label}.`, this.mainMenu());
+      }
+    } catch (err) {
+      this.logger.error('فشل تسجيل الحضور', (err as Error)?.stack);
+      await this.sendMessage(chatId, '⚠️ تعذّر التسجيل، حاول لاحقاً.');
+    }
+  }
+
+  // ─── إدارة: إضافة مصروف (محادثة خطوة بخطوة) ──────────────────
+  private async startExpenseFlow(chatId: number) {
+    this.conversations.set(String(chatId), {
+      flow: 'expense',
+      step: 'amount',
+      data: {},
+    });
+    await this.sendMessage(
+      chatId,
+      '💸 <b>إضافة مصروف</b>\n\nأرسل <b>المبلغ</b> (بالدينار). أو أرسل /menu للإلغاء.',
+    );
+  }
+
+  private async handleConversationInput(chatId: number, text: string) {
+    const key = String(chatId);
+    const conv = this.conversations.get(key);
+    if (!conv) return;
+
+    if (conv.flow === 'expense') {
+      if (conv.step === 'amount') {
+        const amount = parseFloat(text.replace(/[^\d.]/g, ''));
+        if (isNaN(amount) || amount <= 0) {
+          return this.sendMessage(chatId, '⚠️ مبلغ غير صحيح. أرسل رقماً موجباً.');
+        }
+        conv.data.amount = amount;
+        conv.step = 'category';
+        this.conversations.set(key, conv);
+        return this.sendMessage(
+          chatId,
+          'اكتب <b>تصنيف/وصف</b> المصروف (مثل: كهرباء، وقود، رواتب).',
+        );
+      }
+      if (conv.step === 'category') {
+        conv.data.category = text.trim();
+        this.conversations.delete(key);
+        const tenantId = await this.resolveTenantId();
+        if (!tenantId) return this.sendMessage(chatId, '⚠️ لا توجد بيانات.');
+        try {
+          const actorId = await this.resolveActorUserId(tenantId);
+          await this.finance.createExpense(tenantId, actorId, {
+            category: conv.data.category,
+            amount: conv.data.amount,
+            description: conv.data.category,
+          });
+          return this.sendMessage(
+            chatId,
+            `✅ <b>تمت إضافة المصروف</b>\nالمبلغ: ${this.fmt(conv.data.amount)} د.أ\nالتصنيف: ${conv.data.category}`,
+            this.mainMenu(),
+          );
+        } catch (err) {
+          this.logger.error('فشل إضافة المصروف', (err as Error)?.stack);
+          return this.sendMessage(chatId, '⚠️ تعذّرت إضافة المصروف.');
+        }
+      }
+    }
+  }
+
+  private async resolveActorUserId(tenantId: string): Promise<string> {
+    const u = await this.prisma.user.findFirst({
+      where: { tenantId, active: true },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
+    return u?.id ?? '';
   }
 
   // ─── Helpers ──────────────────────────────────────────────────
