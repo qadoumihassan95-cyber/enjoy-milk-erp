@@ -1,9 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
-import { Plus, Search, Package } from 'lucide-react';
+import { Plus, Search, Package, Trash2 } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { Card, Badge, Button, Input } from '@/components/ui';
 import { api } from '@/lib/api';
@@ -11,6 +11,7 @@ import { formatNumber } from '@/lib/utils';
 
 export default function InventoryPage() {
   const router = useRouter();
+  const qc = useQueryClient();
   const [search, setSearch] = useState('');
 
   const { data: items, isLoading } = useQuery({
@@ -20,6 +21,20 @@ export default function InventoryPage() {
         .get('/inventory/items', { params: { search: search || undefined } })
         .then((r) => r.data),
   });
+
+  const del = useMutation({
+    mutationFn: (id: string) =>
+      api.delete(`/inventory/items/${id}`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['items'] }),
+    onError: () => alert('تعذّر حذف الصنف'),
+  });
+
+  const handleDelete = (e: React.MouseEvent, item: any) => {
+    e.stopPropagation();
+    if (confirm(`حذف الصنف "${item.name}"؟ سيُخفى من القائمة.`)) {
+      del.mutate(item.id);
+    }
+  };
 
   return (
     <AppShell>
@@ -80,14 +95,16 @@ export default function InventoryPage() {
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">
                       الحالة
                     </th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">
+                      إجراء
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((item: any) => (
                     <tr
                       key={item.id}
-                      onClick={() => router.push(`/inventory/${item.id}`)}
-                      className="border-b border-zinc-100 hover:bg-zinc-50 cursor-pointer"
+                      className="border-b border-zinc-100 hover:bg-zinc-50"
                     >
                       <td className="p-3 font-mono text-xs">{item.sku}</td>
                       <td className="p-3 font-medium">{item.name}</td>
@@ -110,6 +127,16 @@ export default function InventoryPage() {
                             متوفر
                           </Badge>
                         )}
+                      </td>
+                      <td className="p-3">
+                        <button
+                          onClick={(e) => handleDelete(e, item)}
+                          disabled={del.isPending && del.variables === item.id}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-40"
+                          title="حذف الصنف"
+                        >
+                          <Trash2 className="h-3 w-3" /> حذف
+                        </button>
                       </td>
                     </tr>
                   ))}

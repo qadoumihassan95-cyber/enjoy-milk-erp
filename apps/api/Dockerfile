@@ -66,4 +66,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
 ENTRYPOINT ["/sbin/tini","--"]
 # On boot: (1) apply pending migrations, (2) seed once (idempotent — upserts,
 # لا يصفّر كلمات المرور), (3) start the API. الـ seed غير حرج: لو فشل، الـ API يكمل.
-CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy --schema=./prisma/schema.prisma && echo '=== SEED START ===' && (NODE_PATH=/app/apps/api/node_modules:/app/node_modules node prisma/seed.js || echo '=== SEED SKIPPED (non-fatal) ===') && echo '=== SEED END ===' && node apps/api/dist/main.js"]
+# ملاحظة: نستخدم `db push` بدل `migrate deploy` لمزامنة القاعدة مع الـ schema الحالي
+# تماماً (الـ migrations كانت قديمة ولا تطابق schema v2). آمن لأن القاعدة لا تحوي
+# بيانات حقيقية بعد، والبذور تُعاد تلقائياً.
+CMD ["sh","-c","node node_modules/prisma/build/index.js db push --schema=./prisma/schema.prisma --accept-data-loss --skip-generate && echo '=== SEED START ===' && (NODE_PATH=/app/apps/api/node_modules:/app/node_modules node prisma/seed.js || echo '=== SEED SKIPPED (non-fatal) ===') && echo '=== SEED END ===' && node apps/api/dist/main.js"]

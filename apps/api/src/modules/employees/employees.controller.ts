@@ -59,6 +59,16 @@ export class EmployeesController {
     return this.service.checkIn(user.tenantId, id);
   }
 
+  /** تسجيل حالة: غياب / تأخير / حضور / عمل إضافي */
+  @Post(':id/attendance')
+  markAttendance(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: { status?: string; overtimeMin?: number },
+  ) {
+    return this.service.markAttendance(user.tenantId, id, body);
+  }
+
   @Get('attendance/list')
   attendance(
     @CurrentUser() user: AuthenticatedUser,

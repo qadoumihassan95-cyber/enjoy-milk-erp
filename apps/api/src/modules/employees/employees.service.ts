@@ -109,6 +109,52 @@ export class EmployeesService {
     });
   }
 
+  /**
+   * تسجيل/تحديث حالة الحضور لليوم (غياب / تأخير / حضور / عمل إضافي).
+   * opts.status: 'PRESENT' | 'ABSENT' | 'LATE' | 'LEAVE' | 'HALF_DAY'
+   * opts.overtimeMin: دقائق العمل الإضافي تُضاف للسجل
+   */
+  async markAttendance(
+    tenantId: string,
+    employeeId: string,
+    opts: { status?: string; overtimeMin?: number },
+  ) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const status = opts.status as any;
+    const addOvertime = Number(opts.overtimeMin) || 0;
+
+    const existing = await this.prisma.attendanceRecord.findFirst({
+      where: { employeeId, date: today },
+    });
+
+    if (existing) {
+      return this.prisma.attendanceRecord.update({
+        where: { id: existing.id },
+        data: {
+          ...(status ? { status } : {}),
+          ...(status === 'ABSENT' ? { checkIn: null, checkOut: null } : {}),
+          ...(status === 'PRESENT' || status === 'LATE'
+            ? { checkIn: existing.checkIn ?? new Date() }
+            : {}),
+          ...(addOvertime ? { overtimeMin: existing.overtimeMin + addOvertime } : {}),
+        },
+      });
+    }
+
+    return this.prisma.attendanceRecord.create({
+      data: {
+        tenantId,
+        employeeId,
+        date: today,
+        status: status ?? 'PRESENT',
+        overtimeMin: addOvertime,
+        checkIn: status === 'ABSENT' ? null : new Date(),
+      },
+    });
+  }
+
   async listAttendance(tenantId: string, date?: string) {
     const targetDate = date ? new Date(date) : new Date();
     targetDate.setHours(0, 0, 0, 0);
@@ -132,10 +178,21 @@ export class EmployeesService {
       where: { tenantId, date: today },
     });
 
-    const present = records.filter((r) => r.checkIn).length;
-    const late = records.filter((r) => r.lateMin > 0).length;
-    const absent = employees - present;
+    const present = records.filter(
+      (r) => r.status === 'PRESENT' || r.status === 'LATE' || r.checkIn,
+    ).length;
+    const late = records.filter((r) => r.status === 'LATE' || r.lateMin > 0).length;
+    const absentMarked = records.filter((r) => r.status === 'ABSENT').length;
+    const overtimeMin = records.reduce((s, r) => s + (r.overtimeMin || 0), 0);
+    // الغياب = المُعلَّم غياباً صراحةً + من لم يُسجَّل لهم حضور
+    const absent = Math.max(absentMarked, employees - present);
 
-    return { total: employees, present, late, absent };
+    return {
+      total: employees,
+      present,
+      late,
+      absent,
+      overtimeHours: Math.round((overtimeMin / 60) * 10) / 10,
+    };
   }
 }

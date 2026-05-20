@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Plus, X, UserCheck } from 'lucide-react';
+import { Plus, X, UserCheck, UserX, Clock, Timer } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { Card, CardHeader, CardTitle, CardContent, Button, Input, Stat, Badge } from '@/components/ui';
 import { api } from '@/lib/api';
@@ -23,13 +23,37 @@ export default function EmployeesPage() {
     refetchInterval: 30_000,
   });
 
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['employees'] });
+    qc.invalidateQueries({ queryKey: ['employees', 'stats'] });
+  };
+
   const checkIn = useMutation({
     mutationFn: (id: string) => api.post(`/employees/${id}/check-in`).then((r) => r.data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['employees'] });
-      qc.invalidateQueries({ queryKey: ['employees', 'stats'] });
-    },
+    onSuccess: invalidate,
   });
+
+  // غياب / تأخير
+  const mark = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      api.post(`/employees/${id}/attendance`, { status }).then((r) => r.data),
+    onSuccess: invalidate,
+  });
+
+  // عمل إضافي (يطلب عدد الساعات)
+  const overtime = useMutation({
+    mutationFn: ({ id, overtimeMin }: { id: string; overtimeMin: number }) =>
+      api.post(`/employees/${id}/attendance`, { overtimeMin }).then((r) => r.data),
+    onSuccess: invalidate,
+  });
+
+  const addOvertime = (id: string) => {
+    const hours = prompt('عدد ساعات العمل الإضافي:');
+    if (!hours) return;
+    const h = parseFloat(hours);
+    if (isNaN(h) || h <= 0) return alert('قيمة غير صحيحة');
+    overtime.mutate({ id, overtimeMin: Math.round(h * 60) });
+  };
 
   return (
     <AppShell>
@@ -45,11 +69,12 @@ export default function EmployeesPage() {
           </Button>
         </header>
 
-        <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <section className="grid grid-cols-2 lg:grid-cols-5 gap-3">
           <Stat label="إجمالي الموظفين" value={stats?.total ?? 0} />
           <Stat label="حضور اليوم" value={stats?.present ?? 0} state="good" />
           <Stat label="تأخير" value={stats?.late ?? 0} state={(stats?.late ?? 0) > 0 ? 'warning' : 'good'} />
           <Stat label="غياب" value={stats?.absent ?? 0} state={(stats?.absent ?? 0) > 0 ? 'warning' : 'good'} />
+          <Stat label="عمل إضافي (ساعة)" value={stats?.overtimeHours ?? 0} />
         </section>
 
         {showNew && (
@@ -99,15 +124,47 @@ export default function EmployeesPage() {
                           {e.baseSalary ? `${formatNumber(+e.baseSalary, 0)} د.أ` : '-'}
                         </td>
                         <td className="p-3">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => checkIn.mutate(e.id)}
-                            loading={checkIn.isPending && checkIn.variables === e.id}
-                          >
-                            <UserCheck className="h-3 w-3" />
-                            حضور
-                          </Button>
+                          <div className="flex gap-1.5 flex-wrap">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => checkIn.mutate(e.id)}
+                              loading={checkIn.isPending && checkIn.variables === e.id}
+                            >
+                              <UserCheck className="h-3 w-3" />
+                              حضور
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => mark.mutate({ id: e.id, status: 'ABSENT' })}
+                              loading={mark.isPending && mark.variables?.id === e.id && mark.variables?.status === 'ABSENT'}
+                              className="text-red-600 border-red-200 hover:bg-red-50"
+                            >
+                              <UserX className="h-3 w-3" />
+                              غياب
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => mark.mutate({ id: e.id, status: 'LATE' })}
+                              loading={mark.isPending && mark.variables?.id === e.id && mark.variables?.status === 'LATE'}
+                              className="text-amber-600 border-amber-200 hover:bg-amber-50"
+                            >
+                              <Clock className="h-3 w-3" />
+                              تأخير
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => addOvertime(e.id)}
+                              loading={overtime.isPending && overtime.variables?.id === e.id}
+                              className="text-blue-600 border-blue-200 hover:bg-blue-50"
+                            >
+                              <Timer className="h-3 w-3" />
+                              عمل إضافي
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     ))}
