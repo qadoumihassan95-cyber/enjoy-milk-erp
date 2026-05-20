@@ -214,4 +214,82 @@ export class FinanceService {
       cashboxes,
     };
   }
+
+  // ─── تقرير مالي شامل (إيرادات/مصاريف/أرباح + اتجاه) ─────────
+  async getFinancialReport(tenantId: string, fromStr?: string, toStr?: string) {
+    const to = toStr ? new Date(toStr) : new Date();
+    const from = fromStr
+      ? new Date(fromStr)
+      : new Date(to.getFullYear(), to.getMonth(), 1); // افتراضي: بداية الشهر الحالي
+
+    // ── الإيرادات (من الطلبيات غير الملغاة) ──
+    const orders = await this.prisma.simpleOrder.findMany({
+      where: {
+        tenantId,
+        orderDate: { gte: from, lte: to },
+        status: { not: 'CANCELLED' },
+      },
+      select: { total: true, paid: true, balance: true },
+    });
+    const totalSales = orders.reduce((s, o) => s + Number(o.total), 0);
+    const collected = orders.reduce((s, o) => s + Number(o.paid), 0);
+    const outstanding = orders.reduce((s, o) => s + Number(o.balance), 0);
+
+    // ── المصاريف حسب التصنيف ──
+    const expenses = await this.prisma.expense.findMany({
+      where: { tenantId, expenseDate: { gte: from, lte: to } },
+      select: { category: true, amount: true },
+    });
+    const totalExpenses = expenses.reduce((s, e) => s + Number(e.amount), 0);
+    const byCategory: Record<string, number> = {};
+    for (const e of expenses) {
+      const cat = e.category || 'أخرى';
+      byCategory[cat] = (byCategory[cat] || 0) + Number(e.amount);
+    }
+
+    const profit = totalSales - totalExpenses;
+    const margin = totalSales > 0 ? (profit / totalSales) * 100 : 0;
+
+    // ── اتجاه آخر 6 أشهر ──
+    const trend: { month: string; sales: number; expenses: number; profit: number }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const mStart = new Date(to.getFullYear(), to.getMonth() - i, 1);
+      const mEnd = new Date(to.getFullYear(), to.getMonth() - i + 1, 1);
+      const [mOrders, mExp] = await Promise.all([
+        this.prisma.simpleOrder.aggregate({
+          where: {
+            tenantId,
+            orderDate: { gte: mStart, lt: mEnd },
+            status: { not: 'CANCELLED' },
+          },
+          _sum: { total: true },
+        }),
+        this.prisma.expense.aggregate({
+          where: { tenantId, expenseDate: { gte: mStart, lt: mEnd } },
+          _sum: { amount: true },
+        }),
+      ]);
+      const sales = Number(mOrders._sum.total ?? 0);
+      const exp = Number(mExp._sum.amount ?? 0);
+      trend.push({
+        month: mStart.toLocaleDateString('ar-EG', { month: 'short' }),
+        sales,
+        expenses: exp,
+        profit: sales - exp,
+      });
+    }
+
+    return {
+      from: from.toISOString().slice(0, 10),
+      to: to.toISOString().slice(0, 10),
+      totalSales,
+      collected,
+      outstanding,
+      totalExpenses,
+      profit,
+      margin: Math.round(margin * 10) / 10,
+      byCategory,
+      trend,
+    };
+  }
 }

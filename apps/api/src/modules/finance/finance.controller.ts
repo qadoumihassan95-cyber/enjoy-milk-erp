@@ -79,4 +79,14 @@ export class FinanceController {
   summary(@CurrentUser() user: AuthenticatedUser) {
     return this.service.getDailySummary(user.tenantId);
   }
+
+  // تقرير مالي شامل (إيرادات/مصاريف/أرباح)
+  @Get('report')
+  report(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.service.getFinancialReport(user.tenantId, from, to);
+  }
 }

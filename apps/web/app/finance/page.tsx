@@ -1,7 +1,17 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Wallet, ArrowDownToLine, ArrowUpFromLine, FileCheck } from 'lucide-react';
+import { Wallet, ArrowDownToLine, ArrowUpFromLine, FileCheck, TrendingUp, TrendingDown } from 'lucide-react';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  Legend,
+} from 'recharts';
 import { AppShell } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle, Stat, Badge } from '@/components/ui';
 import { api } from '@/lib/api';
@@ -12,6 +22,12 @@ export default function FinancePage() {
     queryKey: ['finance', 'summary'],
     queryFn: () => api.get('/finance/summary/today').then((r) => r.data),
     refetchInterval: 30_000,
+  });
+
+  const { data: report } = useQuery({
+    queryKey: ['finance', 'report'],
+    queryFn: () => api.get('/finance/report').then((r) => r.data),
+    refetchInterval: 60_000,
   });
 
   const { data: cashboxes } = useQuery({
@@ -34,8 +50,112 @@ export default function FinancePage() {
       <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6">
         <header>
           <h1 className="text-2xl md:text-3xl font-black tracking-tight">المالية</h1>
-          <p className="text-sm text-zinc-500 mt-0.5">الصندوق والشيكات والمصاريف</p>
+          <p className="text-sm text-zinc-500 mt-0.5">التقرير المالي · الصندوق · الشيكات · المصاريف</p>
         </header>
+
+        {/* ─── التقرير المالي (الشهر الحالي) ─── */}
+        <Card className="p-5">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <h3 className="font-black text-lg">📊 التقرير المالي — الشهر الحالي</h3>
+            <span className="text-xs text-zinc-400">
+              {report ? `${report.from} → ${report.to}` : ''}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+            <div className="rounded-xl bg-zinc-50 border border-zinc-100 p-3">
+              <div className="text-[10px] font-bold text-zinc-500 uppercase">المبيعات</div>
+              <div className="text-xl font-black mt-1" data-numeric>
+                {formatNumber(report?.totalSales ?? 0, 0)} <span className="text-xs font-normal text-zinc-400">د.أ</span>
+              </div>
+            </div>
+            <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-3">
+              <div className="text-[10px] font-bold text-emerald-700 uppercase">المحصّل</div>
+              <div className="text-xl font-black mt-1 text-emerald-700" data-numeric>
+                {formatNumber(report?.collected ?? 0, 0)}
+              </div>
+            </div>
+            <div className="rounded-xl bg-amber-50 border border-amber-100 p-3">
+              <div className="text-[10px] font-bold text-amber-700 uppercase">مستحق (دين)</div>
+              <div className="text-xl font-black mt-1 text-amber-700" data-numeric>
+                {formatNumber(report?.outstanding ?? 0, 0)}
+              </div>
+            </div>
+            <div className="rounded-xl bg-red-50 border border-red-100 p-3">
+              <div className="text-[10px] font-bold text-red-700 uppercase">المصاريف</div>
+              <div className="text-xl font-black mt-1 text-red-700" data-numeric>
+                {formatNumber(report?.totalExpenses ?? 0, 0)}
+              </div>
+            </div>
+          </div>
+
+          {/* صافي الربح */}
+          <div
+            className={`rounded-xl p-4 mb-5 flex items-center justify-between ${
+              (report?.profit ?? 0) >= 0 ? 'bg-emerald-600' : 'bg-red-600'
+            } text-white`}
+          >
+            <div className="flex items-center gap-2">
+              {(report?.profit ?? 0) >= 0 ? (
+                <TrendingUp className="h-6 w-6" />
+              ) : (
+                <TrendingDown className="h-6 w-6" />
+              )}
+              <span className="font-bold">صافي الربح</span>
+            </div>
+            <div className="text-2xl font-black" data-numeric>
+              {formatNumber(report?.profit ?? 0, 0)} د.أ
+              <span className="text-sm font-normal opacity-80 mr-2">
+                ({report?.margin ?? 0}%)
+              </span>
+            </div>
+          </div>
+
+          {/* الاتجاه الشهري */}
+          {report?.trend && report.trend.length > 0 && (
+            <div className="mb-5">
+              <div className="text-xs font-bold text-zinc-500 mb-2">الاتجاه (آخر 6 أشهر)</div>
+              <div style={{ width: '100%', height: 220 }} dir="ltr">
+                <ResponsiveContainer>
+                  <BarChart data={report.trend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f4f4f5" />
+                    <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="sales" name="مبيعات" fill="#18181b" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="expenses" name="مصاريف" fill="#dc2626" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {/* تصنيف المصاريف */}
+          {report?.byCategory && Object.keys(report.byCategory).length > 0 && (
+            <div>
+              <div className="text-xs font-bold text-zinc-500 mb-2">المصاريف حسب التصنيف</div>
+              <div className="space-y-1.5">
+                {Object.entries(report.byCategory)
+                  .sort((a: any, b: any) => b[1] - a[1])
+                  .map(([cat, amt]: any) => {
+                    const pct = report.totalExpenses > 0 ? (amt / report.totalExpenses) * 100 : 0;
+                    return (
+                      <div key={cat} className="flex items-center gap-2 text-sm">
+                        <span className="w-28 truncate">{cat}</span>
+                        <div className="flex-1 h-2 bg-zinc-100 rounded-full overflow-hidden">
+                          <div className="h-full bg-red-400" style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="w-20 text-left font-bold" data-numeric>
+                          {formatNumber(amt, 0)}
+                        </span>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+        </Card>
 
         <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat
