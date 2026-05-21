@@ -10,6 +10,21 @@ interface Conversation {
   data: Record<string, any>;
 }
 
+/** تصنيفات المصاريف الموحّدة (نفسها في الموقع والبوت) */
+export const EXPENSE_CATEGORIES = [
+  'رواتب',
+  'كهرباء',
+  'إيجار',
+  'مشتريات',
+  'صيانة',
+  'مواصلات',
+  'إنترنت',
+  'تسويق',
+  'معدات',
+  'مصاريف تشغيل',
+  'أخرى',
+];
+
 /**
  * Telegram Bot Service — Webhook-based, production-ready for Render.
  *
@@ -214,6 +229,7 @@ export class TelegramService implements OnModuleInit {
         if (data.startsWith('empnote:')) return this.startAddNote(chatId, data.slice(8));
         if (data.startsWith('empdelyes:')) return this.deleteEmployee(chatId, data.slice(10));
         if (data.startsWith('empdel:')) return this.confirmDeleteEmployee(chatId, data.slice(7));
+        if (data.startsWith('expcat:')) return this.finishExpense(chatId, data.slice(7));
         await this.routeCommand(chatId, data);
         return;
       }
@@ -519,6 +535,47 @@ export class TelegramService implements OnModuleInit {
     );
   }
 
+  private expenseCategoriesKeyboard() {
+    const rows: any[] = [];
+    for (let i = 0; i < EXPENSE_CATEGORIES.length; i += 2) {
+      rows.push(
+        EXPENSE_CATEGORIES.slice(i, i + 2).map((c) => ({
+          text: c,
+          callback_data: `expcat:${c}`,
+        })),
+      );
+    }
+    return { inline_keyboard: rows };
+  }
+
+  /** إتمام حفظ المصروف بالتصنيف المختار */
+  private async finishExpense(chatId: number, category: string) {
+    const key = String(chatId);
+    const conv = this.conversations.get(key);
+    if (!conv || conv.flow !== 'expense' || !conv.data.amount) {
+      return this.sendMessage(chatId, '⚠️ انتهت الجلسة. ابدأ من جديد بـ 💸 إضافة مصروف.', this.mainMenu());
+    }
+    this.conversations.delete(key);
+    const tenantId = await this.resolveTenantId();
+    if (!tenantId) return this.sendMessage(chatId, '⚠️ لا توجد بيانات.');
+    try {
+      const actorId = await this.resolveActorUserId(tenantId);
+      await this.finance.createExpense(tenantId, actorId, {
+        category,
+        amount: conv.data.amount,
+        description: category,
+      });
+      return this.sendMessage(
+        chatId,
+        `✅ <b>تمت إضافة المصروف</b>\nالمبلغ: ${this.fmt(conv.data.amount)} د.أ\nالتصنيف: ${category}\n\nيظهر الآن في التقرير المالي بالموقع.`,
+        this.mainMenu(),
+      );
+    } catch (err) {
+      this.logger.error('فشل إضافة المصروف', (err as Error)?.stack);
+      return this.sendMessage(chatId, '⚠️ تعذّرت إضافة المصروف.');
+    }
+  }
+
   private async handleConversationInput(chatId: number, text: string) {
     const key = String(chatId);
     const conv = this.conversations.get(key);
@@ -535,30 +592,13 @@ export class TelegramService implements OnModuleInit {
         this.conversations.set(key, conv);
         return this.sendMessage(
           chatId,
-          'اكتب <b>تصنيف/وصف</b> المصروف (مثل: كهرباء، وقود، رواتب).',
+          `المبلغ: <b>${this.fmt(amount)} د.أ</b>\nاختر <b>التصنيف</b> 👇 (أو اكتب تصنيفاً مخصصاً)`,
+          this.expenseCategoriesKeyboard(),
         );
       }
       if (conv.step === 'category') {
-        conv.data.category = text.trim();
-        this.conversations.delete(key);
-        const tenantId = await this.resolveTenantId();
-        if (!tenantId) return this.sendMessage(chatId, '⚠️ لا توجد بيانات.');
-        try {
-          const actorId = await this.resolveActorUserId(tenantId);
-          await this.finance.createExpense(tenantId, actorId, {
-            category: conv.data.category,
-            amount: conv.data.amount,
-            description: conv.data.category,
-          });
-          return this.sendMessage(
-            chatId,
-            `✅ <b>تمت إضافة المصروف</b>\nالمبلغ: ${this.fmt(conv.data.amount)} د.أ\nالتصنيف: ${conv.data.category}`,
-            this.mainMenu(),
-          );
-        } catch (err) {
-          this.logger.error('فشل إضافة المصروف', (err as Error)?.stack);
-          return this.sendMessage(chatId, '⚠️ تعذّرت إضافة المصروف.');
-        }
+        // المستخدم كتب تصنيفاً مخصصاً بدل الضغط على زر
+        return this.finishExpense(chatId, text.trim());
       }
       return;
     }

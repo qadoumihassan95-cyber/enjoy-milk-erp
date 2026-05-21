@@ -1,7 +1,13 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
-import { Wallet, ArrowDownToLine, ArrowUpFromLine, FileCheck, TrendingUp, TrendingDown } from 'lucide-react';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Wallet, ArrowDownToLine, ArrowUpFromLine, FileCheck, TrendingUp, TrendingDown, Plus, Receipt } from 'lucide-react';
+
+const EXPENSE_CATEGORIES = [
+  'رواتب', 'كهرباء', 'إيجار', 'مشتريات', 'صيانة',
+  'مواصلات', 'إنترنت', 'تسويق', 'معدات', 'مصاريف تشغيل', 'أخرى',
+];
 import {
   BarChart,
   Bar,
@@ -18,11 +24,41 @@ import { api } from '@/lib/api';
 import { formatNumber, formatCurrency, formatDate } from '@/lib/utils';
 
 export default function FinancePage() {
+  const qc = useQueryClient();
+  const [expForm, setExpForm] = useState({ amount: '', category: EXPENSE_CATEGORIES[0], description: '' });
+  const [expFilter, setExpFilter] = useState('');
+
   const { data: summary } = useQuery({
     queryKey: ['finance', 'summary'],
     queryFn: () => api.get('/finance/summary/today').then((r) => r.data),
     refetchInterval: 30_000,
   });
+
+  const { data: expenses } = useQuery({
+    queryKey: ['finance', 'expenses'],
+    queryFn: () => api.get('/finance/expenses').then((r) => r.data),
+    refetchInterval: 30_000,
+  });
+
+  const addExpense = useMutation({
+    mutationFn: (body: any) => api.post('/finance/expenses', body).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['finance'] });
+      setExpForm({ amount: '', category: EXPENSE_CATEGORIES[0], description: '' });
+    },
+    onError: (e: any) => alert(e?.response?.data?.message || 'تعذّرت إضافة المصروف'),
+  });
+
+  const submitExpense = (e: React.FormEvent) => {
+    e.preventDefault();
+    const amount = parseFloat(expForm.amount);
+    if (isNaN(amount) || amount <= 0) return alert('أدخل مبلغاً صحيحاً');
+    addExpense.mutate({
+      amount,
+      category: expForm.category,
+      description: expForm.description || expForm.category,
+    });
+  };
 
   const { data: report } = useQuery({
     queryKey: ['finance', 'report'],
@@ -153,6 +189,115 @@ export default function FinancePage() {
                     );
                   })}
               </div>
+            </div>
+          )}
+        </Card>
+
+        {/* ─── إدارة المصاريف (إضافة + قائمة) ─── */}
+        <Card className="p-5">
+          <h3 className="font-black text-lg mb-4 flex items-center gap-2">
+            <Receipt className="h-5 w-5" /> المصاريف
+          </h3>
+
+          <form onSubmit={submitExpense} className="grid md:grid-cols-4 gap-3 mb-5">
+            <div>
+              <label className="text-[10px] font-bold text-zinc-500 uppercase">المبلغ (د.أ)</label>
+              <input
+                type="number"
+                step="0.01"
+                value={expForm.amount}
+                onChange={(e) => setExpForm({ ...expForm, amount: e.target.value })}
+                className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+                placeholder="0.00"
+                required
+              />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-zinc-500 uppercase">التصنيف</label>
+              <select
+                value={expForm.category}
+                onChange={(e) => setExpForm({ ...expForm, category: e.target.value })}
+                className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+              >
+                {EXPENSE_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-zinc-500 uppercase">الوصف (اختياري)</label>
+              <input
+                value={expForm.description}
+                onChange={(e) => setExpForm({ ...expForm, description: e.target.value })}
+                className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+                placeholder="تفاصيل..."
+              />
+            </div>
+            <div className="flex items-end">
+              <button
+                type="submit"
+                disabled={addExpense.isPending}
+                className="w-full h-10 rounded-lg bg-zinc-900 text-white text-sm font-bold flex items-center justify-center gap-1.5 hover:bg-zinc-800 disabled:opacity-50"
+              >
+                <Plus className="h-4 w-4" /> إضافة مصروف
+              </button>
+            </div>
+          </form>
+
+          {/* فلتر التصنيف */}
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <span className="text-xs text-zinc-500">فلتر:</span>
+            <button
+              onClick={() => setExpFilter('')}
+              className={`px-2.5 py-1 rounded-md text-xs font-bold ${!expFilter ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600'}`}
+            >
+              الكل
+            </button>
+            {EXPENSE_CATEGORIES.map((c) => (
+              <button
+                key={c}
+                onClick={() => setExpFilter(c)}
+                className={`px-2.5 py-1 rounded-md text-xs font-bold ${expFilter === c ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600'}`}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+
+          {/* قائمة المصاريف */}
+          {!expenses || expenses.length === 0 ? (
+            <p className="text-sm text-zinc-400 text-center py-6">لا توجد مصاريف مسجّلة</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-zinc-50 border-b border-zinc-200">
+                  <tr>
+                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase">التاريخ</th>
+                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase">التصنيف</th>
+                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase">الوصف</th>
+                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase">المبلغ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {expenses
+                    .filter((x: any) => !expFilter || x.category === expFilter)
+                    .slice(0, 50)
+                    .map((x: any) => (
+                      <tr key={x.id} className="border-b border-zinc-100">
+                        <td className="p-2.5 text-zinc-500">{formatDate(x.expenseDate)}</td>
+                        <td className="p-2.5">
+                          <span className="inline-block px-2 py-0.5 rounded-md bg-zinc-100 text-zinc-700 text-xs font-bold">
+                            {x.category || 'أخرى'}
+                          </span>
+                        </td>
+                        <td className="p-2.5 text-zinc-600">{x.description || '—'}</td>
+                        <td className="p-2.5 font-black text-red-600" data-numeric>
+                          {formatNumber(+x.amount, 0)} د.أ
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
             </div>
           )}
         </Card>
