@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { Card, Button, Input, Badge } from '@/components/ui';
+import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatDate, cn } from '@/lib/utils';
 
@@ -29,6 +30,7 @@ type Row = Record<string, any>;
 export default function ProductionDetailPage() {
   const router = useRouter();
   const params = useParams();
+  const toast = useToast();
   const id = params.id as string;
 
   const { data, refetch } = useQuery({
@@ -40,6 +42,11 @@ export default function ProductionDetailPage() {
   const { data: items } = useQuery({
     queryKey: ['items-all'],
     queryFn: () => api.get('/inventory/items').then((r) => r.data),
+  });
+
+  const { data: machines } = useQuery({
+    queryKey: ['machines'],
+    queryFn: () => api.get('/machines').then((r) => r.data),
   });
 
   // Local state for all sections
@@ -72,10 +79,11 @@ export default function ProductionDetailPage() {
     setWastages(data.wastages ?? []);
   }, [data?.id, data?.updatedAt]);
 
-  if (!data) return <AppShell><div className="p-8">جاري التحميل...</div></AppShell>;
-
-  const posted = data.status === 'POSTED';
-  const cancelled = data.status === 'CANCELLED';
+  // ملاحظة: لا تضع أي early-return قبل بقية الـ hooks — كانت هذه سبب
+  // انهيار الواجهة (Rendered more hooks than during the previous render).
+  // كل القيم المحسوبة أدناه آمنة عند غياب data (optional chaining + ?? []).
+  const posted = data?.status === 'POSTED';
+  const cancelled = data?.status === 'CANCELLED';
   const disabled = posted || cancelled;
 
   // Filter items by category for autocomplete
@@ -112,12 +120,12 @@ export default function ProductionDetailPage() {
       });
     } catch (e: any) {
       setSaving(false);
-      alert(e?.response?.data?.message || 'تعذّر الحفظ — تحقق من الاتصال');
+      toast.error(e?.response?.data?.message || 'تعذّر الحفظ — تحقق من الاتصال');
       return;
     }
     await safeRefetch();
     setSaving(false);
-    alert('✓ تم الحفظ');
+    toast.success('تم حفظ ورقة الإنتاج');
   };
 
   const doPost = async () => {
@@ -125,11 +133,11 @@ export default function ProductionDetailPage() {
     try {
       await api.post(`/daily-production/${id}/post`);
     } catch (e: any) {
-      alert(e?.response?.data?.message || 'تعذّر الترحيل');
+      toast.error(e?.response?.data?.message || 'تعذّر الترحيل');
       return;
     }
     await safeRefetch();
-    alert('✓ تم الترحيل');
+    toast.success('تم الترحيل للمخزون');
   };
 
   const doCancel = async () => {
@@ -137,11 +145,11 @@ export default function ProductionDetailPage() {
     try {
       await api.post(`/daily-production/${id}/cancel`);
     } catch (e: any) {
-      alert(e?.response?.data?.message || 'تعذّر الإلغاء');
+      toast.error(e?.response?.data?.message || 'تعذّر الإلغاء');
       return;
     }
     await safeRefetch();
-    alert('✓ تم إلغاء الترحيل');
+    toast.success('تم إلغاء الترحيل وإرجاع الكميات');
   };
 
   // ─── Keyboard shortcuts: Ctrl+S = save, Ctrl+P = print ──
@@ -160,6 +168,17 @@ export default function ProductionDetailPage() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   });
+
+  // الآن — بعد تشغيل كل الـ hooks — يمكن العرض المشروط بأمان
+  if (!data) {
+    return (
+      <AppShell>
+        <div className="max-w-6xl mx-auto p-8 text-center text-zinc-500">
+          جاري التحميل...
+        </div>
+      </AppShell>
+    );
+  }
 
   // ─── Computed totals (مجموع الإنتاج اليومي) ──────────
   const producedTotals = produced.reduce(
@@ -275,9 +294,16 @@ export default function ProductionDetailPage() {
                 className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
               >
                 <option value="">— غير محدد —</option>
-                <option value="1">ماكينة 1</option>
-                <option value="2">ماكينة 2</option>
-                <option value="3">ماكينة 3</option>
+                {(machines ?? []).map((m: any) => (
+                  <option key={m.id} value={m.number}>
+                    {m.name} (#{m.number})
+                  </option>
+                ))}
+                {/* احتفظ بالقيمة الحالية إن لم تكن ضمن القائمة النشطة */}
+                {header.machineNumber > 0 &&
+                  !(machines ?? []).some((m: any) => m.number === header.machineNumber) && (
+                    <option value={header.machineNumber}>ماكينة {header.machineNumber}</option>
+                  )}
               </select>
             </div>
           </div>

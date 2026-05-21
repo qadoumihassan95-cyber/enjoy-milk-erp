@@ -35,6 +35,15 @@ export class FinanceController {
     return this.service.listMovements(user.tenantId, cashboxId);
   }
 
+  // تحويل بين الصناديق
+  @Post('transfer')
+  transfer(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: { fromCashboxId: string; toCashboxId: string; amount: number; description?: string },
+  ) {
+    return this.service.transferBetweenCashboxes(user.tenantId, user.id, body);
+  }
+
   // Cheques
   @Get('cheques')
   cheques(

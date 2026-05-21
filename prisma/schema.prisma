@@ -584,6 +584,28 @@ enum AttendanceStatus {
   HOLIDAY
 }
 
+// ── تعديلات الرواتب اليدوية (مكافآت/خصومات/تجاوز يدوي/ملاحظات) ──
+// سجل واحد لكل موظف لكل شهر. يُطبَّق فوق الحساب التلقائي في كشف الرواتب.
+model PayrollAdjustment {
+  id          String    @id @default(cuid())
+  tenantId    String
+  employeeId  String
+  month       String              // "2026-05"
+  bonus       Decimal   @db.Decimal(18, 2) @default(0)   // مكافأة
+  deduction   Decimal   @db.Decimal(18, 2) @default(0)   // خصم يدوي إضافي
+  overrideNet Decimal?  @db.Decimal(18, 2)               // تجاوز الصافي بالكامل (اختياري)
+  notes       String?                                     // ملاحظات على راتب الشهر
+  paid        Boolean   @default(false)                  // تم الصرف؟
+  paidAt      DateTime?
+  cashboxId   String?                                     // الصندوق الذي صُرف منه
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([tenantId, employeeId, month])
+  @@index([tenantId, month])
+}
+
 // ─── COMPLIANCE ────────────────────────────────────────────────────────
 
 model License {
@@ -753,6 +775,22 @@ model ProductionWaste {
 
   @@index([dailyProductionId])
   @@index([tenantId, itemId])
+}
+
+// ── ماكينات الإنتاج (قائمة قابلة للإدارة) ─────────────────
+// قائمة بسيطة لإدارة الماكينات (إضافة/تعديل/حذف). ورقة الإنتاج
+// تخزّن رقم الماكينة (machineNumber) — وهذه القائمة تُغذّي القائمة المنسدلة.
+model ProductionMachine {
+  id        String   @id @default(cuid())
+  tenantId  String
+  number    Int                 // رقم الماكينة (1، 2، 3 ...)
+  name      String              // اسم/وصف الماكينة
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, number])
+  @@index([tenantId, active])
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

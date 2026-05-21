@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import {
   Plus,
   Calendar,
@@ -10,9 +10,13 @@ import {
   Search,
   Printer,
   Filter,
+  Settings2,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { Card, Button, Input, Badge } from '@/components/ui';
+import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatDate, cn } from '@/lib/utils';
 
@@ -20,6 +24,7 @@ export default function DailyProductionListPage() {
   const router = useRouter();
   const qc = useQueryClient();
   const [showNew, setShowNew] = useState(false);
+  const [showMachines, setShowMachines] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<
     'all' | 'DRAFT' | 'POSTED' | 'CANCELLED'
@@ -28,6 +33,11 @@ export default function DailyProductionListPage() {
   const { data: records } = useQuery({
     queryKey: ['daily-production'],
     queryFn: () => api.get('/daily-production').then((r) => r.data),
+  });
+
+  const { data: machines } = useQuery({
+    queryKey: ['machines'],
+    queryFn: () => api.get('/machines').then((r) => r.data),
   });
 
   // ─── Filtering ─────────────────────────────────
@@ -75,14 +85,21 @@ export default function DailyProductionListPage() {
               ورقة الإنتاج اليومية — 3 ماكينات
             </p>
           </div>
-          <Button onClick={() => setShowNew(true)}>
-            <Plus className="h-4 w-4" />
-            يوم إنتاج جديد
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setShowMachines(true)}>
+              <Settings2 className="h-4 w-4" />
+              إدارة الماكينات
+            </Button>
+            <Button onClick={() => setShowNew(true)}>
+              <Plus className="h-4 w-4" />
+              يوم إنتاج جديد
+            </Button>
+          </div>
         </header>
 
         {showNew && (
           <NewProductionDayForm
+            machines={machines ?? []}
             onClose={() => setShowNew(false)}
             onCreated={(id) => {
               qc.invalidateQueries({ queryKey: ['daily-production'] });
@@ -90,6 +107,8 @@ export default function DailyProductionListPage() {
             }}
           />
         )}
+
+        {showMachines && <MachineManagerModal onClose={() => setShowMachines(false)} />}
 
         {/* ─── Search + Filter Bar ───────────────────── */}
         <Card className="p-3 flex items-center gap-3 flex-wrap">
@@ -284,15 +303,18 @@ export default function DailyProductionListPage() {
 function NewProductionDayForm({
   onClose,
   onCreated,
+  machines,
 }: {
   onClose: () => void;
   onCreated: (id: string) => void;
+  machines: any[];
 }) {
   const today = new Date().toISOString().slice(0, 10);
   const [form, setForm] = useState({
     productionDate: today,
     shift: '',
     operatorName: '',
+    machineNumber: '' as string,
   });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -302,7 +324,12 @@ function NewProductionDayForm({
     setSaving(true);
     setErr(null);
     try {
-      const res = await api.post('/daily-production', form);
+      const res = await api.post('/daily-production', {
+        productionDate: form.productionDate,
+        shift: form.shift || undefined,
+        operatorName: form.operatorName || undefined,
+        machineNumber: form.machineNumber ? +form.machineNumber : undefined,
+      });
       onCreated(res.data.id);
       onClose();
     } catch (e: any) {
@@ -321,7 +348,7 @@ function NewProductionDayForm({
         </button>
       </div>
       <form onSubmit={submit} className="space-y-4">
-        <div className="grid md:grid-cols-3 gap-4">
+        <div className="grid md:grid-cols-2 gap-4">
           <Input
             label="التاريخ *"
             type="date"
@@ -347,6 +374,21 @@ function NewProductionDayForm({
             value={form.operatorName}
             onChange={(e) => setForm({ ...form, operatorName: e.target.value })}
           />
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-zinc-700">رقم الماكينة</label>
+            <select
+              value={form.machineNumber}
+              onChange={(e) => setForm({ ...form, machineNumber: e.target.value })}
+              className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+            >
+              <option value="">— غير محدد —</option>
+              {machines.map((m: any) => (
+                <option key={m.id} value={m.number}>
+                  {m.name} (#{m.number})
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
         {err && (
           <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
@@ -363,5 +405,190 @@ function NewProductionDayForm({
         </div>
       </form>
     </Card>
+  );
+}
+
+// ─── إدارة الماكينات (إضافة/تعديل/حذف) ───────────────────
+function MachineManagerModal({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [newNumber, setNewNumber] = useState('');
+  const [newName, setNewName] = useState('');
+
+  const { data: machines, isLoading } = useQuery({
+    queryKey: ['machines'],
+    queryFn: () => api.get('/machines').then((r) => r.data),
+  });
+
+  const refresh = () => qc.invalidateQueries({ queryKey: ['machines'] });
+
+  const add = useMutation({
+    mutationFn: (body: { number: number; name: string }) =>
+      api.post('/machines', body).then((r) => r.data),
+    onSuccess: () => {
+      toast.success('تمت إضافة الماكينة');
+      setNewNumber('');
+      setNewName('');
+      refresh();
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّرت الإضافة'),
+  });
+
+  const update = useMutation({
+    mutationFn: ({ id, ...body }: any) =>
+      api.patch(`/machines/${id}`, body).then((r) => r.data),
+    onSuccess: () => {
+      toast.success('تم تعديل الماكينة');
+      refresh();
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر التعديل'),
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => api.delete(`/machines/${id}`).then((r) => r.data),
+    onSuccess: () => {
+      toast.success('تم حذف الماكينة');
+      refresh();
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الحذف'),
+  });
+
+  const submitNew = (e: React.FormEvent) => {
+    e.preventDefault();
+    const n = parseInt(newNumber, 10);
+    if (isNaN(n) || n <= 0) return toast.error('أدخل رقم ماكينة صحيحاً');
+    add.mutate({ number: n, name: newName.trim() || `ماكينة ${n}` });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b border-zinc-100 sticky top-0 bg-white">
+          <h3 className="font-bold flex items-center gap-2">
+            <Settings2 className="h-5 w-5" /> إدارة الماكينات
+          </h3>
+          <button onClick={onClose}>
+            <XCircle className="h-5 w-5 text-zinc-400" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <form onSubmit={submitNew} className="grid grid-cols-12 gap-2 items-end rounded-xl bg-zinc-50 border border-zinc-100 p-3">
+            <div className="col-span-3">
+              <label className="text-[10px] font-bold text-zinc-500 uppercase">الرقم</label>
+              <input
+                type="number"
+                value={newNumber}
+                onChange={(e) => setNewNumber(e.target.value)}
+                className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+                placeholder="4"
+              />
+            </div>
+            <div className="col-span-6">
+              <label className="text-[10px] font-bold text-zinc-500 uppercase">الاسم</label>
+              <input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+                placeholder="ماكينة التعبئة 4"
+              />
+            </div>
+            <div className="col-span-3">
+              <Button type="submit" className="w-full" loading={add.isPending}>
+                <Plus className="h-4 w-4" /> إضافة
+              </Button>
+            </div>
+          </form>
+
+          {isLoading ? (
+            <p className="text-sm text-zinc-500 text-center py-4">جاري التحميل...</p>
+          ) : !machines || machines.length === 0 ? (
+            <p className="text-sm text-zinc-500 text-center py-6">لا توجد ماكينات</p>
+          ) : (
+            <div className="space-y-2">
+              {machines.map((m: any) => (
+                <MachineRow
+                  key={m.id}
+                  machine={m}
+                  onSave={(name, number) => update.mutate({ id: m.id, name, number })}
+                  onDelete={() => {
+                    if (!confirm(`حذف ${m.name}؟`)) return;
+                    remove.mutate(m.id);
+                  }}
+                  busy={update.isPending || remove.isPending}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MachineRow({
+  machine,
+  onSave,
+  onDelete,
+  busy,
+}: {
+  machine: any;
+  onSave: (name: string, number: number) => void;
+  onDelete: () => void;
+  busy: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(machine.name);
+  const [number, setNumber] = useState(String(machine.number));
+
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-zinc-100 p-2.5">
+      {editing ? (
+        <>
+          <input
+            type="number"
+            value={number}
+            onChange={(e) => setNumber(e.target.value)}
+            className="w-16 h-8 px-2 rounded border border-zinc-200 text-sm"
+          />
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="flex-1 h-8 px-2 rounded border border-zinc-200 text-sm"
+          />
+          <Button
+            size="sm"
+            loading={busy}
+            onClick={() => {
+              const n = parseInt(number, 10);
+              if (isNaN(n) || n <= 0) return;
+              onSave(name.trim() || machine.name, n);
+              setEditing(false);
+            }}
+          >
+            حفظ
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+            إلغاء
+          </Button>
+        </>
+      ) : (
+        <>
+          <span className="w-10 font-mono text-sm font-bold">#{machine.number}</span>
+          <span className="flex-1 text-sm">{machine.name}</span>
+          <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+            <Pencil className="h-3 w-3" />
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-red-600 border-red-200 hover:bg-red-50"
+            onClick={onDelete}
+          >
+            <Trash2 className="h-3 w-3" />
+          </Button>
+        </>
+      )}
+    </div>
   );
 }

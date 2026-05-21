@@ -40,6 +40,34 @@ export class EmployeesController {
     return this.service.getPayroll(user.tenantId, month);
   }
 
+  /** حفظ تعديل يدوي على راتب الشهر (مكافأة/خصم/تجاوز/ملاحظات) */
+  @Post('payroll/adjustment')
+  @Roles('MANAGER', 'ACCOUNTANT', 'HR')
+  savePayrollAdjustment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body()
+    body: {
+      employeeId: string;
+      month: string;
+      bonus?: number;
+      deduction?: number;
+      overrideNet?: number | null;
+      notes?: string | null;
+    },
+  ) {
+    return this.service.savePayrollAdjustment(user.tenantId, user.id, body);
+  }
+
+  /** صرف الرواتب (لموظف أو للكل) — يخصم من الصندوق ويسجّل مصروف */
+  @Post('payroll/pay')
+  @Roles('MANAGER', 'ACCOUNTANT')
+  payPayroll(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: { month: string; employeeId?: string; cashboxId?: string },
+  ) {
+    return this.service.payPayroll(user.tenantId, user.id, body);
+  }
+
   @Get(':id')
   get(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.service.get(user.tenantId, id);
@@ -87,5 +115,45 @@ export class EmployeesController {
     @Query('date') date?: string,
   ) {
     return this.service.listAttendance(user.tenantId, date);
+  }
+
+  // ─── العمل الإضافي (Overtime) ──────────────────────
+  /** كشف العمل الإضافي لموظف خلال شهر (سجلات + إجماليات + قيمة) */
+  @Get(':id/overtime')
+  overtime(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Query('month') month?: string,
+  ) {
+    return this.service.getEmployeeOvertime(user.tenantId, id, month);
+  }
+
+  /** إضافة/تعيين ساعات إضافية ليوم محدد */
+  @Post(':id/overtime')
+  addOvertime(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: { date?: string; hours: number; notes?: string },
+  ) {
+    return this.service.addOvertimeForDate(user.tenantId, id, body);
+  }
+
+  /** تعديل سجل عمل إضافي */
+  @Patch('overtime/:recordId')
+  updateOvertime(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('recordId') recordId: string,
+    @Body() body: { hours?: number; notes?: string },
+  ) {
+    return this.service.updateOvertimeEntry(user.tenantId, recordId, body);
+  }
+
+  /** حذف العمل الإضافي من سجل (تصفير الساعات) */
+  @Delete('overtime/:recordId')
+  deleteOvertime(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('recordId') recordId: string,
+  ) {
+    return this.service.deleteOvertimeEntry(user.tenantId, recordId);
   }
 }

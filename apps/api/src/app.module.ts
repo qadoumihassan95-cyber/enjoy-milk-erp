@@ -19,6 +19,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { HealthModule } from './modules/health/health.module';
 import { DailyProductionModule } from './modules/daily-production/daily-production.module';
 import { SimpleOrdersModule } from './modules/simple-orders/simple-orders.module';
+import { MachinesModule } from './modules/machines/machines.module';
 import { TelegramModule } from './modules/telegram/telegram.module';
 
 @Module({
@@ -37,6 +38,7 @@ import { TelegramModule } from './modules/telegram/telegram.module';
     HealthModule,
     DailyProductionModule,
     SimpleOrdersModule,
+    MachinesModule,
     TelegramModule,
   ],
   providers: [

@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Wallet, ArrowDownToLine, ArrowUpFromLine, FileCheck, TrendingUp, TrendingDown, Plus, Receipt } from 'lucide-react';
+import { Wallet, ArrowDownToLine, ArrowUpFromLine, FileCheck, TrendingUp, TrendingDown, Plus, Receipt, ArrowRightLeft } from 'lucide-react';
+import { useToast } from '@/components/toast';
 
 const EXPENSE_CATEGORIES = [
   'رواتب', 'كهرباء', 'إيجار', 'مشتريات', 'صيانة',
@@ -25,8 +26,18 @@ import { formatNumber, formatCurrency, formatDate } from '@/lib/utils';
 
 export default function FinancePage() {
   const qc = useQueryClient();
-  const [expForm, setExpForm] = useState({ amount: '', category: EXPENSE_CATEGORIES[0], description: '' });
+  const toast = useToast();
+  const [expForm, setExpForm] = useState({ amount: '', category: EXPENSE_CATEGORIES[0], description: '', cashboxId: '' });
   const [expFilter, setExpFilter] = useState('');
+  const [transferForm, setTransferForm] = useState({ fromCashboxId: '', toCashboxId: '', amount: '', description: '' });
+  const [moveForm, setMoveForm] = useState({ cashboxId: '', type: 'IN', amount: '', description: '' });
+
+  // تحديث كل ما يتأثر بأي عملية مالية (real-time)
+  const invalidateFinance = () => {
+    qc.invalidateQueries({ queryKey: ['finance'] });
+    qc.invalidateQueries({ queryKey: ['cashboxes'] });
+    qc.invalidateQueries({ queryKey: ['cash-movements'] });
+  };
 
   const { data: summary } = useQuery({
     queryKey: ['finance', 'summary'],
@@ -43,21 +54,62 @@ export default function FinancePage() {
   const addExpense = useMutation({
     mutationFn: (body: any) => api.post('/finance/expenses', body).then((r) => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['finance'] });
-      setExpForm({ amount: '', category: EXPENSE_CATEGORIES[0], description: '' });
+      toast.success('تمت إضافة المصروف وخصمه من الصندوق');
+      invalidateFinance();
+      setExpForm({ amount: '', category: EXPENSE_CATEGORIES[0], description: '', cashboxId: '' });
     },
-    onError: (e: any) => alert(e?.response?.data?.message || 'تعذّرت إضافة المصروف'),
+    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّرت إضافة المصروف'),
   });
 
   const submitExpense = (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseFloat(expForm.amount);
-    if (isNaN(amount) || amount <= 0) return alert('أدخل مبلغاً صحيحاً');
+    if (isNaN(amount) || amount <= 0) return toast.error('أدخل مبلغاً صحيحاً');
     addExpense.mutate({
       amount,
       category: expForm.category,
       description: expForm.description || expForm.category,
+      cashboxId: expForm.cashboxId || undefined,
     });
+  };
+
+  // تحويل بين الصناديق
+  const transfer = useMutation({
+    mutationFn: (body: any) => api.post('/finance/transfer', body).then((r) => r.data),
+    onSuccess: (res) => {
+      toast.success(res?.message || 'تم التحويل بين الصناديق');
+      invalidateFinance();
+      setTransferForm({ fromCashboxId: '', toCashboxId: '', amount: '', description: '' });
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر التحويل'),
+  });
+
+  const submitTransfer = (e: React.FormEvent) => {
+    e.preventDefault();
+    const amount = parseFloat(transferForm.amount);
+    if (!transferForm.fromCashboxId || !transferForm.toCashboxId) return toast.error('اختر الصندوقين');
+    if (transferForm.fromCashboxId === transferForm.toCashboxId) return toast.error('لا يمكن التحويل لنفس الصندوق');
+    if (isNaN(amount) || amount <= 0) return toast.error('أدخل مبلغاً صحيحاً');
+    transfer.mutate({ ...transferForm, amount });
+  };
+
+  // حركة نقدية يدوية (إيداع/سحب)
+  const addMovement = useMutation({
+    mutationFn: (body: any) => api.post('/finance/movements', body).then((r) => r.data),
+    onSuccess: (_d, vars: any) => {
+      toast.success(vars.type === 'IN' ? 'تم تسجيل الإيداع' : 'تم تسجيل السحب');
+      invalidateFinance();
+      setMoveForm({ cashboxId: '', type: 'IN', amount: '', description: '' });
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّرت الحركة النقدية'),
+  });
+
+  const submitMovement = (e: React.FormEvent) => {
+    e.preventDefault();
+    const amount = parseFloat(moveForm.amount);
+    if (!moveForm.cashboxId) return toast.error('اختر الصندوق');
+    if (isNaN(amount) || amount <= 0) return toast.error('أدخل مبلغاً صحيحاً');
+    addMovement.mutate({ ...moveForm, amount });
   };
 
   const { data: report } = useQuery({
@@ -199,7 +251,7 @@ export default function FinancePage() {
             <Receipt className="h-5 w-5" /> المصاريف
           </h3>
 
-          <form onSubmit={submitExpense} className="grid md:grid-cols-4 gap-3 mb-5">
+          <form onSubmit={submitExpense} className="grid md:grid-cols-5 gap-3 mb-5">
             <div>
               <label className="text-[10px] font-bold text-zinc-500 uppercase">المبلغ (د.أ)</label>
               <input
@@ -225,6 +277,19 @@ export default function FinancePage() {
               </select>
             </div>
             <div>
+              <label className="text-[10px] font-bold text-zinc-500 uppercase">يُخصم من صندوق</label>
+              <select
+                value={expForm.cashboxId}
+                onChange={(e) => setExpForm({ ...expForm, cashboxId: e.target.value })}
+                className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+              >
+                <option value="">الرئيسي (تلقائي)</option>
+                {cashboxes?.map((c: any) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
               <label className="text-[10px] font-bold text-zinc-500 uppercase">الوصف (اختياري)</label>
               <input
                 value={expForm.description}
@@ -239,7 +304,7 @@ export default function FinancePage() {
                 disabled={addExpense.isPending}
                 className="w-full h-10 rounded-lg bg-zinc-900 text-white text-sm font-bold flex items-center justify-center gap-1.5 hover:bg-zinc-800 disabled:opacity-50"
               >
-                <Plus className="h-4 w-4" /> إضافة مصروف
+                <Plus className="h-4 w-4" /> {addExpense.isPending ? 'جارٍ...' : 'إضافة'}
               </button>
             </div>
           </form>
@@ -301,6 +366,133 @@ export default function FinancePage() {
             </div>
           )}
         </Card>
+
+        {/* ─── تحويل بين الصناديق + حركة نقدية يدوية ─── */}
+        <div className="grid lg:grid-cols-2 gap-4">
+          <Card className="p-5">
+            <h3 className="font-black text-base mb-4 flex items-center gap-2">
+              <ArrowRightLeft className="h-5 w-5" /> تحويل بين الصناديق
+            </h3>
+            <form onSubmit={submitTransfer} className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold text-zinc-500 uppercase">من صندوق</label>
+                  <select
+                    value={transferForm.fromCashboxId}
+                    onChange={(e) => setTransferForm({ ...transferForm, fromCashboxId: e.target.value })}
+                    className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+                    required
+                  >
+                    <option value="">اختر...</option>
+                    {cashboxes?.map((c: any) => (
+                      <option key={c.id} value={c.id}>{c.name} — {formatNumber(c.balance, 0)}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-zinc-500 uppercase">إلى صندوق</label>
+                  <select
+                    value={transferForm.toCashboxId}
+                    onChange={(e) => setTransferForm({ ...transferForm, toCashboxId: e.target.value })}
+                    className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+                    required
+                  >
+                    <option value="">اختر...</option>
+                    {cashboxes?.map((c: any) => (
+                      <option key={c.id} value={c.id}>{c.name} — {formatNumber(c.balance, 0)}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <input
+                  type="number"
+                  step="0.01"
+                  value={transferForm.amount}
+                  onChange={(e) => setTransferForm({ ...transferForm, amount: e.target.value })}
+                  className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+                  placeholder="المبلغ"
+                  required
+                />
+                <input
+                  value={transferForm.description}
+                  onChange={(e) => setTransferForm({ ...transferForm, description: e.target.value })}
+                  className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+                  placeholder="ملاحظة (اختياري)"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={transfer.isPending}
+                className="w-full h-10 rounded-lg bg-zinc-900 text-white text-sm font-bold flex items-center justify-center gap-1.5 hover:bg-zinc-800 disabled:opacity-50"
+              >
+                <ArrowRightLeft className="h-4 w-4" /> {transfer.isPending ? 'جارٍ...' : 'تحويل'}
+              </button>
+            </form>
+          </Card>
+
+          <Card className="p-5">
+            <h3 className="font-black text-base mb-4 flex items-center gap-2">
+              <Wallet className="h-5 w-5" /> حركة نقدية (إيداع / سحب)
+            </h3>
+            <form onSubmit={submitMovement} className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold text-zinc-500 uppercase">الصندوق</label>
+                  <select
+                    value={moveForm.cashboxId}
+                    onChange={(e) => setMoveForm({ ...moveForm, cashboxId: e.target.value })}
+                    className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+                    required
+                  >
+                    <option value="">اختر...</option>
+                    {cashboxes?.map((c: any) => (
+                      <option key={c.id} value={c.id}>{c.name} — {formatNumber(c.balance, 0)}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-zinc-500 uppercase">النوع</label>
+                  <select
+                    value={moveForm.type}
+                    onChange={(e) => setMoveForm({ ...moveForm, type: e.target.value })}
+                    className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+                  >
+                    <option value="IN">إيداع (وارد)</option>
+                    <option value="OUT">سحب (صادر)</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <input
+                  type="number"
+                  step="0.01"
+                  value={moveForm.amount}
+                  onChange={(e) => setMoveForm({ ...moveForm, amount: e.target.value })}
+                  className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+                  placeholder="المبلغ"
+                  required
+                />
+                <input
+                  value={moveForm.description}
+                  onChange={(e) => setMoveForm({ ...moveForm, description: e.target.value })}
+                  className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+                  placeholder="الوصف (اختياري)"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={addMovement.isPending}
+                className={`w-full h-10 rounded-lg text-white text-sm font-bold flex items-center justify-center gap-1.5 disabled:opacity-50 ${
+                  moveForm.type === 'IN' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-amber-600 hover:bg-amber-700'
+                }`}
+              >
+                {moveForm.type === 'IN' ? <ArrowDownToLine className="h-4 w-4" /> : <ArrowUpFromLine className="h-4 w-4" />}
+                {addMovement.isPending ? 'جارٍ...' : moveForm.type === 'IN' ? 'إيداع' : 'سحب'}
+              </button>
+            </form>
+          </Card>
+        </div>
 
         <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat

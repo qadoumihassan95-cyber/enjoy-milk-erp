@@ -58,6 +58,71 @@ export class FinanceService {
     });
   }
 
+  // ─── Transfer between cashboxes ──────────────────
+  async transferBetweenCashboxes(
+    tenantId: string,
+    userId: string,
+    data: { fromCashboxId: string; toCashboxId: string; amount: number; description?: string },
+  ) {
+    const amount = Number(data.amount);
+    if (!data.fromCashboxId || !data.toCashboxId) {
+      throw new BadRequestException('يجب اختيار الصندوق المُرسِل والمستلم');
+    }
+    if (data.fromCashboxId === data.toCashboxId) {
+      throw new BadRequestException('لا يمكن التحويل لنفس الصندوق');
+    }
+    if (!(amount > 0)) {
+      throw new BadRequestException('المبلغ غير صحيح');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const [from, to] = await Promise.all([
+        tx.cashbox.findFirst({ where: { id: data.fromCashboxId, tenantId } }),
+        tx.cashbox.findFirst({ where: { id: data.toCashboxId, tenantId } }),
+      ]);
+      if (!from || !to) throw new NotFoundException('الصندوق غير موجود');
+      if (Number(from.balance) < amount) {
+        throw new BadRequestException('رصيد الصندوق المُرسِل لا يكفي');
+      }
+
+      const dec = new Prisma.Decimal(amount);
+      await tx.cashbox.update({
+        where: { id: from.id },
+        data: { balance: { decrement: dec } },
+      });
+      await tx.cashbox.update({
+        where: { id: to.id },
+        data: { balance: { increment: dec } },
+      });
+
+      const desc = data.description?.trim() || `تحويل من ${from.name} إلى ${to.name}`;
+      await tx.cashMovement.create({
+        data: {
+          tenantId,
+          cashboxId: from.id,
+          type: 'TRANSFER',
+          amount: dec,
+          description: `تحويل صادر → ${to.name}${data.description ? ' — ' + data.description : ''}`,
+          refType: 'Transfer',
+          performedById: userId,
+        },
+      });
+      await tx.cashMovement.create({
+        data: {
+          tenantId,
+          cashboxId: to.id,
+          type: 'TRANSFER',
+          amount: dec,
+          description: `تحويل وارد ← ${from.name}${data.description ? ' — ' + data.description : ''}`,
+          refType: 'Transfer',
+          performedById: userId,
+        },
+      });
+
+      return { ok: true, message: desc, amount };
+    });
+  }
+
   async listMovements(tenantId: string, cashboxId?: string) {
     return this.prisma.cashMovement.findMany({
       where: {
@@ -133,44 +198,50 @@ export class FinanceService {
   }
 
   async createExpense(tenantId: string, userId: string, data: any) {
+    const amount = new Prisma.Decimal(data.amount);
     return this.prisma.$transaction(async (tx) => {
       const number = `EXP-${Date.now().toString(36).toUpperCase()}`;
+
+      // تحديد الصندوق: المُرسل، أو الرئيسي (MAIN)، أو أول صندوق نشِط
+      let cashboxId: string | null = data.cashboxId ?? null;
+      if (!cashboxId) {
+        const cb =
+          (await tx.cashbox.findFirst({ where: { tenantId, active: true, code: 'MAIN' } })) ??
+          (await tx.cashbox.findFirst({ where: { tenantId, active: true }, orderBy: { code: 'asc' } }));
+        cashboxId = cb?.id ?? null;
+      }
+
       const expense = await tx.expense.create({
         data: {
           tenantId,
           number,
           category: data.category,
-          amount: new Prisma.Decimal(data.amount),
+          amount,
           description: data.description,
           expenseDate: new Date(data.expenseDate ?? Date.now()),
-          cashboxId: data.cashboxId,
+          cashboxId,
           createdById: userId,
         },
       });
 
-      // If paid from cashbox — deduct
-      if (data.cashboxId) {
-        const cashbox = await tx.cashbox.findFirst({
-          where: { id: data.cashboxId, tenantId },
+      // الخصم من الصندوق دائماً (يعكس الواقع المالي) + تسجيل حركة نقدية
+      if (cashboxId) {
+        await tx.cashbox.update({
+          where: { id: cashboxId },
+          data: { balance: { decrement: amount } },
         });
-        if (cashbox && Number(cashbox.balance) >= Number(data.amount)) {
-          await tx.cashbox.update({
-            where: { id: data.cashboxId },
-            data: { balance: { decrement: new Prisma.Decimal(data.amount) } },
-          });
-          await tx.cashMovement.create({
-            data: {
-              tenantId,
-              cashboxId: data.cashboxId,
-              type: 'OUT',
-              amount: new Prisma.Decimal(data.amount),
-              description: data.description,
-              refType: 'Expense',
-              refId: expense.id,
-              performedById: userId,
-            },
-          });
-        }
+        await tx.cashMovement.create({
+          data: {
+            tenantId,
+            cashboxId,
+            type: 'OUT',
+            amount,
+            description: `مصروف: ${data.category || ''} ${data.description ? '— ' + data.description : ''}`.trim(),
+            refType: 'Expense',
+            refId: expense.id,
+            performedById: userId,
+          },
+        });
       }
 
       return expense;
