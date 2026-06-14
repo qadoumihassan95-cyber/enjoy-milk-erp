@@ -40,6 +40,21 @@ export class DailyProductionController {
     );
   }
 
+  /** ملخص يومي بتفصيل الماكينات + المنتجات + نسبة الفاقد (مع فلاتر) */
+  @Get('summary/day')
+  daySummary(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('date') date?: string,
+    @Query('itemName') itemName?: string,
+    @Query('machineNumber') machineNumber?: string,
+  ) {
+    return this.service.getDailySummary(user.tenantId, {
+      date,
+      itemName,
+      machineNumber: machineNumber ? Number(machineNumber) : undefined,
+    });
+  }
+
   /** رصيد المخزون الحالي (الحليب + الكرتون + الألمنيوم) */
   @Get('warehouse-balance')
   balance(@CurrentUser() user: AuthenticatedUser) {

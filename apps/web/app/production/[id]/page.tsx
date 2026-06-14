@@ -504,7 +504,7 @@ export default function ProductionDetailPage() {
           ) : (
             <div className="space-y-2">
               <div className="grid md:grid-cols-12 gap-2 text-xs font-bold text-zinc-500 uppercase">
-                <div className="md:col-span-5">الصنف</div>
+                <div className="md:col-span-5">الصنف + الماكينة</div>
                 <div className="md:col-span-2">عدد الطبالي</div>
                 <div className="md:col-span-2">كراتين/طبلية</div>
                 <div className="md:col-span-2">المجموع <span className="lowercase text-emerald-600 font-normal">(تلقائي)</span></div>
@@ -512,7 +512,7 @@ export default function ProductionDetailPage() {
               </div>
               {produced.map((r, i) => (
                 <div key={i} className="grid md:grid-cols-12 gap-2 items-center">
-                  <div className="md:col-span-5">
+                  <div className="md:col-span-5 space-y-1.5">
                     <ItemSelector
                       items={productItems}
                       value={r}
@@ -524,6 +524,24 @@ export default function ProductionDetailPage() {
                       disabled={disabled}
                       placeholder="اختر منتج"
                     />
+                    {/* ماكينة هذا السطر — يدعم نفس المنتج على ماكينات مختلفة */}
+                    <select
+                      value={r.machineNumber ?? ''}
+                      onChange={(e) => {
+                        const v = [...produced];
+                        v[i] = { ...v[i], machineNumber: e.target.value ? +e.target.value : null };
+                        setProduced(v);
+                      }}
+                      disabled={disabled}
+                      className="w-full h-9 px-2 rounded-lg border border-zinc-200 bg-zinc-50 text-xs"
+                    >
+                      <option value="">— ماكينة هذا السطر (اختياري) —</option>
+                      {(machines ?? []).map((m: any) => (
+                        <option key={m.id} value={m.number}>
+                          ماكينة {m.number} — {m.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className="md:col-span-2">
                     <Input

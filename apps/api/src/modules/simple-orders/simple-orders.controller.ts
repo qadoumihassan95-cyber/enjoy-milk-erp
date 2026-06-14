@@ -57,9 +57,29 @@ export class SimpleOrdersController {
   pay(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
-    @Body() body: { amount: number },
+    @Body()
+    body: {
+      amount: number;
+      method?: string;
+      notes?: string;
+      allowOverpay?: boolean;
+    },
   ) {
-    return this.service.addPayment(user.tenantId, id, +body.amount);
+    return this.service.addPayment(user.tenantId, id, body, user.id);
+  }
+
+  // قائمة الدفعات لطلبية + إجمالي المدفوع/المتبقي (مع backfill شفاف)
+  @Get(':id/payments')
+  payments(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.service.listPayments(user.tenantId, id);
+  }
+
+  @Delete('payments/:paymentId')
+  deletePayment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('paymentId') paymentId: string,
+  ) {
+    return this.service.deletePayment(user.tenantId, paymentId);
   }
 
   @Roles('MANAGER')

@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AsyncLocalStorage } from 'async_hooks';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { EmployeesService } from '../employees/employees.service';
 import { FinanceService } from '../finance/finance.service';
@@ -8,6 +9,17 @@ interface Conversation {
   flow: 'expense' | 'employee' | 'editsalary' | 'note';
   step: string;
   data: Record<string, any>;
+}
+
+type TgRole = 'ADMIN' | 'MANAGER' | 'EMPLOYEE' | 'VIEWER';
+
+/** سياق الحساب النشط لكل تحديث وارد (يُمرَّر عبر AsyncLocalStorage) */
+interface BotCtx {
+  token: string;
+  secret?: string;
+  tenantId?: string | null;
+  role: TgRole;
+  accountId?: string;
 }
 
 /** تصنيفات المصاريف الموحّدة (نفسها في الموقع والبوت) */
@@ -53,6 +65,25 @@ export class TelegramService implements OnModuleInit {
   private readonly apiBase: string;
   // حالة المحادثات قيد التنفيذ (لإضافة مصروف خطوة بخطوة)
   private readonly conversations = new Map<string, Conversation>();
+  // سياق الحساب النشط — يُمكّن تشغيل أكثر من بوت بنفس الكود (متعدد الحسابات)
+  private readonly als = new AsyncLocalStorage<BotCtx>();
+
+  /** السياق الحالي (إن كان التحديث يخصّ حساباً مُدار) */
+  private get ctx(): BotCtx | undefined {
+    return this.als.getStore();
+  }
+
+  /** التوكن الفعّال: حساب مُدار إن وُجد، وإلا توكن البيئة الافتراضي */
+  private get activeToken(): string {
+    return this.ctx?.token || this.token;
+  }
+
+  private static readonly ROLE_RANK: Record<TgRole, number> = {
+    VIEWER: 0,
+    EMPLOYEE: 1,
+    MANAGER: 2,
+    ADMIN: 3,
+  };
 
   constructor(
     private readonly config: ConfigService,
@@ -144,13 +175,19 @@ export class TelegramService implements OnModuleInit {
   }
 
   // ─── Telegram API helper ──────────────────────────────────────
+  /** يستدعي Telegram API بالتوكن الفعّال (الحساب المُدار أو البيئة) */
   private async callApi(method: string, params: Record<string, any>) {
-    if (!this.isEnabled) {
-      this.logger.warn(`تخطّي ${method} — البوت معطّل`);
-      return { ok: false, description: 'bot disabled' };
+    return this.callApiWithToken(this.activeToken, method, params);
+  }
+
+  /** نسخة عامّة تستقبل التوكن صراحةً (تُستخدم لإدارة الحسابات المتعددة) */
+  async callApiWithToken(token: string, method: string, params: Record<string, any>) {
+    if (!token) {
+      this.logger.warn(`تخطّي ${method} — لا يوجد توكن`);
+      return { ok: false, description: 'no token' };
     }
     try {
-      const res = await fetch(`${this.apiBase}/${method}`, {
+      const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
@@ -167,6 +204,109 @@ export class TelegramService implements OnModuleInit {
       );
       return { ok: false, description: (err as Error)?.message };
     }
+  }
+
+  // ─── Public helpers for multi-account management ──────────────
+  get publicUrl(): string {
+    return this.publicApiUrl;
+  }
+
+  webhookUrlForAccount(accountId: string): string {
+    return `${this.publicApiUrl}/api/telegram/webhook/account/${accountId}`;
+  }
+
+  /** اختبار توكن (getMe) — يرجع معلومات البوت إن كان صحيحاً */
+  async testToken(token: string) {
+    return this.callApiWithToken(token, 'getMe', {});
+  }
+
+  /** تسجيل webhook لحساب مُدار */
+  async setWebhookForAccount(account: { id: string; token: string; webhookSecret: string }) {
+    const url = this.webhookUrlForAccount(account.id);
+    const res = await this.callApiWithToken(account.token, 'setWebhook', {
+      url,
+      secret_token: account.webhookSecret || undefined,
+      allowed_updates: ['message', 'callback_query'],
+      drop_pending_updates: true,
+    });
+    return { ok: Boolean(res?.ok), url, raw: res };
+  }
+
+  async deleteWebhookForToken(token: string) {
+    return this.callApiWithToken(token, 'deleteWebhook', { drop_pending_updates: false });
+  }
+
+  async getWebhookInfoForToken(token: string) {
+    return this.callApiWithToken(token, 'getWebhookInfo', {});
+  }
+
+  /**
+   * معالجة تحديث وارد لحساب مُدار — يضبط سياق الحساب (التوكن/المنشأة/الدور)
+   * عبر AsyncLocalStorage بحيث تعمل كل أوامر البوت بتوكن وصلاحيات هذا الحساب.
+   */
+  async handleUpdateForAccount(
+    account: {
+      id: string;
+      token: string;
+      webhookSecret: string;
+      tenantId: string;
+      role: TgRole;
+    },
+    update: any,
+  ): Promise<void> {
+    // حدّث آخر نشاط + سجّل الحدث (best-effort — لا يكسر المعالجة)
+    const summary = this.summarizeUpdate(update);
+    this.touchAccount(account.id, account.tenantId, summary).catch(() => undefined);
+
+    await this.als.run(
+      {
+        token: account.token,
+        secret: account.webhookSecret,
+        tenantId: account.tenantId,
+        role: account.role,
+        accountId: account.id,
+      },
+      () => this.handleUpdate(update),
+    );
+  }
+
+  /** وصف مختصر للتحديث (لسجلّ العمليات) */
+  private summarizeUpdate(update: any): string {
+    if (update?.callback_query) return `زر: ${update.callback_query.data ?? ''}`;
+    const msg = update?.message ?? update?.edited_message;
+    if (msg?.text) return `رسالة: ${String(msg.text).slice(0, 60)}`;
+    return 'تحديث';
+  }
+
+  /** تحديث آخر نشاط للحساب + كتابة سطر في سجلّ العمليات */
+  private async touchAccount(accountId: string, tenantId: string, summary: string) {
+    const now = new Date();
+    await this.prisma.telegramAccount.update({
+      where: { id: accountId },
+      data: { lastActivityAt: now, lastMessageAt: now },
+    });
+    await this.prisma.telegramLog.create({
+      data: {
+        tenantId,
+        accountId,
+        direction: 'IN',
+        action: summary,
+        success: true,
+      },
+    });
+  }
+
+  // ─── Permissions (per-account role) ───────────────────────────
+  /** الدور الفعّال — حساب مُدار، أو ADMIN لبوت البيئة الافتراضي */
+  private get activeRole(): TgRole {
+    return this.ctx?.role ?? 'ADMIN';
+  }
+
+  private roleAllows(required: TgRole): boolean {
+    return (
+      TelegramService.ROLE_RANK[this.activeRole] >=
+      TelegramService.ROLE_RANK[required]
+    );
   }
 
   async sendMessage(chatId: number | string, text: string, replyMarkup?: any) {
@@ -216,6 +356,22 @@ export class TelegramService implements OnModuleInit {
         await this.callApi('answerCallbackQuery', { callback_query_id: cq.id });
         if (!chatId) return;
         if (this.isBlocked(chatId)) return this.rejectChat(chatId);
+
+        // أزرار الحضور/اختيار الموظف — موظف فأعلى
+        if (data.startsWith('emp:') || data.startsWith('att:')) {
+          if (!this.roleAllows('EMPLOYEE')) return this.denyPermission(chatId);
+        }
+        // أزرار إدارة الموظفين/المصاريف — مدير فأعلى
+        if (
+          data.startsWith('mgmt:') ||
+          data.startsWith('empview:') ||
+          data.startsWith('empsal:') ||
+          data.startsWith('empnote:') ||
+          data.startsWith('empdel') ||
+          data.startsWith('expcat:')
+        ) {
+          if (!this.roleAllows('MANAGER')) return this.denyPermission(chatId);
+        }
 
         // أزرار خاصة: اختيار موظف / تسجيل حضور / إدارة موظف
         if (data.startsWith('emp:')) return this.showEmployeeActions(chatId, data.slice(4));
@@ -278,8 +434,49 @@ export class TelegramService implements OnModuleInit {
     );
   }
 
+  /** الحد الأدنى من الدور المطلوب لكل أمر */
+  private requiredRoleFor(command: string): TgRole {
+    switch (command) {
+      // عرض فقط — متاح للجميع
+      case '/start':
+      case '/help':
+      case '/menu':
+      case '/production':
+      case '/prod':
+      case '/stock':
+      case '/inventory':
+      case '/orders':
+      case '/balance':
+      case '/report':
+        return 'VIEWER';
+      // تسجيل الدوام/الحضور — موظف فأعلى
+      case '/attendance':
+      case '/hr':
+        return 'EMPLOYEE';
+      // عمليات مالية/إدارة الموظفين — مدير فأعلى
+      case '/addexpense':
+      case '/expense':
+      case '/employees':
+      case '/addemployee':
+        return 'MANAGER';
+      default:
+        return 'VIEWER';
+    }
+  }
+
+  private async denyPermission(chatId: number) {
+    await this.sendMessage(
+      chatId,
+      `🔒 ليس لديك صلاحية لهذا الإجراء.\nدور حسابك: <b>${this.activeRole}</b>`,
+    );
+  }
+
   /** توجيه الأمر (يأتي من رسالة أو من ضغطة زر) */
   private async routeCommand(chatId: number, command: string) {
+    // فحص الصلاحية حسب دور الحساب (بوت البيئة الافتراضي = ADMIN)
+    if (!this.roleAllows(this.requiredRoleFor(command))) {
+      return this.denyPermission(chatId);
+    }
     switch (command) {
       case '/start':
         return this.cmdStart(chatId);
@@ -692,6 +889,8 @@ export class TelegramService implements OnModuleInit {
 
   // ─── Helpers ──────────────────────────────────────────────────
   private async resolveTenantId(): Promise<string | null> {
+    // حساب مُدار؟ استخدم منشأته
+    if (this.ctx?.tenantId) return this.ctx.tenantId;
     const configured = this.config.get<string>('TELEGRAM_DEFAULT_TENANT_ID');
     if (configured) return configured;
     const tenant = await this.prisma.tenant.findFirst({

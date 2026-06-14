@@ -742,6 +742,7 @@ model ProductionMilkUsage {
 }
 
 // ── (4) المواد المنتجة (الصنف + عدد الطبالي + مجموع الكراتين) ─
+// machineNumber اختياري لكل سطر — يسمح بنفس المنتج على ماكينات مختلفة في نفس اليوم
 model ProductionProducedItem {
   id                String  @id @default(cuid())
   tenantId          String
@@ -750,6 +751,7 @@ model ProductionProducedItem {
   itemName          String             // الصنف
   palletsCount      Int     @default(0)  // عدد الطبالي
   cartonsTotal      Int     @default(0)  // مجموع الكراتين
+  machineNumber     Int?               // رقم ماكينة هذا السطر (يدعم تعدد الماكينات لنفس المنتج)
   warehouseId       String?
   notes             String?
 
@@ -757,6 +759,7 @@ model ProductionProducedItem {
 
   @@index([dailyProductionId])
   @@index([tenantId, itemId])
+  @@index([tenantId, machineNumber])
 }
 
 // ── (5) التوالف ────────────────────────────────────────────
@@ -775,6 +778,75 @@ model ProductionWaste {
 
   @@index([dailyProductionId])
   @@index([tenantId, itemId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── TELEGRAM (ربط متعدد لحسابات/بوتات تيليغرام) ──────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// يدعم ربط أكثر من بوت/حساب بنفس النظام. كل حساب له توكنه الخاص،
+// سرّ webhook خاص، صلاحيات (دور)، وحالة اتصال. يُستخدم AsyncLocalStorage
+// في الخدمة لتمرير سياق الحساب (التوكن/المنشأة/الدور) لكل تحديث وارد.
+
+enum TelegramRole {
+  ADMIN       // كل الصلاحيات
+  MANAGER     // المالية + الموظفين + الإنتاج + التقارير
+  EMPLOYEE    // تسجيل الدوام + إدخال الإنتاج + التقارير
+  VIEWER      // عرض التقارير فقط
+}
+
+enum TelegramStatus {
+  PENDING       // أُضيف ولم يُختبر بعد
+  CONNECTED     // متصل والـ webhook مُسجَّل
+  DISCONNECTED  // تعذّر الاتصال
+  DISABLED      // مُعطَّل يدوياً
+  ERROR         // خطأ (توكن غير صحيح مثلاً)
+}
+
+model TelegramAccount {
+  id             String         @id @default(cuid())
+  tenantId       String
+  name           String                          // اسم الحساب/البوت
+  token          String                          // Bot Token (حسّاس — يُحجب عند العرض)
+  chatId         String?                         // الدردشة الافتراضية للإرسال
+  username       String?                         // @username
+  botUsername    String?                         // يُجلب تلقائياً من getMe
+  phone          String?                         // رقم الهاتف (اختياري)
+  accountType    String         @default("BOT")  // BOT | USER | CHANNEL | GROUP
+  role           TelegramRole   @default(VIEWER)
+  status         TelegramStatus @default(PENDING)
+  webhookSecret  String                          // سرّ webhook خاص بهذا الحساب
+  webhookSet     Boolean        @default(false)
+  notes          String?
+  active         Boolean        @default(true)
+  lastActivityAt DateTime?                        // آخر نشاط (تحديث وارد)
+  lastMessageAt  DateTime?                        // آخر رسالة مستلمة
+  lastSyncAt     DateTime?                        // آخر اختبار/مزامنة ناجحة
+  lastError      String?
+  createdById    String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  logs TelegramLog[]
+
+  @@index([tenantId, active])
+}
+
+model TelegramLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  accountId String?
+  direction String              // IN | OUT | SYSTEM
+  action    String              // اسم الأمر / الحدث
+  summary   String?
+  chatId    String?
+  success   Boolean  @default(true)
+  error     String?
+  createdAt DateTime @default(now())
+
+  account TelegramAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([accountId, createdAt])
 }
 
 // ── ماكينات الإنتاج (قائمة قابلة للإدارة) ─────────────────
@@ -818,11 +890,34 @@ model SimpleOrder {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  lines SimpleOrderLine[]
+  lines    SimpleOrderLine[]
+  payments SimpleOrderPayment[]
 
   @@unique([tenantId, number])
   @@index([tenantId, status])
   @@index([tenantId, orderDate])
+}
+
+// ── دفعات الطلبية (جدول دفعات لكل طلبية بسيطة) ─────────────
+// يدعم:
+//   - عدة دفعات لنفس الطلبية بطرق دفع مختلفة
+//   - حساب تلقائي للمدفوع/المتبقي/الحالة
+//   - تتبّع من أدخل الدفعة وفي أي وقت
+model SimpleOrderPayment {
+  id          String   @id @default(cuid())
+  tenantId    String
+  orderId     String
+  number      Int                                    // رقم الدفعة ضمن نفس الطلبية (1, 2, 3 ...)
+  amount      Decimal  @db.Decimal(18, 2)
+  method      String   @default("CASH")              // CASH | TRANSFER | CHEQUE | OTHER
+  notes       String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  order SimpleOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+  @@index([tenantId, createdAt])
 }
 
 model SimpleOrderLine {

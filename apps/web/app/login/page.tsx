@@ -63,7 +63,7 @@ export default function LoginPage() {
             <Input
               label="البريد الإلكتروني"
               type="email"
-              placeholder="admin@enjoymilk.local"
+              placeholder="name@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="pr-9"
@@ -97,11 +97,9 @@ export default function LoginPage() {
         </form>
 
         <div className="mt-6 pt-6 border-t border-zinc-100 text-center">
-          <p className="text-xs text-zinc-500 mb-2">حسابات تجريبية:</p>
-          <div className="text-xs font-mono space-y-0.5 text-zinc-600">
-            <div>admin@enjoymilk.local / Admin@123</div>
-            <div>operator@enjoymilk.local / Admin@123</div>
-          </div>
+          <p className="text-[11px] text-zinc-400">
+            للوصول إلى النظام، الرجاء استخدام بيانات حسابك الخاصة.
+          </p>
         </div>
       </Card>
     </div>

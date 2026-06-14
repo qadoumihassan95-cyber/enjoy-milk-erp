@@ -2,19 +2,35 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search, Trash2, X, ShoppingCart, Phone, MapPin } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Plus, Search, Trash2, X, ShoppingCart, Phone, MapPin, Wallet, Receipt } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { Card, Button, Input, Badge, Stat } from '@/components/ui';
+import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDate, cn } from '@/lib/utils';
+
+const PAYMENT_METHODS = [
+  { value: 'CASH', label: 'كاش' },
+  { value: 'TRANSFER', label: 'حوالة' },
+  { value: 'CHEQUE', label: 'شيك' },
+  { value: 'OTHER', label: 'أخرى' },
+];
+const METHOD_LABEL: Record<string, string> = {
+  CASH: 'كاش',
+  TRANSFER: 'حوالة',
+  CHEQUE: 'شيك',
+  OTHER: 'أخرى',
+};
 
 export default function OrdersPage() {
   const router = useRouter();
   const qc = useQueryClient();
+  const toast = useToast();
   const [filter, setFilter] = useState<string>('');
   const [search, setSearch] = useState('');
   const [showNew, setShowNew] = useState(false);
+  const [paymentsOrder, setPaymentsOrder] = useState<any>(null);
 
   const { data: orders, refetch } = useQuery({
     queryKey: ['orders', filter, search],
@@ -39,29 +55,16 @@ export default function OrdersPage() {
     }
   };
 
-  const addPayment = async (orderId: string) => {
-    const v = prompt('أدخل المبلغ المدفوع:');
-    if (!v) return;
-    try {
-      await api.post(`/orders/${orderId}/pay`, { amount: +v });
-    } catch (e: any) {
-      alert(e?.response?.data?.message || 'تعذّر تسجيل الدفعة');
-      return;
-    }
-    await safeRefresh();
-    alert('✓ تم تسجيل الدفعة');
-  };
-
   const remove = async (orderId: string) => {
     if (!confirm('سيتم إرجاع الكمية للمخزون. حذف الطلبية؟')) return;
     try {
       await api.delete(`/orders/${orderId}`);
     } catch (e: any) {
-      alert(e?.response?.data?.message || 'تعذّر الحذف');
+      toast.error(e?.response?.data?.message || 'تعذّر الحذف');
       return;
     }
     await safeRefresh();
-    alert('✓ تم حذف الطلبية');
+    toast.success('تم حذف الطلبية');
   };
 
   return (
@@ -206,12 +209,19 @@ export default function OrdersPage() {
                         )}
                       </td>
                       <td className="p-3 flex gap-1">
+                        <button
+                          onClick={() => setPaymentsOrder(o)}
+                          className="text-xs px-2 py-1 rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 font-bold inline-flex items-center gap-1"
+                          title="الدفعات"
+                        >
+                          <Receipt className="h-3 w-3" /> دفعات
+                        </button>
                         {Number(o.balance) > 0 && (
                           <button
-                            onClick={() => addPayment(o.id)}
-                            className="text-xs px-2 py-1 rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-bold"
+                            onClick={() => setPaymentsOrder(o)}
+                            className="text-xs px-2 py-1 rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-bold inline-flex items-center gap-1"
                           >
-                            دفعة
+                            <Wallet className="h-3 w-3" /> دفعة
                           </button>
                         )}
                         <button
@@ -228,8 +238,210 @@ export default function OrdersPage() {
             </div>
           )}
         </Card>
+
+        {paymentsOrder && (
+          <PaymentsModal
+            order={paymentsOrder}
+            onClose={() => setPaymentsOrder(null)}
+            onChanged={() => safeRefresh()}
+          />
+        )}
       </div>
     </AppShell>
+  );
+}
+
+// ─── Modal الدفعات (جدول دفعات + نموذج إضافة) ───────────
+function PaymentsModal({
+  order,
+  onClose,
+  onChanged,
+}: {
+  order: any;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [form, setForm] = useState({ amount: '', method: 'CASH', notes: '' });
+  const [allowOverpay, setAllowOverpay] = useState(false);
+
+  const key = ['order-payments', order.id];
+  const { data, isLoading } = useQuery({
+    queryKey: key,
+    queryFn: () => api.get(`/orders/${order.id}/payments`).then((r) => r.data),
+  });
+
+  const refreshAll = () => {
+    qc.invalidateQueries({ queryKey: ['order-payments', order.id] });
+    onChanged();
+  };
+
+  const add = useMutation({
+    mutationFn: (body: any) => api.post(`/orders/${order.id}/pay`, body).then((r) => r.data),
+    onSuccess: () => {
+      toast.success('تم تسجيل الدفعة');
+      setForm({ amount: '', method: 'CASH', notes: '' });
+      setAllowOverpay(false);
+      refreshAll();
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر تسجيل الدفعة'),
+  });
+
+  const del = useMutation({
+    mutationFn: (paymentId: string) =>
+      api.delete(`/orders/payments/${paymentId}`).then((r) => r.data),
+    onSuccess: () => {
+      toast.success('تم حذف الدفعة');
+      refreshAll();
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الحذف'),
+  });
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const amt = parseFloat(form.amount);
+    if (isNaN(amt) || amt <= 0) return toast.error('مبلغ غير صحيح');
+    add.mutate({ amount: amt, method: form.method, notes: form.notes || undefined, allowOverpay });
+  };
+
+  const total = data?.total ?? Number(order.total);
+  const paid = data?.totalPaid ?? Number(order.paid);
+  const balance = data?.balance ?? Number(order.balance);
+  const status = data?.status ?? order.status;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b border-zinc-100 sticky top-0 bg-white">
+          <div>
+            <h3 className="font-bold flex items-center gap-2">
+              <Receipt className="h-5 w-5" /> دفعات الطلبية — {order.number}
+            </h3>
+            <p className="text-xs text-zinc-500 mt-0.5">{order.customerName}</p>
+          </div>
+          <button onClick={onClose}><X className="h-5 w-5 text-zinc-400" /></button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {/* ملخص واضح */}
+          <div className="grid grid-cols-4 gap-2">
+            <div className="rounded-lg bg-zinc-50 border border-zinc-100 p-3">
+              <div className="text-[10px] font-bold text-zinc-500 uppercase">إجمالي</div>
+              <div className="text-lg font-black mt-1" data-numeric>{Number(total).toFixed(2)}</div>
+            </div>
+            <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-3">
+              <div className="text-[10px] font-bold text-emerald-700 uppercase">المدفوع</div>
+              <div className="text-lg font-black mt-1 text-emerald-700" data-numeric>{Number(paid).toFixed(2)}</div>
+            </div>
+            <div className={cn('rounded-lg border p-3', balance > 0 ? 'bg-amber-50 border-amber-100' : 'bg-zinc-50 border-zinc-100')}>
+              <div className={cn('text-[10px] font-bold uppercase', balance > 0 ? 'text-amber-700' : 'text-zinc-500')}>المتبقي</div>
+              <div className={cn('text-lg font-black mt-1', balance > 0 ? 'text-amber-700' : 'text-zinc-500')} data-numeric>{Number(balance).toFixed(2)}</div>
+            </div>
+            <div className="rounded-lg bg-white border border-zinc-200 p-3 flex flex-col items-start">
+              <div className="text-[10px] font-bold text-zinc-500 uppercase">الحالة</div>
+              <div className="mt-2">
+                {status === 'PAID' ? <Badge variant="success" dot>مدفوع</Badge>
+                : status === 'PARTIAL' ? <Badge variant="warning" dot>جزئي</Badge>
+                : <Badge variant="danger" dot>غير مدفوع</Badge>}
+              </div>
+            </div>
+          </div>
+
+          {/* نموذج إضافة دفعة */}
+          {balance > 0 || allowOverpay ? (
+            <form onSubmit={submit} className="grid grid-cols-12 gap-2 rounded-xl bg-zinc-50 border border-zinc-100 p-3">
+              <div className="col-span-3">
+                <label className="text-[10px] font-bold text-zinc-500 uppercase">المبلغ</label>
+                <input
+                  type="number" step="0.01"
+                  value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                  className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+                  placeholder={balance > 0 ? balance.toFixed(2) : '0.00'}
+                />
+              </div>
+              <div className="col-span-3">
+                <label className="text-[10px] font-bold text-zinc-500 uppercase">الطريقة</label>
+                <select
+                  value={form.method} onChange={(e) => setForm({ ...form, method: e.target.value })}
+                  className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+                >
+                  {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                </select>
+              </div>
+              <div className="col-span-4">
+                <label className="text-[10px] font-bold text-zinc-500 uppercase">ملاحظة</label>
+                <input
+                  value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                  className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+                  placeholder="اختياري"
+                />
+              </div>
+              <div className="col-span-2 flex items-end">
+                <Button type="submit" className="w-full" loading={add.isPending}>
+                  <Plus className="h-4 w-4" /> إضافة
+                </Button>
+              </div>
+              <div className="col-span-12">
+                <label className="inline-flex items-center gap-2 text-xs text-zinc-600">
+                  <input type="checkbox" checked={allowOverpay} onChange={(e) => setAllowOverpay(e.target.checked)} />
+                  السماح بتسجيل دفعة زائدة عن المبلغ الكلي (رصيد للعميل)
+                </label>
+              </div>
+            </form>
+          ) : (
+            <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-sm text-emerald-800 text-center">
+              ✓ هذه الطلبية مدفوعة بالكامل. فعّل خيار «السماح بدفعة زائدة» إن أردت تسجيل رصيد إضافي.
+              <div className="mt-2">
+                <button onClick={() => setAllowOverpay(true)} className="text-xs text-emerald-700 underline">تفعيل</button>
+              </div>
+            </div>
+          )}
+
+          {/* جدول الدفعات */}
+          {isLoading ? (
+            <p className="text-sm text-zinc-500 text-center py-4">جاري التحميل...</p>
+          ) : !data?.payments || data.payments.length === 0 ? (
+            <p className="text-sm text-zinc-500 text-center py-4">لا يوجد دفعات بعد</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-zinc-50 border-b">
+                  <tr>
+                    <th className="text-right p-2 text-[10px] font-bold text-zinc-500 uppercase">#</th>
+                    <th className="text-right p-2 text-[10px] font-bold text-zinc-500 uppercase">التاريخ</th>
+                    <th className="text-right p-2 text-[10px] font-bold text-zinc-500 uppercase">المبلغ</th>
+                    <th className="text-right p-2 text-[10px] font-bold text-zinc-500 uppercase">الطريقة</th>
+                    <th className="text-right p-2 text-[10px] font-bold text-zinc-500 uppercase">ملاحظة</th>
+                    <th className="p-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.payments.map((p: any) => (
+                    <tr key={p.id} className="border-b border-zinc-100">
+                      <td className="p-2 font-mono text-xs">#{p.number}</td>
+                      <td className="p-2 text-zinc-500">{formatDate(p.createdAt)}</td>
+                      <td className="p-2 font-bold text-emerald-700" data-numeric>{Number(p.amount).toFixed(2)}</td>
+                      <td className="p-2"><span className="text-[10px] font-bold px-2 py-0.5 rounded bg-zinc-100">{METHOD_LABEL[p.method] || p.method}</span></td>
+                      <td className="p-2 text-zinc-600 text-xs">{p.notes || '—'}</td>
+                      <td className="p-2">
+                        <button
+                          onClick={() => { if (confirm('حذف هذه الدفعة وإعادة حساب المتبقي؟')) del.mutate(p.id); }}
+                          className="text-red-500 hover:text-red-700 p-1"
+                          title="حذف"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

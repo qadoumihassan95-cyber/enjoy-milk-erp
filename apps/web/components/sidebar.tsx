@@ -14,6 +14,7 @@ import {
   Settings,
   History,
   Banknote,
+  Send,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth';
@@ -21,6 +22,7 @@ import { useAuthStore } from '@/stores/auth';
 const NAV = [
   { href: '/dashboard', label: 'اليوم', icon: LayoutDashboard },
   { href: '/production', label: 'الإنتاج اليومي', icon: Repeat },
+  { href: '/production/summary', label: 'ملخص إنتاج اليوم', icon: Repeat },
   { href: '/orders', label: 'الطلبيات', icon: ShoppingBag },
   { href: '/inventory', label: 'المخزون', icon: Package },
   { href: '/reports', label: 'التقارير', icon: FileBadge2 },
@@ -29,6 +31,7 @@ const NAV = [
   { href: '/employees', label: 'الموظفون', icon: Users },
   { href: '/payroll', label: 'الرواتب', icon: Banknote },
   { href: '/licenses', label: 'الرخص', icon: FileBadge2 },
+  { href: '/telegram', label: 'إدارة التليغرام', icon: Send },
   { href: '/activity', label: 'سجل العمليات', icon: History },
   { href: '/settings', label: 'الإعدادات', icon: Settings },
 ];

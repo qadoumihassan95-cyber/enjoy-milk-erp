@@ -232,26 +232,181 @@ export class SimpleOrdersService {
   }
 
   // ─── Add payment ──────────────────────────────────
+  /**
+   * يُسجّل دفعة جديدة في جدول الدفعات + يُعيد حساب paid/balance/status للطلبية.
+   * يدعم سيناريو دفعات متعددة بطرق مختلفة (كاش/حوالة/شيك/أخرى).
+   * يمنع زيادة الدفع عن قيمة الطلبية إلا إذا تم تمرير allowOverpay صراحةً.
+   */
   async addPayment(
     tenantId: string,
     id: string,
-    amount: number,
+    body:
+      | number
+      | { amount: number; method?: string; notes?: string; allowOverpay?: boolean },
+    userId?: string,
   ): Promise<any> {
-    const order = await this.get(tenantId, id);
-    const newPaid = Number(order.paid) + amount;
-    if (newPaid > Number(order.total)) {
-      throw new BadRequestException('المبلغ يتجاوز إجمالي الطلبية');
-    }
-    const newBalance = Number(order.total) - newPaid;
+    // دعم التوقيع القديم (رقم فقط) للتوافق العكسي
+    const amount = typeof body === 'number' ? body : Number(body.amount);
+    const method = (typeof body === 'object' && body.method) || 'CASH';
+    const notes = typeof body === 'object' ? body.notes ?? null : null;
+    const allowOverpay = typeof body === 'object' ? Boolean(body.allowOverpay) : false;
 
-    return this.prisma.simpleOrder.update({
-      where: { id },
-      data: {
-        paid: new Prisma.Decimal(newPaid),
-        balance: new Prisma.Decimal(newBalance),
-        status: this.computeStatus(newPaid, Number(order.total)),
-      },
-      include: { lines: true },
+    if (!(amount > 0)) throw new BadRequestException('قيمة الدفعة يجب أن تكون أكبر من صفر');
+
+    return this.prisma.$transaction(async (tx) => {
+      const order = await tx.simpleOrder.findFirst({ where: { id, tenantId } });
+      if (!order) throw new NotFoundException();
+
+      // عدّ الدفعات الحالية من الجدول (المرجع الرئيسي للمدفوع)
+      const existingPayments = await tx.simpleOrderPayment.findMany({
+        where: { orderId: id },
+        orderBy: { createdAt: 'asc' },
+      });
+      const existingPaidFromTable = existingPayments.reduce(
+        (s, p) => s + Number(p.amount),
+        0,
+      );
+
+      // backfill ذكي: لو فيه paid قديم على الطلبية ولا يوجد دفعات بالجدول → أنشئ رصيد افتتاحي
+      // (آمن — يحوّل البيانات القديمة لشكل قابل للعرض دون فقدان)
+      const orderPaidCached = Number(order.paid);
+      let basePaid = existingPaidFromTable;
+      if (existingPayments.length === 0 && orderPaidCached > 0) {
+        await tx.simpleOrderPayment.create({
+          data: {
+            tenantId,
+            orderId: id,
+            number: 1,
+            amount: new Prisma.Decimal(orderPaidCached),
+            method: 'OTHER',
+            notes: 'رصيد سابق (محوّل تلقائياً من النظام القديم)',
+            createdById: userId ?? null,
+          },
+        });
+        basePaid = orderPaidCached;
+      }
+
+      const newPaid = basePaid + amount;
+      const total = Number(order.total);
+      if (newPaid > total && !allowOverpay) {
+        throw new BadRequestException(
+          `المبلغ يتجاوز إجمالي الطلبية. المتبقي: ${total - basePaid} د.أ`,
+        );
+      }
+      const newBalance = Math.max(0, total - newPaid); // 0 للحالة المدفوعة بالكامل أو الزائدة
+
+      // أنشئ سجل الدفعة الجديد
+      const nextNumber =
+        (existingPayments[existingPayments.length - 1]?.number ?? 0) +
+        (existingPayments.length === 0 && orderPaidCached > 0 ? 2 : 1);
+      await tx.simpleOrderPayment.create({
+        data: {
+          tenantId,
+          orderId: id,
+          number: nextNumber,
+          amount: new Prisma.Decimal(amount),
+          method,
+          notes,
+          createdById: userId ?? null,
+        },
+      });
+
+      // حدّث الكاش على الطلبية (paid/balance/status)
+      const updated = await tx.simpleOrder.update({
+        where: { id },
+        data: {
+          paid: new Prisma.Decimal(newPaid),
+          balance: new Prisma.Decimal(newBalance),
+          status: this.computeStatus(newPaid, total),
+        },
+        include: { lines: true },
+      });
+      return updated;
+    });
+  }
+
+  // ─── List payments for an order ───────────────────
+  /**
+   * يرجع كل دفعات الطلبية + الإجماليات.
+   * يقوم بـ backfill شفاف لطلبية قديمة (paid > 0 وبدون سجلات دفعات).
+   */
+  async listPayments(tenantId: string, orderId: string) {
+    const order = await this.prisma.simpleOrder.findFirst({
+      where: { id: orderId, tenantId },
+    });
+    if (!order) throw new NotFoundException();
+
+    let payments = await this.prisma.simpleOrderPayment.findMany({
+      where: { orderId },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // Backfill شفاف: لو لا يوجد دفعات لكن الطلبية مدفوعة جزئياً/كلياً
+    const orderPaid = Number(order.paid);
+    if (payments.length === 0 && orderPaid > 0) {
+      await this.prisma.simpleOrderPayment.create({
+        data: {
+          tenantId,
+          orderId,
+          number: 1,
+          amount: new Prisma.Decimal(orderPaid),
+          method: 'OTHER',
+          notes: 'رصيد سابق (محوّل تلقائياً من النظام القديم)',
+        },
+      });
+      payments = await this.prisma.simpleOrderPayment.findMany({
+        where: { orderId },
+        orderBy: { createdAt: 'asc' },
+      });
+    }
+
+    const totalPaid = payments.reduce((s, p) => s + Number(p.amount), 0);
+    const total = Number(order.total);
+    return {
+      orderId,
+      orderNumber: order.number,
+      total,
+      totalPaid,
+      balance: Math.max(0, total - totalPaid),
+      status: this.computeStatus(totalPaid, total),
+      payments: payments.map((p) => ({
+        id: p.id,
+        number: p.number,
+        amount: Number(p.amount),
+        method: p.method,
+        notes: p.notes,
+        createdAt: p.createdAt,
+        createdById: p.createdById,
+      })),
+    };
+  }
+
+  // ─── Delete a single payment ──────────────────────
+  async deletePayment(tenantId: string, paymentId: string) {
+    const payment = await this.prisma.simpleOrderPayment.findFirst({
+      where: { id: paymentId, tenantId },
+    });
+    if (!payment) throw new NotFoundException('الدفعة غير موجودة');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.simpleOrderPayment.delete({ where: { id: paymentId } });
+      // أعِد حساب paid/balance/status للطلبية
+      const remaining = await tx.simpleOrderPayment.findMany({
+        where: { orderId: payment.orderId },
+      });
+      const newPaid = remaining.reduce((s, p) => s + Number(p.amount), 0);
+      const order = await tx.simpleOrder.findUnique({ where: { id: payment.orderId } });
+      if (!order) return { ok: true };
+      const total = Number(order.total);
+      await tx.simpleOrder.update({
+        where: { id: payment.orderId },
+        data: {
+          paid: new Prisma.Decimal(newPaid),
+          balance: new Prisma.Decimal(Math.max(0, total - newPaid)),
+          status: this.computeStatus(newPaid, total),
+        },
+      });
+      return { ok: true };
     });
   }
 
