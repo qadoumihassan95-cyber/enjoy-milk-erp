@@ -382,12 +382,6 @@ export default function ProductionPrintPage() {
           <div className="val">{data.operatorName || '—'}</div>
         </div>
         <div>
-          <div className="lbl">رقم الماكينة</div>
-          <div className="val" data-numeric>
-            {data.machineNumber || '—'}
-          </div>
-        </div>
-        <div>
           <div className="lbl">تاريخ الإنشاء</div>
           <div className="val">{fmtDate(data.createdAt)}</div>
         </div>

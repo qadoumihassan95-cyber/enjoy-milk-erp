@@ -509,13 +509,12 @@ export class DailyProductionService {
 
   // ─── Daily Summary (تقرير ملخص بتفصيل الماكينات) ──
   /**
-   * ملخص إنتاج يوم كامل مع تفصيل لكل ماكينة وكل منتج،
-   * مع نسبة الفاقد (waste / raw milk × 100) ومجاميع المواد.
-   * يدعم الفلترة بالمنتج والماكينة.
+   * ملخص إنتاج يوم كامل: إجمالي الإنتاج + المنتجات + المواد الخام + نسبة الفاقد.
+   * كل خطوط الإنتاج تُعامَل كوحدة موحدة (لا تفصيل ماكينات).
    */
   async getDailySummary(
     tenantId: string,
-    opts: { date?: string; itemName?: string; machineNumber?: number } = {},
+    opts: { date?: string; itemName?: string } = {},
   ) {
     const date = opts.date ? new Date(opts.date) : new Date();
     const start = new Date(date);
@@ -525,11 +524,7 @@ export class DailyProductionService {
       Math.round(n * Math.pow(10, d)) / Math.pow(10, d);
 
     const records = await this.prisma.dailyProduction.findMany({
-      where: {
-        tenantId,
-        productionDate: { gte: start, lt: end },
-        ...(opts.machineNumber ? { machineNumber: Number(opts.machineNumber) } : {}),
-      },
+      where: { tenantId, productionDate: { gte: start, lt: end } },
       include: {
         cartonUsage: true,
         aluminumUsage: true,
@@ -540,22 +535,16 @@ export class DailyProductionService {
       orderBy: { createdAt: 'asc' },
     });
 
-    // فلترة المنتج إن طُلب
     const filterItem = (p: any) =>
       !opts.itemName || p.itemName?.includes(opts.itemName);
 
-    // مجاميع
     let totalCartons = 0;
     let totalPallets = 0;
     let totalMilk = 0;
     let totalAluminum = 0;
     let totalCartonUsage = 0;
     let totalWaste = 0;
-
-    // تفصيل
-    const byMachine: Record<string, { totalCartons: number; totalPallets: number; items: Record<string, number> }> = {};
-    const byItem: Record<string, { totalCartons: number; totalPallets: number; byMachine: Record<string, number> }> = {};
-    const machinesUsed = new Set<string>();
+    const byItem: Record<string, { totalCartons: number; totalPallets: number }> = {};
     const itemsProduced = new Set<string>();
     const notes: string[] = [];
 
@@ -567,38 +556,25 @@ export class DailyProductionService {
       totalWaste += r.wastages.reduce((s, w) => s + Number(w.quantity || 0), 0);
 
       for (const p of r.produced.filter(filterItem)) {
-        // الماكينة: من سطر الإنتاج نفسه أولاً، ثم من رأس الورقة
-        const m = String(p.machineNumber ?? r.machineNumber ?? 'غير محدد');
-        if (m !== 'غير محدد') machinesUsed.add(m);
         const item = p.itemName || '(بدون اسم)';
         itemsProduced.add(item);
         const c = Number(p.cartonsTotal || 0);
         const pl = Number(p.palletsCount || 0);
         totalCartons += c;
         totalPallets += pl;
-
-        if (!byMachine[m]) byMachine[m] = { totalCartons: 0, totalPallets: 0, items: {} };
-        byMachine[m].totalCartons += c;
-        byMachine[m].totalPallets += pl;
-        byMachine[m].items[item] = (byMachine[m].items[item] || 0) + c;
-
-        if (!byItem[item]) byItem[item] = { totalCartons: 0, totalPallets: 0, byMachine: {} };
+        if (!byItem[item]) byItem[item] = { totalCartons: 0, totalPallets: 0 };
         byItem[item].totalCartons += c;
         byItem[item].totalPallets += pl;
-        byItem[item].byMachine[m] = (byItem[item].byMachine[m] || 0) + c;
       }
     }
 
-    // نسبة الفاقد — على أساس الحليب الخام (المادة الرئيسية)
     const wasteRate = totalMilk > 0 ? round((totalWaste / totalMilk) * 100, 2) : 0;
-    // مقارنة بسيطة: input vs output (مرجعية فقط — الوحدات مختلفة)
     const inputOutputRatio = totalMilk > 0 ? round(totalCartons / totalMilk, 4) : 0;
 
     return {
       date: start.toISOString().slice(0, 10),
-      filter: { itemName: opts.itemName ?? null, machineNumber: opts.machineNumber ?? null },
+      filter: { itemName: opts.itemName ?? null },
       recordsCount: records.length,
-      machinesUsed: Array.from(machinesUsed).sort(),
       itemsProduced: Array.from(itemsProduced).sort(),
       totals: {
         cartons: totalCartons,
@@ -607,17 +583,15 @@ export class DailyProductionService {
         aluminum: round(totalAluminum, 2),
         cartonUsage: round(totalCartonUsage, 2),
         waste: round(totalWaste, 2),
-        wasteRate, // % من الحليب الخام
+        wasteRate,
         inputOutputRatio,
       },
-      byMachine,
       byItem,
       notes,
       records: records.map((r) => ({
         id: r.id,
         shift: r.shift,
         operatorName: r.operatorName,
-        machineNumber: r.machineNumber,
         status: r.status,
         notes: r.notes,
       })),
