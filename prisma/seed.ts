@@ -17,7 +17,7 @@ async function main() {
     create: {
       name: 'Enjoy Milk Factory',
       slug: 'enjoymilk',
-      legalName: 'مصنع قصراوي إخوان لتعبئة حليب البودرة',
+      legalName: 'مصنع الدانا لمنتجات الحليب واللبن',
       currency: 'JOD',
     },
   });

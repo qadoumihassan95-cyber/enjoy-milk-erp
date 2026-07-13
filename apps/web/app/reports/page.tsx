@@ -50,7 +50,7 @@ function exportDailyToCsv(date: string, daily: any, list: any[] | undefined) {
 
   const rows: (string | number)[][] = [];
   rows.push([`تقرير الإنتاج اليومي - ${date}`]);
-  rows.push([`مصنع قصراوي إخوان - Enjoy Milk`]);
+  rows.push([`مصنع الدانا لمنتجات الحليب واللبن - Enjoy Milk`]);
   rows.push([]);
 
   rows.push(['ملخص اليوم']);

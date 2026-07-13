@@ -74,7 +74,15 @@ export default function DailySummaryPage() {
             <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <Stat label="إجمالي الكراتين المنتجة" value={formatNumber(totals.cartons ?? 0, 0)} state="good" />
               <Stat label="إجمالي الطبالي" value={formatNumber(totals.pallets ?? 0, 0)} />
-              <Stat label="حليب خام (لتر)" value={formatNumber(totals.rawMilk ?? 0, 1)} />
+              <Stat
+                label="إجمالي الحليب الخام (كغ)"
+                value={formatNumber(totals.rawMilkKg ?? 0, 1)}
+                hint={
+                  (totals.milkBags ?? 0) > 0
+                    ? `${totals.milkBags} كيس × ${totals.bagWeightKg ?? 25} كغ`
+                    : 'بلا أكياس'
+                }
+              />
               <Stat
                 label="نسبة الفاقد"
                 value={`${totals.wasteRate ?? 0}%`}

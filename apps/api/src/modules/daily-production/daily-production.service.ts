@@ -548,9 +548,25 @@ export class DailyProductionService {
     const itemsProduced = new Set<string>();
     const notes: string[] = [];
 
+    // ─── تحويل الحليب: كل كيس = 25 كغ ─────────────────
+    // إذا احتوى السطر على count (عدد الأكياس) نُرجّح count*25، وإلا نستخدم quantity كما هو.
+    // (السطور القديمة بالوحدات القديمة كـ L أو KG تُحفظ كما هي؛ العبوات الجديدة تُعامل معاملة أكياس.)
+    const BAG_KG = 25;
+    let totalMilkKg = 0;
+    let totalMilkBags = 0;
     for (const r of records) {
       if (r.notes?.trim()) notes.push(`${r.shift || ''} — ${r.notes}`);
-      totalMilk += r.milkUsage.reduce((s, m) => s + Number(m.quantity || 0), 0);
+      for (const m of r.milkUsage) {
+        const c = Number(m.count || 0);
+        const q = Number(m.quantity || 0);
+        if (c > 0) {
+          totalMilkBags += c;
+          totalMilkKg += c * BAG_KG;
+        } else {
+          totalMilkKg += q; // مدخل بالكيلو مباشرة
+        }
+        totalMilk += q; // للتوافق الرجعي (المجموع الخام)
+      }
       totalAluminum += r.aluminumUsage.reduce((s, a) => s + Number(a.quantity || 0), 0);
       totalCartonUsage += r.cartonUsage.reduce((s, c) => s + Number(c.quantity || 0), 0);
       totalWaste += r.wastages.reduce((s, w) => s + Number(w.quantity || 0), 0);
@@ -568,8 +584,9 @@ export class DailyProductionService {
       }
     }
 
-    const wasteRate = totalMilk > 0 ? round((totalWaste / totalMilk) * 100, 2) : 0;
-    const inputOutputRatio = totalMilk > 0 ? round(totalCartons / totalMilk, 4) : 0;
+    // نستخدم totalMilkKg الفعلي في نسب الفاقد والإنتاج/المدخل
+    const wasteRate = totalMilkKg > 0 ? round((totalWaste / totalMilkKg) * 100, 2) : 0;
+    const inputOutputRatio = totalMilkKg > 0 ? round(totalCartons / totalMilkKg, 4) : 0;
 
     return {
       date: start.toISOString().slice(0, 10),
@@ -580,6 +597,10 @@ export class DailyProductionService {
         cartons: totalCartons,
         pallets: totalPallets,
         rawMilk: round(totalMilk, 2),
+        // ─── جديد: إجمالي الحليب بالكيلو (1 كيس = 25 كغ) ─
+        rawMilkKg: round(totalMilkKg, 2),
+        milkBags: totalMilkBags,
+        bagWeightKg: BAG_KG,
         aluminum: round(totalAluminum, 2),
         cartonUsage: round(totalCartonUsage, 2),
         waste: round(totalWaste, 2),

@@ -3,8 +3,8 @@ import './globals.css';
 import { Providers } from './providers';
 
 export const metadata: Metadata = {
-  title: 'Enjoy Milk ERP — نظام حليب إنجوي',
-  description: 'نظام إدارة لمصنع تعبئة حليب البودرة',
+  title: 'مصنع الدانا لمنتجات الحليب واللبن — Enjoy Milk ERP',
+  description: 'نظام إدارة مصنع الدانا لمنتجات الحليب واللبن',
 };
 
 export const viewport: Viewport = {

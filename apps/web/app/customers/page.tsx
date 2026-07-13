@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Phone, Mail, X } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle, Button, Input, Badge } from '@/components/ui';
@@ -11,6 +11,7 @@ import { formatNumber } from '@/lib/utils';
 
 export default function CustomersPage() {
   const qc = useQueryClient();
+  const router = useRouter();
   const [showNew, setShowNew] = useState(false);
 
   const { data: customers, isLoading } = useQuery({
@@ -76,9 +77,15 @@ export default function CustomersPage() {
                     const stat = stats?.find((s: any) => s.customer.id === c.id);
                     const outstanding = stat?.outstanding ?? 0;
                     return (
-                      <tr key={c.id} className="border-b border-zinc-100 hover:bg-zinc-50">
+                      <tr
+                        key={c.id}
+                        onClick={() => router.push(`/customers/${c.id}`)}
+                        className="border-b border-zinc-100 hover:bg-zinc-50 cursor-pointer transition-colors"
+                      >
                         <td className="p-3 font-mono text-xs">{c.code}</td>
-                        <td className="p-3 font-medium">{c.name}</td>
+                        <td className="p-3 font-medium text-zinc-900 underline decoration-dotted decoration-zinc-300 underline-offset-4">
+                          {c.name}
+                        </td>
                         <td className="p-3">
                           <Badge>{translateCustomerType(c.type)}</Badge>
                         </td>

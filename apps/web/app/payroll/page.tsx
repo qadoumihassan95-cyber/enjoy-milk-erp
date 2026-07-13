@@ -66,14 +66,20 @@ export default function PayrollPage() {
               className="h-10 px-3 rounded-lg border border-zinc-200 text-sm"
             />
             <Button variant="outline" onClick={() => window.print()} disabled={!data}>
-              <Printer className="h-4 w-4" /> طباعة
+              <Printer className="h-4 w-4" /> طباعة شهري
+            </Button>
+            <Button variant="outline" onClick={() => {
+              const y = month.slice(0, 4);
+              window.open(`/payroll/annual?year=${y}`, '_blank');
+            }} disabled={!data}>
+              <Printer className="h-4 w-4" /> طباعة سنوي
             </Button>
           </div>
         </header>
 
         {/* رأس الطباعة */}
         <div className="hidden print:block mb-4">
-          <div className="text-lg font-black">مصنع قصراوي إخوان — كشف رواتب شهر {month}</div>
+          <div className="text-lg font-black">مصنع الدانا لمنتجات الحليب واللبن — كشف رواتب شهر {month}</div>
         </div>
 
         {/* الإجماليات */}

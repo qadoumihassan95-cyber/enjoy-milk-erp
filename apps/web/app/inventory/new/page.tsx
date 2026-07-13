@@ -23,6 +23,7 @@ export default function NewItemPage() {
     packsPerCarton: '',
     shelfLifeDays: '',
     reorderLevel: '',
+    productionReorderLevel: '',
     costPrice: '',
     sellPrice: '',
   });
@@ -40,6 +41,7 @@ export default function NewItemPage() {
         packsPerCarton: form.packsPerCarton ? +form.packsPerCarton : undefined,
         shelfLifeDays: form.shelfLifeDays ? +form.shelfLifeDays : undefined,
         reorderLevel: form.reorderLevel ? +form.reorderLevel : undefined,
+        productionReorderLevel: form.productionReorderLevel ? +form.productionReorderLevel : undefined,
         costPrice: form.costPrice ? +form.costPrice : undefined,
         sellPrice: form.sellPrice ? +form.sellPrice : undefined,
       });
@@ -62,7 +64,26 @@ export default function NewItemPage() {
             <ArrowRight className="h-4 w-4 rotate-180" />
             رجوع
           </button>
-          <h1 className="text-2xl md:text-3xl font-black tracking-tight">صنف جديد</h1>
+          <div className="flex items-baseline justify-between flex-wrap gap-3">
+            <h1 className="text-2xl md:text-3xl font-black tracking-tight">صنف جديد</h1>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => router.push('/inventory/receive')}
+                className="px-3 py-1.5 rounded-md text-xs font-bold bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-100 transition-colors"
+              >
+                إعادة الطلب (استلام)
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push('/production')}
+                className="px-3 py-1.5 rounded-md text-xs font-bold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-100 transition-colors"
+                title="ابدأ عملية إنتاج جديدة مع تعبئة الصنف تلقائياً"
+              >
+                إعادة الإنتاج
+              </button>
+            </div>
+          </div>
         </header>
 
         <form onSubmit={submit}>
@@ -105,12 +126,28 @@ export default function NewItemPage() {
                     <option value="CONSUMABLE">مستهلكات</option>
                   </select>
                 </div>
-                <Input
-                  label="الوحدة"
-                  value={form.unit}
-                  onChange={(e) => update('unit', e.target.value)}
-                  placeholder="PCS"
-                />
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-zinc-700 block">الوحدة *</label>
+                  <select
+                    value={form.unit}
+                    onChange={(e) => update('unit', e.target.value)}
+                    className="w-full rounded-lg border border-zinc-200 bg-white h-10 px-3 text-sm"
+                  >
+                    <optgroup label="عام">
+                      <option value="PCS">حبة</option>
+                      <option value="CTN">كرتون</option>
+                      <option value="PAL">طبلية</option>
+                    </optgroup>
+                    <optgroup label="الحليب">
+                      <option value="KG">كيلوغرام (كغ)</option>
+                      <option value="G">غرام</option>
+                      <option value="BAG">كيس (25 كغ)</option>
+                    </optgroup>
+                    <optgroup label="ألمنيوم">
+                      <option value="KG_ALU">كيلوغرام ألمنيوم</option>
+                    </optgroup>
+                  </select>
+                </div>
               </div>
               <div className="grid md:grid-cols-2 gap-4">
                 <Input
@@ -142,13 +179,23 @@ export default function NewItemPage() {
               <CardTitle>الأسعار والمخزون</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid md:grid-cols-3 gap-4">
+              <div className="grid md:grid-cols-2 gap-4">
                 <Input
                   label="حد إعادة الطلب"
                   type="number"
                   value={form.reorderLevel}
                   onChange={(e) => update('reorderLevel', e.target.value)}
+                  hint="حد أدنى قبل التنبيه بإعادة الشراء"
                 />
+                <Input
+                  label="حد إعادة طلب الإنتاج"
+                  type="number"
+                  value={form.productionReorderLevel}
+                  onChange={(e) => update('productionReorderLevel', e.target.value)}
+                  hint="يُستخدم لتخطيط الإنتاج (مستقل عن إعادة الشراء)"
+                />
+              </div>
+              <div className="grid md:grid-cols-2 gap-4">
                 <Input
                   label="مدة الصلاحية (يوم)"
                   type="number"

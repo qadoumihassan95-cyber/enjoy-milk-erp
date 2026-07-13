@@ -40,6 +40,22 @@ export class EmployeesController {
     return this.service.getPayroll(user.tenantId, month);
   }
 
+  /** تقرير رواتب سنوي (12 شهر) للطباعة */
+  @Get('payroll/annual')
+  @Roles('MANAGER', 'ACCOUNTANT', 'HR')
+  async payrollAnnual(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('year') year?: string,
+  ) {
+    const y = year ? Number(year) : new Date().getFullYear();
+    const months: any[] = [];
+    for (let m = 0; m < 12; m++) {
+      const key = `${y}-${String(m + 1).padStart(2, '0')}`;
+      months.push(await this.service.getPayroll(user.tenantId, key));
+    }
+    return { year: y, months };
+  }
+
   /** حفظ تعديل يدوي على راتب الشهر (مكافأة/خصم/تجاوز/ملاحظات) */
   @Post('payroll/adjustment')
   @Roles('MANAGER', 'ACCOUNTANT', 'HR')
@@ -115,6 +131,40 @@ export class EmployeesController {
     @Query('date') date?: string,
   ) {
     return this.service.listAttendance(user.tenantId, date);
+  }
+
+  // ─── الوثائق ─────────────────────────────────────
+  @Get(':id/documents')
+  listDocuments(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.service.listDocuments(user.tenantId, id);
+  }
+
+  @Get('documents/:docId')
+  getDocument(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('docId') docId: string,
+  ) {
+    return this.service.getDocument(user.tenantId, docId);
+  }
+
+  @Post(':id/documents')
+  createDocument(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    return this.service.createDocument(user.tenantId, user.id, id, body);
+  }
+
+  @Delete('documents/:docId')
+  deleteDocument(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('docId') docId: string,
+  ) {
+    return this.service.deleteDocument(user.tenantId, docId);
   }
 
   // ─── العمل الإضافي (Overtime) ──────────────────────

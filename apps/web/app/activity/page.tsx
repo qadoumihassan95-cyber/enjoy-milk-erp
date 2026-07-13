@@ -98,6 +98,7 @@ export default function ActivityPage() {
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">العملية</th>
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">القسم</th>
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">المستخدم</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">IP / الجهاز</th>
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">الوقت</th>
                   </tr>
                 </thead>
@@ -109,6 +110,17 @@ export default function ActivityPage() {
                       Icon: History,
                     };
                     const Icon = meta.Icon;
+                    // مختصر للـ user-agent
+                    const uaShort = (() => {
+                      const ua = String(l.userAgent ?? '');
+                      if (!ua) return '';
+                      if (ua.includes('iPhone') || ua.includes('iPad')) return 'iOS';
+                      if (ua.includes('Android')) return 'Android';
+                      if (ua.includes('Mac OS X')) return 'macOS';
+                      if (ua.includes('Windows')) return 'Windows';
+                      if (ua.includes('Linux')) return 'Linux';
+                      return 'متصفح';
+                    })();
                     return (
                       <tr key={l.id} className="border-b border-zinc-100 hover:bg-zinc-50">
                         <td className="p-3">
@@ -123,6 +135,10 @@ export default function ActivityPage() {
                           {l.actorEmail && (
                             <div className="text-[11px] text-zinc-400">{l.actorEmail}</div>
                           )}
+                        </td>
+                        <td className="p-3 text-xs text-zinc-500" title={l.userAgent ?? ''}>
+                          {l.ip ? <div className="font-mono">{l.ip}</div> : <span className="text-zinc-300">—</span>}
+                          {uaShort && <div className="text-[10px] text-zinc-400">{uaShort}</div>}
                         </td>
                         <td className="p-3 text-zinc-500" data-numeric>{fmt(l.occurredAt)}</td>
                       </tr>

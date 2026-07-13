@@ -110,6 +110,22 @@ model Item {
   reorderLevel    Decimal?         @db.Decimal(18, 4)
   costPrice       Decimal?         @db.Decimal(18, 4)
   sellPrice       Decimal?         @db.Decimal(18, 2)
+
+  // ─── Enterprise inventory settings ───
+  minStock              Decimal? @db.Decimal(18, 4)   // الحد الأدنى
+  maxStock              Decimal? @db.Decimal(18, 4)   // الحد الأقصى
+  reorderPoint          Decimal? @db.Decimal(18, 4)   // نقطة إعادة الطلب
+  productionReorderLevel Decimal? @db.Decimal(18, 4)  // نقطة إعادة طلب الإنتاج (تخطيط إنتاجي)
+  reorderQty            Decimal? @db.Decimal(18, 4)   // كمية إعادة الطلب
+  safetyStock           Decimal? @db.Decimal(18, 4)   // مخزون الأمان
+  leadTimeDays          Int?                          // مدة التوريد
+
+  // ─── Cost & sales tracking (auto-updated) ───
+  lastPurchasePrice Decimal?       @db.Decimal(18, 4)
+  avgCost           Decimal?       @db.Decimal(18, 4)
+  lastPurchaseAt    DateTime?
+  lastSaleAt        DateTime?
+
   active          Boolean          @default(true)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
@@ -119,10 +135,174 @@ model Item {
   movements    StockMovement[]
   formulas     PackagingFormulaItem[]
   outputItem   PackagingFormula[]     @relation("formulaOutput")
+  adjustments  StockAdjustment[]
+  receipts     StockReceipt[]
 
   @@unique([tenantId, sku])
   @@index([tenantId, type, active])
   @@index([barcode])
+}
+
+// ─── الموردون ──────────────────────────────────────────
+model Supplier {
+  id        String   @id @default(cuid())
+  tenantId  String
+  code      String?
+  name      String
+  phone     String?
+  email     String?
+  address   String?
+  notes     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  receipts StockReceipt[]
+
+  @@index([tenantId, active])
+}
+
+// ─── تعديلات المخزون اليدوية ───────────────────────────
+// أنواع العمليات:
+//   ADD             إضافة كمية
+//   DEDUCT          خصم كمية
+//   CORRECTION      تصحيح كمية (yield delta)
+//   COUNT           جرد (تعيين قيمة مطلقة)
+//   DAMAGE          إتلاف
+//   LOSS            فقدان
+//   EXPIRY          انتهاء صلاحية
+//   SUPPLIER_RETURN إرجاع للمورد
+//   TRANSFER_OUT    خرج تحويل
+//   TRANSFER_IN     دخل تحويل
+model StockAdjustment {
+  id            String   @id @default(cuid())
+  tenantId      String
+  itemId        String
+  warehouseId   String
+  type          String              // ADD | DEDUCT | CORRECTION | COUNT | DAMAGE | LOSS | EXPIRY | SUPPLIER_RETURN | TRANSFER_OUT | TRANSFER_IN
+  quantity      Decimal  @db.Decimal(18, 4)   // الدلتا (موجب/سالب) أو القيمة الجديدة عند COUNT
+  quantityBefore Decimal? @db.Decimal(18, 4)
+  quantityAfter  Decimal? @db.Decimal(18, 4)
+  reason        String              // سبب رئيسي (مطلوب)
+  notes         String?
+  imageUrl      String?             // مرفق (اختياري)
+  refType       String?             // مرجع (transfer / receipt / ...)
+  refId         String?
+  status        String   @default("APPROVED")  // PENDING | APPROVED | REJECTED
+  performedById String?
+  approvedById  String?
+  createdAt     DateTime @default(now())
+
+  item      Item      @relation(fields: [itemId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([itemId, createdAt])
+}
+
+// ─── تحويل مخزون بين المستودعات (مع موافقة) ─────────
+// الحالات:
+//   PENDING   طلب تحويل بانتظار الموافقة
+//   APPROVED  تمت الموافقة (تُنفَّذ الحركة تلقائياً)
+//   REJECTED  مرفوض
+//   COMPLETED منتهي
+//   CANCELLED ملغي
+model StockTransfer {
+  id              String    @id @default(cuid())
+  tenantId        String
+  number          String                              // TRF-YYYY-XXXX
+  itemId          String
+  fromWarehouseId String
+  toWarehouseId   String
+  quantity        Decimal   @db.Decimal(18, 4)
+  status          String    @default("PENDING")
+  notes           String?
+  requestedById   String?
+  approvedById    String?
+  approvedAt      DateTime?
+  rejectedReason  String?
+  executedAt      DateTime?                            // متى تُنفِّذ الحركة على المخزون
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+}
+
+// ─── جرد المخزون (Inventory Count) ──────────────────
+// الحالات:
+//   DRAFT       مسودة
+//   IN_PROGRESS جرد قيد التنفيذ
+//   COMPLETED   انتهى الجرد (لم يُعتمَد بعد)
+//   APPROVED    اعتُمِد + طُبِّقت الفروقات على المخزون
+//   CANCELLED   ملغي
+model InventoryCount {
+  id           String    @id @default(cuid())
+  tenantId     String
+  number       String                              // CNT-YYYY-XXXX
+  warehouseId  String?                             // null = كل المستودعات
+  scheduledAt  DateTime?
+  status       String    @default("DRAFT")
+  frozen       Boolean   @default(false)           // تجميد الحركات (اختياري)
+  notes        String?
+  createdById  String?
+  approvedById String?
+  approvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  lines InventoryCountLine[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+}
+
+model InventoryCountLine {
+  id          String    @id @default(cuid())
+  tenantId    String
+  countId     String
+  itemId      String
+  warehouseId String
+  expectedQty Decimal   @db.Decimal(18, 4)          // ما هو في النظام لحظة الجرد
+  actualQty   Decimal?  @db.Decimal(18, 4)          // الجرد الفعلي
+  variance    Decimal?  @db.Decimal(18, 4)          // actual - expected
+  notes       String?
+  countedById String?
+  countedAt   DateTime?
+
+  count InventoryCount @relation(fields: [countId], references: [id], onDelete: Cascade)
+
+  @@index([countId])
+  @@index([itemId])
+}
+
+// ─── استلام مخزون جديد ────────────────────────────────
+// المصادر: SUPPLIER | MANUAL | TRANSFER_IN | CUSTOMER_RETURN | PRODUCTION
+model StockReceipt {
+  id                  String    @id @default(cuid())
+  tenantId            String
+  itemId              String
+  warehouseId         String
+  source              String                  // SUPPLIER | MANUAL | TRANSFER_IN | CUSTOMER_RETURN | PRODUCTION
+  quantity            Decimal   @db.Decimal(18, 4)
+  unitCost            Decimal?  @db.Decimal(18, 4)
+  supplierId          String?
+  invoiceNumber       String?
+  purchaseOrderNumber String?
+  batchNumber         String?
+  serialNumber        String?
+  productionDate      DateTime?
+  expiryDate          DateTime?
+  notes               String?
+  performedById       String?
+  createdAt           DateTime  @default(now())
+
+  item     Item      @relation(fields: [itemId], references: [id])
+  supplier Supplier? @relation(fields: [supplierId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([itemId, createdAt])
+  @@index([supplierId])
 }
 
 enum ItemType {
@@ -552,9 +732,33 @@ model Employee {
   updatedAt  DateTime  @updatedAt
 
   attendance AttendanceRecord[]
+  documents  EmployeeDocument[]
 
   @@unique([tenantId, code])
   @@index([tenantId, active])
+}
+
+// ─── ملفات الموظف (وثائق) ─────────────────────────────
+// أنواع مدعومة: WARNING (تنبيه) | CONTRACT (عقد) | DECLARATION (إقرار) | RESIGNATION (استقالة) | OTHER
+model EmployeeDocument {
+  id          String   @id @default(cuid())
+  tenantId    String
+  employeeId  String
+  docType     String   @default("OTHER")
+  title       String
+  fileName    String?
+  mimeType    String?
+  fileData    String?  @db.Text            // base64 (لملفات صغيرة) — بديل عن التخزين السحابي
+  fileUrl     String?                       // رابط خارجي بديل
+  description String?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, employeeId])
+  @@index([employeeId, docType])
 }
 
 model AttendanceRecord {
@@ -641,9 +845,14 @@ model AuditLog {
   before      Json?
   after       Json?
   ip          String?
+  userAgent   String?             // معلومات المتصفح/الجهاز
+  method      String?             // POST | PATCH | PUT | DELETE
+  path        String?             // كامل المسار
+  status      Int?                // HTTP status
   occurredAt  DateTime @default(now())
 
   @@index([tenantId, resource, occurredAt])
+  @@index([tenantId, actorUserId, occurredAt])
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -890,12 +1099,21 @@ model SimpleOrder {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
+  // ─── تقسيم الطلبيات + بيانات الشحن ───
+  orderType             String   @default("INTERNAL")  // INTERNAL | EXTERNAL
+  contractNumber        String?
+  deliveryLocation      String?
+  expectedShippingDate  DateTime?
+  expectedArrivalDate   DateTime?
+  shipmentTrackingNumber String?
+
   lines    SimpleOrderLine[]
   payments SimpleOrderPayment[]
 
   @@unique([tenantId, number])
   @@index([tenantId, status])
   @@index([tenantId, orderDate])
+  @@index([tenantId, orderType])
 }
 
 // ── دفعات الطلبية (جدول دفعات لكل طلبية بسيطة) ─────────────

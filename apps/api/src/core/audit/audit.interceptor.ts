@@ -28,18 +28,32 @@ export class AuditInterceptor implements NestInterceptor {
       return next.handle();
     }
 
+    // altqet IP الحقيقي مع مراعاة الـ proxy (X-Forwarded-For)
+    const rawIp: string =
+      req.headers?.['x-forwarded-for']?.toString().split(',')[0].trim() ||
+      req.ip ||
+      req.connection?.remoteAddress ||
+      '';
+    const userAgent: string = req.headers?.['user-agent']?.toString() ?? '';
+    const path = (req.originalUrl || req.url || '').split('?')[0];
+
     return next.handle().pipe(
       tap((result) => {
         const user = req.user;
         if (!user?.tenantId) return;
+        const res = context.switchToHttp().getResponse();
         this.audit
           .log({
             tenantId: user.tenantId,
             actorUserId: user.id,
             action: method,
-            resource: (req.route?.path || req.originalUrl || '').split('?')[0],
+            resource: (req.route?.path || path || '').split('?')[0],
             resourceId: result?.id || req.params?.id || null,
-            ip: req.ip,
+            ip: rawIp,
+            userAgent,
+            method,
+            path,
+            status: res?.statusCode ?? null,
           })
           .catch(() => undefined);
       }),
