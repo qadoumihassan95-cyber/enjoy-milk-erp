@@ -10,12 +10,19 @@ import {
   Search,
   Printer,
   Filter,
+  Factory,
+  ChevronLeft,
 } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { Card, Button, Input, Badge } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatDate, cn } from '@/lib/utils';
 
+/**
+ * جدول أيام الإنتاج — احترافي وقابل للنقر.
+ * الأعمدة المطلوبة: التاريخ | رقم يوم الإنتاج | عدد التشغيلات | إجمالي الإنتاج | نسبة الهدر | المشغّل | الحالة
+ * كل صف يفتح صفحة تفاصيل ذلك اليوم.
+ */
 export default function DailyProductionListPage() {
   const router = useRouter();
   const qc = useQueryClient();
@@ -49,7 +56,20 @@ export default function DailyProductionListPage() {
     });
   }, [records, search, statusFilter]);
 
-  // ─── Quick totals helper (compatible مع الـ schema الجديدة) ──
+  // ─── ترتيب تصاعدي حسب التاريخ لحساب "رقم يوم الإنتاج" ─────
+  const dayNumberMap = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!records) return map;
+    const sorted = [...records].sort(
+      (a, b) =>
+        new Date(a.productionDate).getTime() -
+        new Date(b.productionDate).getTime(),
+    );
+    sorted.forEach((r: any, idx) => map.set(r.id, idx + 1));
+    return map;
+  }, [records]);
+
+  // ─── Totals helper ────────────────────────────
   const computeTotals = (r: any) => {
     const cartons = (r.produced ?? []).reduce(
       (s: number, p: any) => s + Number(p.cartonsTotal || 0),
@@ -59,20 +79,35 @@ export default function DailyProductionListPage() {
       (s: number, w: any) => s + Number(w.quantity || 0),
       0,
     );
-    return { cartons, waste };
+    const runs = (r.produced ?? []).length;
+    const total = cartons + waste;
+    const wastePct = total > 0 ? (waste / total) * 100 : 0;
+    return { cartons, waste, runs, wastePct };
   };
 
   return (
     <AppShell>
       <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6">
         <header className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h1 className="text-2xl md:text-3xl font-black tracking-tight">
-              الإنتاج اليومي
-            </h1>
-            <p className="text-sm text-zinc-500 mt-0.5">
-              ورقة الإنتاج اليومية الموحّدة
-            </p>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="text-zinc-500 hover:text-zinc-900 transition-colors"
+              title="رجوع للداشبورد"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <div className="w-10 h-10 rounded-xl bg-zinc-900 text-white flex items-center justify-center">
+              <Factory className="h-5 w-5" />
+            </div>
+            <div>
+              <h1 className="text-2xl md:text-3xl font-black tracking-tight">
+                جدول أيام الإنتاج
+              </h1>
+              <p className="text-sm text-zinc-500 mt-0.5">
+                اضغط على أي يوم لعرض التفاصيل الكاملة
+              </p>
+            </div>
           </div>
           <Button onClick={() => setShowNew(true)}>
             <Plus className="h-4 w-4" />
@@ -157,76 +192,57 @@ export default function DailyProductionListPage() {
               <table className="w-full text-sm">
                 <thead className="bg-zinc-50 border-b">
                   <tr>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">
-                      التاريخ
-                    </th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">
-                      الشيفت
-                    </th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">
-                      المشغّل
-                    </th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">
-                      الإنتاج
-                    </th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">
-                      التوالف
-                    </th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">
-                      الحالة
-                    </th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">
-                      إجراء
-                    </th>
+                    <Th>التاريخ</Th>
+                    <Th>رقم يوم الإنتاج</Th>
+                    <Th>عدد التشغيلات</Th>
+                    <Th>إجمالي الإنتاج</Th>
+                    <Th>نسبة الهدر</Th>
+                    <Th>المشغّل</Th>
+                    <Th>الحالة</Th>
+                    <Th>إجراء</Th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.map((r: any) => {
-                    const { cartons, waste } = computeTotals(r);
+                    const { cartons, waste, runs, wastePct } = computeTotals(r);
+                    const dayNo = dayNumberMap.get(r.id) ?? '-';
                     return (
                       <tr
                         key={r.id}
-                        className="border-b border-zinc-100 hover:bg-zinc-50"
+                        onClick={() => router.push(`/production/${r.id}`)}
+                        className="border-b border-zinc-100 hover:bg-zinc-50 cursor-pointer transition-colors group"
                       >
-                        <td
-                          className="p-3 font-bold cursor-pointer"
-                          onClick={() => router.push(`/production/${r.id}`)}
-                        >
+                        <td className="p-3 font-bold group-hover:text-zinc-900">
                           {formatDate(r.productionDate)}
                         </td>
-                        <td
-                          className="p-3 text-zinc-600 cursor-pointer"
-                          onClick={() => router.push(`/production/${r.id}`)}
-                        >
-                          {r.shift || '-'}
+                        <td className="p-3 font-mono text-xs">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-700 font-bold">
+                            #{dayNo}
+                          </span>
                         </td>
-                        <td
-                          className="p-3 text-zinc-600 cursor-pointer"
-                          onClick={() => router.push(`/production/${r.id}`)}
-                        >
-                          {r.operatorName || '-'}
+                        <td className="p-3 font-bold" data-numeric>
+                          {runs}
                         </td>
-                        <td
-                          className="p-3 font-bold cursor-pointer"
-                          data-numeric
-                          onClick={() => router.push(`/production/${r.id}`)}
-                        >
+                        <td className="p-3 font-bold text-emerald-700" data-numeric>
                           {cartons.toLocaleString('en-US')}
                         </td>
                         <td
                           className={cn(
-                            'p-3 cursor-pointer',
-                            waste > 0 && 'text-amber-600 font-bold',
+                            'p-3 font-bold',
+                            wastePct > 5
+                              ? 'text-red-600'
+                              : wastePct > 2
+                              ? 'text-amber-600'
+                              : 'text-zinc-500',
                           )}
                           data-numeric
-                          onClick={() => router.push(`/production/${r.id}`)}
                         >
-                          {waste.toLocaleString('en-US')}
+                          {wastePct.toFixed(1)}%
                         </td>
-                        <td
-                          className="p-3 cursor-pointer"
-                          onClick={() => router.push(`/production/${r.id}`)}
-                        >
+                        <td className="p-3 text-zinc-600">
+                          {r.operatorName || '-'}
+                        </td>
+                        <td className="p-3">
                           {r.status === 'POSTED' ? (
                             <Badge variant="success" dot>
                               مُرحَّل
@@ -241,17 +257,16 @@ export default function DailyProductionListPage() {
                             </Badge>
                           )}
                         </td>
-                        <td className="p-3">
+                        <td className="p-3" onClick={(e) => e.stopPropagation()}>
                           <button
-                            onClick={(e) => {
-                              e.stopPropagation();
+                            onClick={() =>
                               window.open(
                                 `/production/${r.id}/print`,
                                 '_blank',
                                 'noopener',
-                              );
-                            }}
-                            className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-zinc-200 hover:bg-zinc-100"
+                              )
+                            }
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-zinc-200 hover:bg-zinc-100 transition-colors"
                             title="طباعة PDF"
                           >
                             <Printer className="h-3 w-3" /> طباعة
@@ -267,6 +282,14 @@ export default function DailyProductionListPage() {
         </Card>
       </div>
     </AppShell>
+  );
+}
+
+function Th({ children }: { children: React.ReactNode }) {
+  return (
+    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">
+      {children}
+    </th>
   );
 }
 
@@ -358,4 +381,3 @@ function NewProductionDayForm({
     </Card>
   );
 }
-

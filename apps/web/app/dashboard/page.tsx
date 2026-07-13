@@ -1,17 +1,35 @@
 'use client';
 
+import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
+import {
+  Boxes,
+  ScrollText,
+  Factory,
+  UserCheck,
+  ArrowUpRight,
+} from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
-import { Stat, Card, CardHeader, CardTitle, CardContent, Badge } from '@/components/ui';
+import { Card, CardHeader, CardTitle, CardContent, Badge } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatNumber } from '@/lib/utils';
 
+/**
+ * Dashboard — نسخة نظيفة بعد إزالة قسم المالية بالكامل (بطاقة المالية + إجمالي الكاش).
+ * البطاقات المتبقية (المخزون / الرخص / الإنتاج) تفاعلية Clickable مع Hover + Ripple + Cursor.
+ */
 export default function DashboardPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['dashboard', 'executive'],
     queryFn: () => api.get('/dashboard/executive').then((r) => r.data),
     refetchInterval: 60_000,
   });
+
+  const p = data?.production ?? {};
+  const inv = data?.inventory ?? {};
+  const lic = data?.licenses ?? {};
+  const hr = data?.hr ?? {};
+  const wastePct = ((p.wastePct ?? 0) * 100);
 
   return (
     <AppShell>
@@ -28,100 +46,211 @@ export default function DashboardPage() {
           </Badge>
         </header>
 
-        <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Stat
+        {/* ──────────────────────────────────────────────
+             KPIs الرئيسية — 3 بطاقات (المالية والكاش أُزيلا)
+             بطاقة الإنتاج قابلة للضغط وتفتح جدول الأيام
+        ────────────────────────────────────────────── */}
+        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {/* الإنتاج اليوم — قابلة للضغط */}
+          <InteractiveKpi
+            href="/production"
+            icon={<Factory className="h-4 w-4" />}
             label="الإنتاج اليوم"
-            value={isLoading ? '—' : formatNumber(data?.production?.totalOutput ?? 0)}
+            value={isLoading ? '—' : formatNumber(p.totalOutput ?? 0)}
             unit="حبة"
-            state="neutral"
+            hint="اضغط لعرض جدول الأيام"
+            accent="zinc"
           />
-          <Stat
-            label="نسبة الهدر"
-            value={
-              isLoading
-                ? '—'
-                : ((data?.production?.wastePct ?? 0) * 100).toFixed(1)
-            }
-            unit="%"
-            state={(data?.production?.wastePct ?? 0) < 0.05 ? 'good' : 'warning'}
-          />
-          <Stat
-            label="إجمالي الكاش"
-            value={isLoading ? '—' : formatNumber(data?.finance?.totalBalance ?? 0, 0)}
-            unit="د.أ"
-          />
-          <Stat
-            label="الحضور"
-            value={
-              isLoading ? '—' : `${data?.hr?.present ?? 0}/${data?.hr?.total ?? 0}`
-            }
-            state={(data?.hr?.late ?? 0) > 0 ? 'warning' : 'good'}
-            hint={(data?.hr?.late ?? 0) > 0 ? `${data?.hr?.late} تأخير` : 'مكتمل'}
-          />
+          {/* نسبة الهدر */}
+          <div
+            className={`rounded-xl border-2 bg-white p-4 ${
+              wastePct < 5 ? 'border-emerald-200' : 'border-amber-200'
+            }`}
+          >
+            <div className="text-xs text-zinc-500">نسبة الهدر</div>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span
+                data-numeric
+                className="text-2xl md:text-3xl font-black tracking-tight text-zinc-900"
+              >
+                {isLoading ? '—' : wastePct.toFixed(1)}
+              </span>
+              <span className="text-xs text-zinc-400">%</span>
+            </div>
+            <div className="mt-1.5 text-[11px] text-zinc-500">
+              {wastePct < 5 ? 'ضمن الحدود المقبولة' : 'يحتاج مراجعة'}
+            </div>
+          </div>
+          {/* الحضور */}
+          <div className="rounded-xl border-2 bg-white p-4 border-emerald-200">
+            <div className="text-xs text-zinc-500 flex items-center gap-1.5">
+              <UserCheck className="h-3.5 w-3.5" /> الحضور
+            </div>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span
+                data-numeric
+                className="text-2xl md:text-3xl font-black tracking-tight text-zinc-900"
+              >
+                {isLoading ? '—' : `${hr.present ?? 0}/${hr.total ?? 0}`}
+              </span>
+            </div>
+            <div className="mt-1.5 text-[11px] text-zinc-500">
+              {(hr.late ?? 0) > 0 ? `${hr.late} تأخير` : 'مكتمل'}
+            </div>
+          </div>
         </section>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <Card>
+        {/* ──────────────────────────────────────────────
+             بطاقات تفاعلية كبيرة: المخزون + الرخص
+        ────────────────────────────────────────────── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* المخزون */}
+          <ClickableCard href="/inventory" label="فتح المخزون">
             <CardHeader>
-              <CardTitle>المخزون</CardTitle>
+              <CardTitle className="flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <Boxes className="h-4 w-4 text-emerald-600" />
+                  المخزون
+                </span>
+                <ArrowUpRight className="h-4 w-4 text-zinc-400 group-hover:text-zinc-900 group-hover:translate-x-[-2px] group-hover:translate-y-[2px] transition-all duration-200" />
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
-              <Row label="إجمالي الأصناف" value={data?.inventory?.itemsCount ?? 0} />
+              <Row label="إجمالي الأصناف" value={inv.itemsCount ?? 0} />
               <Row
                 label="منخفض"
-                value={data?.inventory?.lowStockCount ?? 0}
-                warning={(data?.inventory?.lowStockCount ?? 0) > 0}
+                value={inv.lowStockCount ?? 0}
+                warning={(inv.lowStockCount ?? 0) > 0}
               />
               <Row
                 label="قارب الانتهاء"
-                value={data?.inventory?.expiringBatches ?? 0}
-                warning={(data?.inventory?.expiringBatches ?? 0) > 0}
+                value={inv.expiringBatches ?? 0}
+                warning={(inv.expiringBatches ?? 0) > 0}
               />
             </CardContent>
-          </Card>
+          </ClickableCard>
 
-          <Card>
+          {/* الرخص */}
+          <ClickableCard href="/licenses" label="فتح الرخص">
             <CardHeader>
-              <CardTitle>المالية</CardTitle>
+              <CardTitle className="flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <ScrollText className="h-4 w-4 text-blue-600" />
+                  الرخص
+                </span>
+                <ArrowUpRight className="h-4 w-4 text-zinc-400 group-hover:text-zinc-900 group-hover:translate-x-[-2px] group-hover:translate-y-[2px] transition-all duration-200" />
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
-              <Row
-                label="الكاش الوارد اليوم"
-                value={`${formatNumber(data?.finance?.cashIn ?? 0, 2)} د.أ`}
-              />
-              <Row
-                label="الكاش الصادر اليوم"
-                value={`${formatNumber(data?.finance?.cashOut ?? 0, 2)} د.أ`}
-              />
-              <Row
-                label="شيكات قريبة الاستحقاق"
-                value={data?.finance?.upcomingChequesCount ?? 0}
-                warning={(data?.finance?.upcomingChequesCount ?? 0) > 0}
-              />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>الرخص</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <Row label="إجمالي" value={data?.licenses?.total ?? 0} />
+              <Row label="إجمالي" value={lic.total ?? 0} />
               <Row
                 label="قاربت على الانتهاء"
-                value={data?.licenses?.expiring ?? 0}
-                warning={(data?.licenses?.expiring ?? 0) > 0}
+                value={lic.expiring ?? 0}
+                warning={(lic.expiring ?? 0) > 0}
               />
               <Row
                 label="منتهية"
-                value={data?.licenses?.expired ?? 0}
-                danger={(data?.licenses?.expired ?? 0) > 0}
+                value={lic.expired ?? 0}
+                danger={(lic.expired ?? 0) > 0}
               />
             </CardContent>
-          </Card>
+          </ClickableCard>
         </div>
       </div>
     </AppShell>
+  );
+}
+
+/* ────────────────────────────────────────────────
+   بطاقة تفاعلية صغيرة (KPI): Link + Hover + Ripple
+────────────────────────────────────────────────── */
+function InteractiveKpi({
+  href,
+  icon,
+  label,
+  value,
+  unit,
+  hint,
+  accent = 'zinc',
+}: {
+  href: string;
+  icon: React.ReactNode;
+  label: string;
+  value: string | number;
+  unit?: string;
+  hint?: string;
+  accent?: 'zinc' | 'blue' | 'emerald';
+}) {
+  const accents: Record<string, string> = {
+    zinc: 'hover:border-zinc-900/50 hover:shadow-md',
+    blue: 'hover:border-blue-400 hover:shadow-md',
+    emerald: 'hover:border-emerald-400 hover:shadow-md',
+  };
+  return (
+    <Link
+      href={href}
+      className={`group relative overflow-hidden rounded-xl border-2 border-zinc-200 bg-white p-4 cursor-pointer transition-all duration-200 active:scale-[0.98] ${accents[accent]} focus:outline-none focus:ring-2 focus:ring-zinc-900/20`}
+    >
+      {/* Ripple / shimmer effect */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-700 ease-out bg-gradient-to-r from-transparent via-zinc-900/[0.04] to-transparent"
+      />
+      <div className="relative">
+        <div className="flex items-center justify-between">
+          <div className="text-xs text-zinc-500 flex items-center gap-1.5">
+            {icon} {label}
+          </div>
+          <ArrowUpRight className="h-3.5 w-3.5 text-zinc-300 group-hover:text-zinc-900 transition-colors" />
+        </div>
+        <div className="flex items-baseline gap-1.5 mt-1">
+          <span
+            data-numeric
+            className="text-2xl md:text-3xl font-black tracking-tight text-zinc-900"
+          >
+            {value}
+          </span>
+          {unit && <span className="text-xs text-zinc-400">{unit}</span>}
+        </div>
+        {hint && (
+          <div className="mt-1.5 text-[11px] text-zinc-500 group-hover:text-zinc-700 transition-colors">
+            {hint}
+          </div>
+        )}
+      </div>
+    </Link>
+  );
+}
+
+/* ────────────────────────────────────────────────
+   بطاقة كبيرة تفاعلية (Inventory / Licenses)
+────────────────────────────────────────────────── */
+function ClickableCard({
+  href,
+  label,
+  children,
+}: {
+  href: string;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      aria-label={label}
+      className="group block rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900/20"
+    >
+      <Card
+        className="relative overflow-hidden cursor-pointer transition-all duration-200 hover:shadow-md hover:border-zinc-300 active:scale-[0.995]"
+      >
+        {/* ripple shimmer */}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-700 ease-out bg-gradient-to-r from-transparent via-zinc-900/[0.035] to-transparent"
+        />
+        <div className="relative">{children}</div>
+      </Card>
+    </Link>
   );
 }
 
