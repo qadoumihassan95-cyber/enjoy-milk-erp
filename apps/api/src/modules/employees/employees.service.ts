@@ -572,60 +572,6 @@ export class EmployeesService {
     });
   }
 
-  // ─── وثائق الموظف ────────────────────────────────
-  async listDocuments(tenantId: string, employeeId: string) {
-    const list = await this.prisma.employeeDocument.findMany({
-      where: { tenantId, employeeId },
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true, docType: true, title: true, fileName: true, mimeType: true,
-        fileUrl: true, description: true, createdAt: true, createdById: true,
-      },
-    });
-    // لا نُرجع الـ fileData في القائمة لأنها كبيرة
-    return list;
-  }
-
-  async getDocument(tenantId: string, id: string) {
-    const doc = await this.prisma.employeeDocument.findFirst({
-      where: { id, tenantId },
-    });
-    if (!doc) throw new NotFoundException('الوثيقة غير موجودة');
-    return doc;
-  }
-
-  async createDocument(tenantId: string, userId: string, employeeId: string, data: any) {
-    if (!data.title?.trim()) throw new BadRequestException('العنوان مطلوب');
-    const emp = await this.prisma.employee.findFirst({ where: { id: employeeId, tenantId } });
-    if (!emp) throw new NotFoundException('الموظف غير موجود');
-    const doc = await this.prisma.employeeDocument.create({
-      data: {
-        tenantId,
-        employeeId,
-        docType: data.docType || 'OTHER',
-        title: data.title.trim(),
-        fileName: data.fileName ?? null,
-        mimeType: data.mimeType ?? null,
-        fileData: data.fileData ?? null,
-        fileUrl: data.fileUrl ?? null,
-        description: data.description ?? null,
-        createdById: userId,
-      },
-      select: {
-        id: true, docType: true, title: true, fileName: true, mimeType: true,
-        fileUrl: true, description: true, createdAt: true, createdById: true,
-      },
-    });
-    return doc;
-  }
-
-  async deleteDocument(tenantId: string, id: string) {
-    const doc = await this.prisma.employeeDocument.findFirst({ where: { id, tenantId } });
-    if (!doc) throw new NotFoundException();
-    await this.prisma.employeeDocument.delete({ where: { id } });
-    return { ok: true };
-  }
-
   async getDailyStats(tenantId: string) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);

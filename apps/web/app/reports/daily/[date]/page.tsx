@@ -322,7 +322,7 @@ export default function DailyAggregatedReport() {
       {/* ─── الرأس ───────────────────────────────── */}
       <div className="factory-header">
         <div>
-          <div className="factory-name">مصنع الدانا لمنتجات الحليب واللبن</div>
+          <div className="factory-name">مصنع قصراوي إخوان</div>
           <div className="factory-sub">Enjoy Milk · مصنع حليب البودرة</div>
           <h1 className="report-title" style={{ marginTop: 8 }}>
             تقرير الإنتاج اليومي المُجمَّع
@@ -671,7 +671,7 @@ export default function DailyAggregatedReport() {
       </div>
 
       <div className="footer-note">
-        نظام Enjoy Milk ERP · مصنع الدانا لمنتجات الحليب واللبن · تقرير يومي مُجمَّع · طُبع في{' '}
+        نظام Enjoy Milk ERP · مصنع قصراوي إخوان · تقرير يومي مُجمَّع · طُبع في{' '}
         {new Date().toLocaleString('ar-EG')}
       </div>
     </div>

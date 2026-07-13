@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search, Trash2, X, ShoppingCart, Phone, MapPin, Wallet, Receipt, Printer, Pencil, Building2, Truck } from 'lucide-react';
+import { Plus, Search, Trash2, X, ShoppingCart, Phone, MapPin, Wallet, Receipt } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { Card, Button, Input, Badge, Stat } from '@/components/ui';
 import { useToast } from '@/components/toast';
@@ -29,20 +29,14 @@ export default function OrdersPage() {
   const toast = useToast();
   const [filter, setFilter] = useState<string>('');
   const [search, setSearch] = useState('');
-  const [orderType, setOrderType] = useState<string>(''); // '' | INTERNAL | EXTERNAL
   const [showNew, setShowNew] = useState(false);
-  const [editingOrder, setEditingOrder] = useState<any>(null);
   const [paymentsOrder, setPaymentsOrder] = useState<any>(null);
 
   const { data: orders, refetch } = useQuery({
-    queryKey: ['orders', filter, search, orderType],
+    queryKey: ['orders', filter, search],
     queryFn: () =>
       api
-        .get('/orders', { params: {
-          status: filter || undefined,
-          search: search || undefined,
-          orderType: orderType || undefined,
-        }})
+        .get('/orders', { params: { status: filter || undefined, search: search || undefined } })
         .then((r) => r.data),
   });
 
@@ -75,34 +69,19 @@ export default function OrdersPage() {
 
   return (
     <AppShell>
-      <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6 print:p-2 print:space-y-2">
-        <header className="flex items-center justify-between flex-wrap gap-3 print:hidden">
+      <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6">
+        <header className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl md:text-3xl font-black tracking-tight">الطلبيات</h1>
             <p className="text-sm text-zinc-500 mt-0.5">
               {orders?.length ?? 0} طلبية
             </p>
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => window.print()}>
-              <Printer className="h-4 w-4" /> طباعة
-            </Button>
-            <Button onClick={() => setShowNew(true)}>
-              <Plus className="h-4 w-4" />
-              طلبية جديدة
-            </Button>
-          </div>
+          <Button onClick={() => setShowNew(true)}>
+            <Plus className="h-4 w-4" />
+            طلبية جديدة
+          </Button>
         </header>
-
-        {/* رأس الطباعة */}
-        <div className="hidden print:block mb-4">
-          <h1 className="text-lg font-black">مصنع الدانا لمنتجات الحليب واللبن — تقرير الطلبيات</h1>
-          <p className="text-xs text-zinc-500">
-            {new Date().toLocaleDateString('ar-JO', { dateStyle: 'long' })}
-            {orderType && ` · ${orderType === 'INTERNAL' ? 'داخلية' : 'خارجية'}`}
-            {filter && ` · ${filter}`}
-          </p>
-        </div>
 
         {/* Report KPIs */}
         <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -129,38 +108,12 @@ export default function OrdersPage() {
           />
         </section>
 
-        {/* Order type tabs — الداخلية / الخارجية */}
-        <div className="flex gap-2 print:hidden">
-          {[
-            { v: '', l: 'كل الطلبيات', Icon: ShoppingCart },
-            { v: 'INTERNAL', l: 'داخلية', Icon: Building2 },
-            { v: 'EXTERNAL', l: 'خارجية', Icon: Truck },
-          ].map((t) => {
-            const Ic = t.Icon;
-            return (
-              <button
-                key={t.v}
-                onClick={() => setOrderType(t.v)}
-                className={cn(
-                  'px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2',
-                  orderType === t.v
-                    ? 'bg-zinc-900 text-white'
-                    : 'bg-white text-zinc-700 border border-zinc-200 hover:bg-zinc-50',
-                )}
-              >
-                <Ic className="h-4 w-4" />
-                {t.l}
-              </button>
-            );
-          })}
-        </div>
-
         {/* Filters */}
-        <Card className="p-3 flex flex-wrap gap-3 items-center print:hidden">
+        <Card className="p-3 flex flex-wrap gap-3 items-center">
           <div className="flex-1 min-w-[200px] relative">
             <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
             <Input
-              placeholder="بحث بالعميل، الهاتف، رقم العقد، أو رقم الشحنة..."
+              placeholder="بحث بالعميل أو الهاتف..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pr-9"
@@ -212,7 +165,6 @@ export default function OrdersPage() {
                 <thead className="bg-zinc-50 border-b">
                   <tr>
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">رقم</th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">النوع</th>
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">العميل</th>
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">الهاتف</th>
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">المنطقة</th>
@@ -221,33 +173,14 @@ export default function OrdersPage() {
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">المدفوع</th>
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">المتبقي</th>
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">الحالة</th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase print:hidden">إجراء</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">إجراء</th>
                   </tr>
                 </thead>
                 <tbody>
                   {orders.map((o: any) => (
                     <tr key={o.id} className="border-b border-zinc-100 hover:bg-zinc-50">
                       <td className="p-3 font-mono text-xs">{o.number}</td>
-                      <td className="p-3">
-                        {o.orderType === 'EXTERNAL' ? (
-                          <Badge variant="info" dot>خارجية</Badge>
-                        ) : (
-                          <Badge variant="default" dot>داخلية</Badge>
-                        )}
-                      </td>
-                      <td className="p-3 font-medium">
-                        {o.customerId ? (
-                          <a
-                            href={`/customers/${o.customerId}`}
-                            className="text-zinc-900 hover:text-blue-600 hover:underline"
-                            title="فتح ملف العميل"
-                          >
-                            {o.customerName}
-                          </a>
-                        ) : (
-                          <span title="عميل حر (بدون ربط)">{o.customerName}</span>
-                        )}
-                      </td>
+                      <td className="p-3 font-medium">{o.customerName}</td>
                       <td className="p-3 text-zinc-600">{o.customerPhone || '-'}</td>
                       <td className="p-3 text-zinc-600">{o.region || '-'}</td>
                       <td className="p-3 text-zinc-600">{formatDate(o.orderDate)}</td>
@@ -275,7 +208,7 @@ export default function OrdersPage() {
                           <Badge variant="danger" dot>غير مدفوع</Badge>
                         )}
                       </td>
-                      <td className="p-3 flex gap-1 print:hidden">
+                      <td className="p-3 flex gap-1">
                         <button
                           onClick={() => setPaymentsOrder(o)}
                           className="text-xs px-2 py-1 rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 font-bold inline-flex items-center gap-1"
@@ -292,16 +225,8 @@ export default function OrdersPage() {
                           </button>
                         )}
                         <button
-                          onClick={() => setEditingOrder(o)}
-                          className="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold inline-flex items-center gap-1"
-                          title="تعديل"
-                        >
-                          <Pencil className="h-3 w-3" /> تعديل
-                        </button>
-                        <button
                           onClick={() => remove(o.id)}
                           className="text-red-500 hover:text-red-700 p-1"
-                          title="حذف"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -321,118 +246,8 @@ export default function OrdersPage() {
             onChanged={() => safeRefresh()}
           />
         )}
-
-        {editingOrder && (
-          <EditOrderMetaModal
-            order={editingOrder}
-            onClose={() => setEditingOrder(null)}
-            onSaved={() => { setEditingOrder(null); safeRefresh(); }}
-          />
-        )}
       </div>
     </AppShell>
-  );
-}
-
-// ─── Modal لتعديل بيانات الطلبية العلوية (النوع + الشحن + العقد) ─
-function EditOrderMetaModal({
-  order,
-  onClose,
-  onSaved,
-}: {
-  order: any;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const toast = useToast();
-  const toDate = (v: any) => (v ? new Date(v).toISOString().slice(0, 10) : '');
-  const [form, setForm] = useState({
-    orderType: order.orderType ?? 'INTERNAL',
-    customerName: order.customerName ?? '',
-    customerPhone: order.customerPhone ?? '',
-    region: order.region ?? '',
-    contractNumber: order.contractNumber ?? '',
-    deliveryLocation: order.deliveryLocation ?? '',
-    expectedShippingDate: toDate(order.expectedShippingDate),
-    expectedArrivalDate: toDate(order.expectedArrivalDate),
-    shipmentTrackingNumber: order.shipmentTrackingNumber ?? '',
-    notes: order.notes ?? '',
-  });
-  const [saving, setSaving] = useState(false);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      await api.patch(`/orders/${order.id}/meta`, {
-        ...form,
-        expectedShippingDate: form.expectedShippingDate || undefined,
-        expectedArrivalDate: form.expectedArrivalDate || undefined,
-      });
-      toast.success('تم تحديث بيانات الطلبية');
-      onSaved();
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || 'فشل الحفظ');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-5 border-b border-zinc-100 sticky top-0 bg-white">
-          <div>
-            <h3 className="font-bold flex items-center gap-2">
-              <Pencil className="h-5 w-5" /> تعديل الطلبية {order.number}
-            </h3>
-            <p className="text-xs text-zinc-500 mt-0.5">{order.customerName}</p>
-          </div>
-          <button onClick={onClose}><X className="h-5 w-5 text-zinc-400" /></button>
-        </div>
-        <form onSubmit={submit} className="p-5 space-y-4">
-          <div className="flex gap-2 flex-wrap">
-            <label className="text-xs font-bold text-zinc-700 w-full">نوع الطلبية</label>
-            {[
-              { v: 'INTERNAL', l: 'داخلية' },
-              { v: 'EXTERNAL', l: 'خارجية' },
-            ].map((t) => (
-              <button
-                key={t.v}
-                type="button"
-                onClick={() => setForm({ ...form, orderType: t.v })}
-                className={cn(
-                  'px-4 py-2 rounded-lg text-sm font-bold border',
-                  form.orderType === t.v
-                    ? 'bg-zinc-900 text-white border-zinc-900'
-                    : 'bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-50',
-                )}
-              >
-                {t.l}
-              </button>
-            ))}
-          </div>
-          <div className="grid md:grid-cols-2 gap-3">
-            <Input label="اسم العميل" value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })} />
-            <Input label="الهاتف" value={form.customerPhone} onChange={(e) => setForm({ ...form, customerPhone: e.target.value })} />
-            <Input label="المنطقة" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} />
-            <Input label="رقم العقد" value={form.contractNumber} onChange={(e) => setForm({ ...form, contractNumber: e.target.value })} />
-            <Input label="موقع التسليم" value={form.deliveryLocation} onChange={(e) => setForm({ ...form, deliveryLocation: e.target.value })} />
-            <Input label="رقم الشحنة" value={form.shipmentTrackingNumber} onChange={(e) => setForm({ ...form, shipmentTrackingNumber: e.target.value })} />
-            <Input label="تاريخ الشحن المتوقع" type="date" value={form.expectedShippingDate} onChange={(e) => setForm({ ...form, expectedShippingDate: e.target.value })} />
-            <Input label="تاريخ الوصول المتوقع" type="date" value={form.expectedArrivalDate} onChange={(e) => setForm({ ...form, expectedArrivalDate: e.target.value })} />
-          </div>
-          <Input label="ملاحظات" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
-          <div className="rounded-lg bg-amber-50 border border-amber-100 p-3 text-xs text-amber-800">
-            ملاحظة: هذا التعديل لا يمس بنود الطلبية (المنتجات والكميات). لتعديلها استخدم زر الدفعات ثم اطلب تعديلاً كاملاً.
-          </div>
-          <div className="flex justify-end gap-3">
-            <Button type="button" variant="ghost" onClick={onClose}>إلغاء</Button>
-            <Button type="submit" loading={saving}>حفظ التعديل</Button>
-          </div>
-        </form>
-      </div>
-    </div>
   );
 }
 
@@ -648,12 +463,6 @@ function NewOrderForm({
     region: '',
     paid: 0,
     notes: '',
-    orderType: 'INTERNAL' as 'INTERNAL' | 'EXTERNAL',
-    contractNumber: '',
-    deliveryLocation: '',
-    expectedShippingDate: '',
-    expectedArrivalDate: '',
-    shipmentTrackingNumber: '',
   });
   const [lines, setLines] = useState<any[]>([
     { productName: '', size: '', quantity: 1, unitPrice: 0, itemId: '' },
@@ -680,15 +489,7 @@ function NewOrderForm({
     }
     setSaving(true);
     try {
-      await api.post('/orders', {
-        ...form,
-        expectedShippingDate: form.expectedShippingDate || undefined,
-        expectedArrivalDate: form.expectedArrivalDate || undefined,
-        contractNumber: form.contractNumber || undefined,
-        deliveryLocation: form.deliveryLocation || undefined,
-        shipmentTrackingNumber: form.shipmentTrackingNumber || undefined,
-        lines,
-      });
+      await api.post('/orders', { ...form, lines });
       onSaved();
       onClose();
     } catch (e: any) {
@@ -708,29 +509,6 @@ function NewOrderForm({
       </div>
 
       <form onSubmit={submit} className="space-y-4">
-        {/* نوع الطلبية */}
-        <div className="flex gap-2 flex-wrap">
-          <label className="text-xs font-bold text-zinc-700 w-full">نوع الطلبية *</label>
-          {[
-            { v: 'INTERNAL', l: 'داخلية' },
-            { v: 'EXTERNAL', l: 'خارجية' },
-          ].map((t) => (
-            <button
-              key={t.v}
-              type="button"
-              onClick={() => setForm({ ...form, orderType: t.v as any })}
-              className={cn(
-                'px-4 py-2 rounded-lg text-sm font-bold border',
-                form.orderType === t.v
-                  ? 'bg-zinc-900 text-white border-zinc-900'
-                  : 'bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-50',
-              )}
-            >
-              {t.l}
-            </button>
-          ))}
-        </div>
-
         <div className="grid md:grid-cols-3 gap-4">
           <Input
             label="اسم العميل *"
@@ -749,42 +527,6 @@ function NewOrderForm({
             onChange={(e) => setForm({ ...form, region: e.target.value })}
           />
         </div>
-
-        {/* حقول الشحن والعقد */}
-        <Card className="p-4 bg-blue-50/50 border-blue-100">
-          <h4 className="font-bold text-sm mb-3 flex items-center gap-2">
-            <Truck className="h-4 w-4" /> بيانات الشحن والعقد
-          </h4>
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
-            <Input
-              label="رقم العقد"
-              value={form.contractNumber}
-              onChange={(e) => setForm({ ...form, contractNumber: e.target.value })}
-            />
-            <Input
-              label="موقع التسليم"
-              value={form.deliveryLocation}
-              onChange={(e) => setForm({ ...form, deliveryLocation: e.target.value })}
-            />
-            <Input
-              label="رقم الشحنة (Tracking)"
-              value={form.shipmentTrackingNumber}
-              onChange={(e) => setForm({ ...form, shipmentTrackingNumber: e.target.value })}
-            />
-            <Input
-              label="التاريخ المتوقع للشحن"
-              type="date"
-              value={form.expectedShippingDate}
-              onChange={(e) => setForm({ ...form, expectedShippingDate: e.target.value })}
-            />
-            <Input
-              label="التاريخ المتوقع للوصول"
-              type="date"
-              value={form.expectedArrivalDate}
-              onChange={(e) => setForm({ ...form, expectedArrivalDate: e.target.value })}
-            />
-          </div>
-        </Card>
 
         {/* Lines */}
         <Card className="p-4 bg-zinc-50">
@@ -845,7 +587,6 @@ function NewOrderForm({
                 </div>
                 <div className="md:col-span-2">
                   <Input
-                    label={i === 0 ? 'الكمية' : undefined}
                     type="number"
                     placeholder="الكمية"
                     value={l.quantity}
@@ -858,7 +599,6 @@ function NewOrderForm({
                 </div>
                 <div className="md:col-span-2">
                   <Input
-                    label={i === 0 ? 'السعر' : undefined}
                     type="number"
                     step="0.01"
                     placeholder="السعر"

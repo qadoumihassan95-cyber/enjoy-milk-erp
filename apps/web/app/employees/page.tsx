@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Plus, X, UserCheck, UserX, Clock, Timer, Pencil, Trash2, FileText } from 'lucide-react';
+import { Plus, X, UserCheck, UserX, Clock, Timer, Pencil, Trash2 } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { Card, CardHeader, CardTitle, CardContent, Button, Input, Stat } from '@/components/ui';
 import { useToast } from '@/components/toast';
@@ -15,7 +15,6 @@ export default function EmployeesPage() {
   const [showNew, setShowNew] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [otEmployee, setOtEmployee] = useState<any>(null);
-  const [extraPayEmployee, setExtraPayEmployee] = useState<any>(null);
 
   const { data: employees } = useQuery({
     queryKey: ['employees'],
@@ -103,18 +102,6 @@ export default function EmployeesPage() {
           />
         )}
 
-        {extraPayEmployee && (
-          <ExtraPaymentModal
-            employee={extraPayEmployee}
-            onClose={() => setExtraPayEmployee(null)}
-            onSaved={() => {
-              toast.success('تم تسجيل الدفعة الإضافية للشهر الحالي');
-              setExtraPayEmployee(null);
-              qc.invalidateQueries({ queryKey: ['payroll'] });
-            }}
-          />
-        )}
-
         <Card>
           <CardHeader>
             <CardTitle>قائمة الموظفين</CardTitle>
@@ -171,16 +158,6 @@ export default function EmployeesPage() {
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => window.open(`/employees/${e.id}/documents`, '_blank')}
-                              className="text-purple-700 border-purple-200 hover:bg-purple-50"
-                              title="ملفات الموظف"
-                            >
-                              <FileText className="h-3 w-3" />
-                              وثائق
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
                               onClick={() => checkIn.mutate(e.id)}
                               loading={checkIn.isPending && checkIn.variables === e.id}
                             >
@@ -210,22 +187,11 @@ export default function EmployeesPage() {
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => setExtraPayEmployee(e)}
-                              className="text-blue-600 border-blue-200 hover:bg-blue-50"
-                              title="إضافة دفعة/مكافأة بمبلغ + سبب"
-                            >
-                              <Timer className="h-3 w-3" />
-                              دفعة إضافية
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
                               onClick={() => setOtEmployee(e)}
-                              className="text-zinc-600 border-zinc-200 hover:bg-zinc-50"
-                              title="عمل إضافي بالساعات (بحسب الدوام)"
+                              className="text-blue-600 border-blue-200 hover:bg-blue-50"
                             >
                               <Timer className="h-3 w-3" />
-                              ساعات
+                              عمل إضافي
                             </Button>
                           </div>
                         </td>
@@ -654,104 +620,6 @@ function OvertimeRow({
             </Button>
           </>
         )}
-      </div>
-    </div>
-  );
-}
-
-// ─── دفعة/مكافأة إضافية (مبلغ + سبب) ───────────────────────────
-function ExtraPaymentModal({
-  employee,
-  onClose,
-  onSaved,
-}: {
-  employee: any;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const toast = useToast();
-  const currentMonth = new Date().toISOString().slice(0, 7);
-  const [amount, setAmount] = useState('');
-  const [reason, setReason] = useState('');
-  const [month, setMonth] = useState(currentMonth);
-  const [saving, setSaving] = useState(false);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (saving) return; // منع النقر المتعدد
-    const amt = parseFloat(amount);
-    if (isNaN(amt) || amt <= 0) return toast.error('مبلغ غير صحيح');
-    if (!reason.trim()) return toast.error('السبب مطلوب');
-
-    setSaving(true);
-    try {
-      // اقرأ التعديل الحالي إن وُجد ثم أضف المكافأة الجديدة إلى bonus
-      const payroll = await api.get(`/employees/payroll?month=${month}`).then((r) => r.data);
-      const row = payroll?.rows?.find((r: any) => r.employeeId === employee.id);
-      const currentBonus = row?.bonus ?? 0;
-      const currentNotes = row?.notes ?? '';
-      const newBonus = Number(currentBonus) + amt;
-      const newNotes = currentNotes
-        ? `${currentNotes}\n${new Date().toLocaleDateString('ar-JO')} · ${amt} د.أ · ${reason}`
-        : `${new Date().toLocaleDateString('ar-JO')} · ${amt} د.أ · ${reason}`;
-
-      await api.post('/employees/payroll/adjustment', {
-        employeeId: employee.id,
-        month,
-        bonus: newBonus,
-        notes: newNotes,
-      });
-      onSaved();
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || 'تعذّر الحفظ');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-5 border-b border-zinc-100">
-          <div>
-            <h3 className="font-bold">دفعة إضافية — {employee.fullName}</h3>
-            <p className="text-xs text-zinc-500 mt-0.5">مثلاً: عمل نهاية الأسبوع، مكافأة أداء، بدل...</p>
-          </div>
-          <button onClick={onClose}>
-            <X className="h-5 w-5 text-zinc-400" />
-          </button>
-        </div>
-        <form onSubmit={submit} className="p-5 space-y-4">
-          <Input
-            label="المبلغ (د.أ) *"
-            type="number" step="0.01" value={amount}
-            onChange={(e) => setAmount(e.target.value)} required
-            placeholder="مثال: 250"
-          />
-          <Input
-            label="السبب / الملاحظة *"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="مثال: عمل نهاية الأسبوع"
-            required
-          />
-          <div className="space-y-1.5">
-            <label className="text-xs font-bold text-zinc-700">شهر الاحتساب</label>
-            <input
-              type="month"
-              value={month}
-              onChange={(e) => setMonth(e.target.value)}
-              className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
-            />
-          </div>
-          <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-3 text-xs text-emerald-800">
-            سيُضاف المبلغ إلى مكافأة الشهر ويظهر في كشف الرواتب فوراً. يمكنك مراجعته من صفحة الرواتب.
-          </div>
-          <div className="flex justify-end gap-3">
-            <Button type="button" variant="ghost" onClick={onClose}>إلغاء</Button>
-            <Button type="submit" loading={saving} disabled={saving}>حفظ</Button>
-          </div>
-        </form>
       </div>
     </div>
   );

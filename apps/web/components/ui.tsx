@@ -140,33 +140,6 @@ export function Stat({ label, value, unit, trend, hint, state = 'neutral' }: Sta
   );
 }
 
-// ─── Skeleton (loading placeholder) ──────────────────────────
-export function Skeleton({ className }: { className?: string }) {
-  return (
-    <div
-      className={cn(
-        'animate-pulse bg-zinc-100 rounded-md',
-        className || 'h-4 w-full',
-      )}
-    />
-  );
-}
-
-/** مجموعة صفوف skeleton للجداول */
-export function TableSkeleton({ rows = 5, cols = 4 }: { rows?: number; cols?: number }) {
-  return (
-    <div className="p-4 space-y-3">
-      {Array.from({ length: rows }).map((_, i) => (
-        <div key={i} className="flex gap-3">
-          {Array.from({ length: cols }).map((__, j) => (
-            <Skeleton key={j} className={cn('h-6', j === 0 ? 'w-24' : 'flex-1')} />
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 // ─── Badge ──────────────────────────────────────────────────
 type BadgeVariant = 'default' | 'success' | 'warning' | 'danger' | 'info';
 

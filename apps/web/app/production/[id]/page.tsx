@@ -339,12 +339,12 @@ export default function ProductionDetailPage() {
             )}
           </section>
 
-          {/* الألمنيوم — بالكيلوغرام */}
+          {/* الألمنيوم */}
           <section className="mb-6">
             <SectionHeader
               icon={<Layers className="h-4 w-4" />}
-              title="الألمنيوم (كغ)"
-              onAdd={() => setAluminumUsage([...aluminumUsage, { itemName: '', quantity: 0, unit: 'KG' }])}
+              title="الألمنيوم"
+              onAdd={() => setAluminumUsage([...aluminumUsage, { itemName: '', quantity: 0 }])}
               disabled={disabled}
             />
             {aluminumUsage.length === 0 ? (
@@ -367,21 +367,17 @@ export default function ProductionDetailPage() {
                       />
                     </div>
                     <div className="md:col-span-4">
-                      <div className="relative">
-                        <Input
-                          type="number"
-                          step="0.001"
-                          placeholder="الكمية بالكيلو"
-                          value={r.quantity}
-                          onChange={(e) => {
-                            const v = [...aluminumUsage];
-                            v[i] = { ...v[i], quantity: +e.target.value, unit: 'KG' };
-                            setAluminumUsage(v);
-                          }}
-                          disabled={disabled}
-                        />
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-zinc-400 pointer-events-none">كغ</span>
-                      </div>
+                      <Input
+                        type="number"
+                        placeholder="الكمية"
+                        value={r.quantity}
+                        onChange={(e) => {
+                          const v = [...aluminumUsage];
+                          v[i] = { ...v[i], quantity: +e.target.value };
+                          setAluminumUsage(v);
+                        }}
+                        disabled={disabled}
+                      />
                     </div>
                     <div className="md:col-span-1">
                       {!disabled && <RemoveBtn onClick={() => setAluminumUsage(aluminumUsage.filter((_, idx) => idx !== i))} />}
@@ -392,25 +388,22 @@ export default function ProductionDetailPage() {
             )}
           </section>
 
-          {/* الحليب — بالكيلوغرام (1 كيس = 25 كغ) */}
+          {/* الحليب */}
           <section>
             <SectionHeader
               icon={<Droplet className="h-4 w-4" />}
-              title="الحليب (كغ)"
-              onAdd={() => setMilkUsage([...milkUsage, { itemName: '', count: 0, quantity: 0, unit: 'KG' }])}
+              title="الحليب"
+              onAdd={() => setMilkUsage([...milkUsage, { itemName: '', count: 0, quantity: 0, unit: 'L' }])}
               disabled={disabled}
             />
-            <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded p-2 mb-2">
-              💡 عدد الأكياس × <b>25 كغ</b> = الكمية الإجمالية (تُحتسب تلقائياً). يمكنك تعديل الكمية يدوياً عند الحاجة.
-            </p>
             {milkUsage.length === 0 ? (
               <Empty text="لا يوجد حليب مسحوب" />
             ) : (
               <div className="space-y-2">
                 <div className="grid md:grid-cols-12 gap-2 text-xs font-bold text-zinc-500 uppercase">
                   <div className="md:col-span-5">الصنف</div>
-                  <div className="md:col-span-3">عدد الأكياس</div>
-                  <div className="md:col-span-3">الكمية (كغ)</div>
+                  <div className="md:col-span-3">العدد</div>
+                  <div className="md:col-span-3">الكمية</div>
                   <div className="md:col-span-1"></div>
                 </div>
                 {milkUsage.map((r, i) => (
@@ -431,33 +424,28 @@ export default function ProductionDetailPage() {
                     <div className="md:col-span-3">
                       <Input
                         type="number"
-                        placeholder="عدد الأكياس"
+                        placeholder="العدد"
                         value={r.count}
                         onChange={(e) => {
-                          const bags = +e.target.value;
                           const v = [...milkUsage];
-                          v[i] = { ...v[i], count: bags, quantity: bags * 25, unit: 'KG' };
+                          v[i] = { ...v[i], count: +e.target.value };
                           setMilkUsage(v);
                         }}
                         disabled={disabled}
                       />
                     </div>
                     <div className="md:col-span-3">
-                      <div className="relative">
-                        <Input
-                          type="number"
-                          step="0.001"
-                          placeholder="الكمية بالكغ"
-                          value={r.quantity}
-                          onChange={(e) => {
-                            const v = [...milkUsage];
-                            v[i] = { ...v[i], quantity: +e.target.value, unit: 'KG' };
-                            setMilkUsage(v);
-                          }}
-                          disabled={disabled}
-                        />
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-zinc-400 pointer-events-none">كغ</span>
-                      </div>
+                      <Input
+                        type="number"
+                        placeholder="الكمية"
+                        value={r.quantity}
+                        onChange={(e) => {
+                          const v = [...milkUsage];
+                          v[i] = { ...v[i], quantity: +e.target.value };
+                          setMilkUsage(v);
+                        }}
+                        disabled={disabled}
+                      />
                     </div>
                     <div className="md:col-span-1">
                       {!disabled && <RemoveBtn onClick={() => setMilkUsage(milkUsage.filter((_, idx) => idx !== i))} />}
@@ -632,11 +620,10 @@ export default function ProductionDetailPage() {
                       }}
                       disabled={disabled}
                       className="w-full h-10 px-2 rounded-lg border border-zinc-200 text-sm"
-                      title="الكرتون=قطعة · الحليب=كغ · الألمنيوم=كغ (أو غم)"
                     >
-                      <option value="PCS">قطعة (كرتون)</option>
-                      <option value="KG">كغ (حليب/ألمنيوم)</option>
-                      <option value="G">غم</option>
+                      <option value="PCS">قطعة</option>
+                      <option value="KG">كغ</option>
+                      <option value="L">لتر</option>
                     </select>
                   </div>
                   <div className="md:col-span-2 flex gap-1">
@@ -667,12 +654,12 @@ export default function ProductionDetailPage() {
             <div className="bg-white border border-zinc-200 rounded-lg p-3">
               <div className="text-xs text-zinc-500">إجمالي الحليب الخام</div>
               <div className="text-2xl font-black mt-1" data-numeric>{milkTotal.toLocaleString('en-US')}</div>
-              <div className="text-[10px] text-zinc-400">كغ</div>
+              <div className="text-[10px] text-zinc-400">لتر</div>
             </div>
             <div className="bg-white border border-zinc-200 rounded-lg p-3">
               <div className="text-xs text-zinc-500">إجمالي الألمنيوم</div>
               <div className="text-2xl font-black mt-1" data-numeric>{aluminumTotal.toLocaleString('en-US')}</div>
-              <div className="text-[10px] text-zinc-400">كغ</div>
+              <div className="text-[10px] text-zinc-400">قطعة/رول</div>
             </div>
             <div className="bg-white border border-zinc-200 rounded-lg p-3">
               <div className="text-xs text-zinc-500">إجمالي الكرتون</div>
