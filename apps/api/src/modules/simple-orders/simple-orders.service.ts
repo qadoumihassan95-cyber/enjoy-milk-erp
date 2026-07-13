@@ -26,23 +26,26 @@ export class SimpleOrdersService {
   // ─── List ─────────────────────────────────────────
   async list(
     tenantId: string,
-    opts: { status?: string; search?: string } = {},
+    opts: { status?: string; search?: string; orderType?: string } = {},
   ) {
     return this.prisma.simpleOrder.findMany({
       where: {
         tenantId,
         ...(opts.status && { status: opts.status }),
+        ...(opts.orderType && { orderType: opts.orderType }),
         ...(opts.search && {
           OR: [
             { customerName: { contains: opts.search, mode: 'insensitive' } },
             { customerPhone: { contains: opts.search } },
             { number: { contains: opts.search } },
+            { contractNumber: { contains: opts.search, mode: 'insensitive' } },
+            { shipmentTrackingNumber: { contains: opts.search, mode: 'insensitive' } },
           ],
         }),
       },
       include: { lines: true },
       orderBy: { orderDate: 'desc' },
-      take: 100,
+      take: 200,
     });
   }
 
@@ -86,6 +89,12 @@ export class SimpleOrdersService {
           status: this.computeStatus(paid, total),
           notes: data.notes ?? null,
           createdById: userId,
+          orderType: (data.orderType || 'INTERNAL').toUpperCase(),
+          contractNumber: data.contractNumber ?? null,
+          deliveryLocation: data.deliveryLocation ?? null,
+          expectedShippingDate: data.expectedShippingDate ? new Date(data.expectedShippingDate) : null,
+          expectedArrivalDate: data.expectedArrivalDate ? new Date(data.expectedArrivalDate) : null,
+          shipmentTrackingNumber: data.shipmentTrackingNumber ?? null,
           lines: {
             create: lines.map((l: any) => ({
               itemId: l.itemId ?? null,
@@ -228,6 +237,34 @@ export class SimpleOrdersService {
         },
         include: { lines: true },
       });
+    });
+  }
+
+  // ─── Update meta only (no line changes) ────────────
+  /**
+   * تحديث خفيف للحقول العلوية للطلبية (بدون تغيير البنود ولا المخزون):
+   * - نوع الطلبية، العميل، الشحن، العقد، التاريخ المتوقع...
+   */
+  async updateMeta(tenantId: string, id: string, data: any) {
+    const existing = await this.get(tenantId, id);
+    if (existing.status === 'CANCELLED') {
+      throw new BadRequestException('لا يمكن تعديل طلبية ملغاة');
+    }
+    return this.prisma.simpleOrder.update({
+      where: { id },
+      data: {
+        customerName: data.customerName ?? existing.customerName,
+        customerPhone: data.customerPhone ?? existing.customerPhone,
+        region: data.region ?? existing.region,
+        notes: data.notes ?? existing.notes,
+        orderType: data.orderType ?? existing.orderType,
+        contractNumber: data.contractNumber !== undefined ? (data.contractNumber || null) : existing.contractNumber,
+        deliveryLocation: data.deliveryLocation !== undefined ? (data.deliveryLocation || null) : existing.deliveryLocation,
+        expectedShippingDate: data.expectedShippingDate ? new Date(data.expectedShippingDate) : existing.expectedShippingDate,
+        expectedArrivalDate: data.expectedArrivalDate ? new Date(data.expectedArrivalDate) : existing.expectedArrivalDate,
+        shipmentTrackingNumber: data.shipmentTrackingNumber !== undefined ? (data.shipmentTrackingNumber || null) : existing.shipmentTrackingNumber,
+      },
+      include: { lines: true },
     });
   }
 

@@ -25,8 +25,9 @@ export class SimpleOrdersController {
     @CurrentUser() user: AuthenticatedUser,
     @Query('status') status?: string,
     @Query('search') search?: string,
+    @Query('orderType') orderType?: string,
   ) {
-    return this.service.list(user.tenantId, { status, search });
+    return this.service.list(user.tenantId, { status, search, orderType });
   }
 
   @Get('report')
@@ -51,6 +52,16 @@ export class SimpleOrdersController {
     @Body() body: any,
   ) {
     return this.service.update(user.tenantId, user.id, id, body);
+  }
+
+  /** تحديث الحقول العلوية فقط دون تعديل البنود ولا المخزون */
+  @Patch(':id/meta')
+  updateMeta(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    return this.service.updateMeta(user.tenantId, id, body);
   }
 
   @Post(':id/pay')

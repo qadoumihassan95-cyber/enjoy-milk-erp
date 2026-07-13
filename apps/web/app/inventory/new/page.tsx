@@ -23,6 +23,7 @@ export default function NewItemPage() {
     packsPerCarton: '',
     shelfLifeDays: '',
     reorderLevel: '',
+    productionReorderLevel: '',
     costPrice: '',
     sellPrice: '',
   });
@@ -40,6 +41,7 @@ export default function NewItemPage() {
         packsPerCarton: form.packsPerCarton ? +form.packsPerCarton : undefined,
         shelfLifeDays: form.shelfLifeDays ? +form.shelfLifeDays : undefined,
         reorderLevel: form.reorderLevel ? +form.reorderLevel : undefined,
+        productionReorderLevel: form.productionReorderLevel ? +form.productionReorderLevel : undefined,
         costPrice: form.costPrice ? +form.costPrice : undefined,
         sellPrice: form.sellPrice ? +form.sellPrice : undefined,
       });
@@ -142,13 +144,23 @@ export default function NewItemPage() {
               <CardTitle>الأسعار والمخزون</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid md:grid-cols-3 gap-4">
+              <div className="grid md:grid-cols-2 gap-4">
                 <Input
                   label="حد إعادة الطلب"
                   type="number"
                   value={form.reorderLevel}
                   onChange={(e) => update('reorderLevel', e.target.value)}
+                  hint="حد أدنى قبل التنبيه بإعادة الشراء"
                 />
+                <Input
+                  label="حد إعادة طلب الإنتاج"
+                  type="number"
+                  value={form.productionReorderLevel}
+                  onChange={(e) => update('productionReorderLevel', e.target.value)}
+                  hint="يُستخدم لتخطيط الإنتاج (مستقل عن إعادة الشراء)"
+                />
+              </div>
+              <div className="grid md:grid-cols-2 gap-4">
                 <Input
                   label="مدة الصلاحية (يوم)"
                   type="number"

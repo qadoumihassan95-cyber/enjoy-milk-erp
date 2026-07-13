@@ -909,7 +909,7 @@ export class TelegramService implements OnModuleInit {
     await this.sendMessage(
       chatId,
       `🥛 <b>أهلاً بك في بوت Enjoy Milk ERP</b>\n` +
-        `مصنع قصراوي إخوان\n\n` +
+        `مصنع الدانا لمنتجات الحليب واللبن\n\n` +
         `اختر من القائمة بالأسفل 👇`,
       this.mainMenu(),
     );

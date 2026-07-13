@@ -8,6 +8,10 @@ export interface AuditEntry {
   resource: string; // مسار/اسم المورد
   resourceId?: string;
   ip?: string;
+  userAgent?: string;
+  method?: string;
+  path?: string;
+  status?: number | null;
 }
 
 /**
@@ -32,6 +36,10 @@ export class AuditService {
           resource: entry.resource,
           resourceId: entry.resourceId ?? null,
           ip: entry.ip ?? null,
+          userAgent: entry.userAgent ?? null,
+          method: entry.method ?? null,
+          path: entry.path ?? null,
+          status: entry.status ?? null,
         },
       });
     } catch (err) {

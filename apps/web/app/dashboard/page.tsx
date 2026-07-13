@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/app-shell';
 import { Stat, Card, CardHeader, CardTitle, CardContent, Badge } from '@/components/ui';
@@ -28,7 +29,8 @@ export default function DashboardPage() {
           </Badge>
         </header>
 
-        <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* KPIs: أُزيلت المالية / إجمالي الكاش نهائياً حسب المطلوب */}
+        <section className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <Stat
             label="الإنتاج اليوم"
             value={isLoading ? '—' : formatNumber(data?.production?.totalOutput ?? 0)}
@@ -46,11 +48,6 @@ export default function DashboardPage() {
             state={(data?.production?.wastePct ?? 0) < 0.05 ? 'good' : 'warning'}
           />
           <Stat
-            label="إجمالي الكاش"
-            value={isLoading ? '—' : formatNumber(data?.finance?.totalBalance ?? 0, 0)}
-            unit="د.أ"
-          />
-          <Stat
             label="الحضور"
             value={
               isLoading ? '—' : `${data?.hr?.present ?? 0}/${data?.hr?.total ?? 0}`
@@ -60,65 +57,55 @@ export default function DashboardPage() {
           />
         </section>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>المخزون</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <Row label="إجمالي الأصناف" value={data?.inventory?.itemsCount ?? 0} />
-              <Row
-                label="منخفض"
-                value={data?.inventory?.lowStockCount ?? 0}
-                warning={(data?.inventory?.lowStockCount ?? 0) > 0}
-              />
-              <Row
-                label="قارب الانتهاء"
-                value={data?.inventory?.expiringBatches ?? 0}
-                warning={(data?.inventory?.expiringBatches ?? 0) > 0}
-              />
-            </CardContent>
-          </Card>
+        {/* بطاقات قابلة للنقر: المخزون والرخص فقط (تم حذف المالية) */}
+        <div className="grid md:grid-cols-2 gap-4">
+          <Link href="/inventory" className="block group focus:outline-none focus:ring-2 focus:ring-zinc-900/20 rounded-xl">
+            <Card className="hover:shadow-md transition-shadow cursor-pointer group-hover:border-zinc-300">
+              <CardHeader>
+                <CardTitle className="flex items-center justify-between">
+                  <span>المخزون</span>
+                  <span className="text-xs text-zinc-400 group-hover:text-zinc-700">فتح ←</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <Row label="إجمالي الأصناف" value={data?.inventory?.itemsCount ?? 0} />
+                <Row
+                  label="منخفض"
+                  value={data?.inventory?.lowStockCount ?? 0}
+                  warning={(data?.inventory?.lowStockCount ?? 0) > 0}
+                />
+                <Row
+                  label="قارب الانتهاء"
+                  value={data?.inventory?.expiringBatches ?? 0}
+                  warning={(data?.inventory?.expiringBatches ?? 0) > 0}
+                />
+              </CardContent>
+            </Card>
+          </Link>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>المالية</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <Row
-                label="الكاش الوارد اليوم"
-                value={`${formatNumber(data?.finance?.cashIn ?? 0, 2)} د.أ`}
-              />
-              <Row
-                label="الكاش الصادر اليوم"
-                value={`${formatNumber(data?.finance?.cashOut ?? 0, 2)} د.أ`}
-              />
-              <Row
-                label="شيكات قريبة الاستحقاق"
-                value={data?.finance?.upcomingChequesCount ?? 0}
-                warning={(data?.finance?.upcomingChequesCount ?? 0) > 0}
-              />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>الرخص</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <Row label="إجمالي" value={data?.licenses?.total ?? 0} />
-              <Row
-                label="قاربت على الانتهاء"
-                value={data?.licenses?.expiring ?? 0}
-                warning={(data?.licenses?.expiring ?? 0) > 0}
-              />
-              <Row
-                label="منتهية"
-                value={data?.licenses?.expired ?? 0}
-                danger={(data?.licenses?.expired ?? 0) > 0}
-              />
-            </CardContent>
-          </Card>
+          <Link href="/licenses" className="block group focus:outline-none focus:ring-2 focus:ring-zinc-900/20 rounded-xl">
+            <Card className="hover:shadow-md transition-shadow cursor-pointer group-hover:border-zinc-300">
+              <CardHeader>
+                <CardTitle className="flex items-center justify-between">
+                  <span>الرخص</span>
+                  <span className="text-xs text-zinc-400 group-hover:text-zinc-700">فتح ←</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <Row label="إجمالي" value={data?.licenses?.total ?? 0} />
+                <Row
+                  label="قاربت على الانتهاء"
+                  value={data?.licenses?.expiring ?? 0}
+                  warning={(data?.licenses?.expiring ?? 0) > 0}
+                />
+                <Row
+                  label="منتهية"
+                  value={data?.licenses?.expired ?? 0}
+                  danger={(data?.licenses?.expired ?? 0) > 0}
+                />
+              </CardContent>
+            </Card>
+          </Link>
         </div>
       </div>
     </AppShell>

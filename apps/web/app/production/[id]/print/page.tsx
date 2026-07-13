@@ -343,7 +343,7 @@ export default function ProductionPrintPage() {
       {/* ─── الرأس الرسمي ───────────────────────────────── */}
       <div className="factory-header">
         <div>
-          <div className="factory-name">مصنع قصراوي إخوان</div>
+          <div className="factory-name">مصنع الدانا لمنتجات الحليب واللبن</div>
           <div className="factory-sub">Enjoy Milk · مصنع حليب البودرة</div>
           <h1 className="report-title" style={{ marginTop: 8 }}>
             ورقة إنتاج يومية
@@ -483,7 +483,7 @@ export default function ProductionPrintPage() {
                     <td>{r.itemName ?? '—'}</td>
                     <td data-numeric>{r.count ?? '—'}</td>
                     <td data-numeric>{Number(r.quantity).toLocaleString('en-US')}</td>
-                    <td>{r.unit ?? 'L'}</td>
+                    <td>{r.unit ?? 'KG'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -693,7 +693,7 @@ export default function ProductionPrintPage() {
       </div>
 
       <div className="footer-note">
-        نظام Enjoy Milk ERP · مصنع قصراوي إخوان · طُبع في{' '}
+        نظام Enjoy Milk ERP · مصنع الدانا لمنتجات الحليب واللبن · طُبع في{' '}
         {new Date().toLocaleString('ar-EG')}
       </div>
     </div>

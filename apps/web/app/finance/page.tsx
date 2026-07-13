@@ -135,46 +135,100 @@ export default function FinancePage() {
 
   return (
     <AppShell>
-      <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6">
-        <header>
-          <h1 className="text-2xl md:text-3xl font-black tracking-tight">المالية</h1>
-          <p className="text-sm text-zinc-500 mt-0.5">التقرير المالي · الصندوق · الشيكات · المصاريف</p>
+      <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6 print:p-2 print:space-y-2">
+        <header className="flex items-center justify-between flex-wrap gap-3 print:hidden">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-black tracking-tight">المالية</h1>
+            <p className="text-sm text-zinc-500 mt-0.5">التقرير المالي · الصندوق · الشيكات · المصاريف</p>
+          </div>
+          <button
+            onClick={() => window.print()}
+            className="h-10 px-4 rounded-lg border border-zinc-200 text-sm font-bold hover:bg-zinc-50 inline-flex items-center gap-2"
+            title="طباعة كامل الصفحة المالية"
+          >
+            🖨️ طباعة الصفحة
+          </button>
         </header>
+
+        {/* رأس الطباعة */}
+        <div className="hidden print:block mb-3">
+          <h1 className="text-lg font-black">مصنع الدانا لمنتجات الحليب واللبن — التقرير المالي</h1>
+          <p className="text-xs text-zinc-500">
+            {new Date().toLocaleDateString('ar-JO', { dateStyle: 'long' })}
+          </p>
+        </div>
 
         {/* ─── التقرير المالي (الشهر الحالي) ─── */}
         <Card className="p-5">
           <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
             <h3 className="font-black text-lg">📊 التقرير المالي — الشهر الحالي</h3>
-            <span className="text-xs text-zinc-400">
-              {report ? `${report.from} → ${report.to}` : ''}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-zinc-400">
+                {report ? `${report.from} → ${report.to}` : ''}
+              </span>
+              <button
+                onClick={() => window.print()}
+                className="text-xs px-2 py-1 rounded border border-zinc-200 hover:bg-zinc-50 print:hidden"
+                title="طباعة"
+              >
+                🖨️
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-            <div className="rounded-xl bg-zinc-50 border border-zinc-100 p-3">
-              <div className="text-[10px] font-bold text-zinc-500 uppercase">المبيعات</div>
+            <a
+              href="/orders"
+              className="rounded-xl bg-zinc-50 border border-zinc-100 p-3 block hover:bg-zinc-100 hover:border-zinc-300 transition-colors cursor-pointer"
+              title="فتح كل الطلبيات"
+            >
+              <div className="text-[10px] font-bold text-zinc-500 uppercase flex items-center justify-between">
+                <span>المبيعات</span>
+                <span className="text-zinc-400 text-[9px]">فتح ←</span>
+              </div>
               <div className="text-xl font-black mt-1" data-numeric>
                 {formatNumber(report?.totalSales ?? 0, 0)} <span className="text-xs font-normal text-zinc-400">د.أ</span>
               </div>
-            </div>
-            <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-3">
-              <div className="text-[10px] font-bold text-emerald-700 uppercase">المحصّل</div>
+            </a>
+            <a
+              href="/orders?status=PAID"
+              className="rounded-xl bg-emerald-50 border border-emerald-100 p-3 block hover:bg-emerald-100 hover:border-emerald-300 transition-colors cursor-pointer"
+              title="الطلبيات المدفوعة"
+            >
+              <div className="text-[10px] font-bold text-emerald-700 uppercase flex items-center justify-between">
+                <span>المحصّل</span>
+                <span className="text-emerald-500 text-[9px]">فتح ←</span>
+              </div>
               <div className="text-xl font-black mt-1 text-emerald-700" data-numeric>
                 {formatNumber(report?.collected ?? 0, 0)}
               </div>
-            </div>
-            <div className="rounded-xl bg-amber-50 border border-amber-100 p-3">
-              <div className="text-[10px] font-bold text-amber-700 uppercase">مستحق (دين)</div>
+            </a>
+            <a
+              href="/orders?status=UNPAID"
+              className="rounded-xl bg-amber-50 border border-amber-100 p-3 block hover:bg-amber-100 hover:border-amber-300 transition-colors cursor-pointer"
+              title="الطلبيات غير المدفوعة"
+            >
+              <div className="text-[10px] font-bold text-amber-700 uppercase flex items-center justify-between">
+                <span>مستحق (دين)</span>
+                <span className="text-amber-500 text-[9px]">فتح ←</span>
+              </div>
               <div className="text-xl font-black mt-1 text-amber-700" data-numeric>
                 {formatNumber(report?.outstanding ?? 0, 0)}
               </div>
-            </div>
-            <div className="rounded-xl bg-red-50 border border-red-100 p-3">
-              <div className="text-[10px] font-bold text-red-700 uppercase">المصاريف</div>
+            </a>
+            <a
+              href="#expenses-section"
+              className="rounded-xl bg-red-50 border border-red-100 p-3 block hover:bg-red-100 hover:border-red-300 transition-colors cursor-pointer"
+              title="عرض قائمة المصاريف"
+            >
+              <div className="text-[10px] font-bold text-red-700 uppercase flex items-center justify-between">
+                <span>المصاريف</span>
+                <span className="text-red-500 text-[9px]">فتح ←</span>
+              </div>
               <div className="text-xl font-black mt-1 text-red-700" data-numeric>
                 {formatNumber(report?.totalExpenses ?? 0, 0)}
               </div>
-            </div>
+            </a>
           </div>
 
           {/* صافي الربح */}
@@ -246,10 +300,19 @@ export default function FinancePage() {
         </Card>
 
         {/* ─── إدارة المصاريف (إضافة + قائمة) ─── */}
-        <Card className="p-5">
-          <h3 className="font-black text-lg mb-4 flex items-center gap-2">
-            <Receipt className="h-5 w-5" /> المصاريف
-          </h3>
+        <Card className="p-5" id="expenses-section">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <h3 className="font-black text-lg flex items-center gap-2">
+              <Receipt className="h-5 w-5" /> المصاريف
+            </h3>
+            <button
+              onClick={() => window.print()}
+              className="text-xs px-2 py-1 rounded border border-zinc-200 hover:bg-zinc-50 print:hidden"
+              title="طباعة"
+            >
+              🖨️
+            </button>
+          </div>
 
           <form onSubmit={submitExpense} className="grid md:grid-cols-5 gap-3 mb-5">
             <div>
