@@ -126,6 +126,14 @@ model Item {
   lastPurchaseAt    DateTime?
   lastSaleAt        DateTime?
 
+  // ─── Extended metadata for the inline "add material" modal ───
+  nameEn             String?             // الاسم بالإنجليزي (اختياري)
+  category           String?             // التصنيف
+  notes              String?             // ملاحظات
+  defaultSupplierId  String?             // المورد الافتراضي (Supplier.id)
+  bagWeightKg        Decimal? @db.Decimal(18, 4)  // وزن الشوال (25 كغ لحليب)
+  gramsPerUnit       Decimal? @db.Decimal(18, 4)  // للتحويل غرام↔كغ
+
   active          Boolean          @default(true)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt

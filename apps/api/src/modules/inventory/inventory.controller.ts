@@ -107,11 +107,13 @@ export class InventoryController {
     return this.service.updateItemSettings(user.tenantId, id, body);
   }
 
+  @Roles('MANAGER', 'STAFF')  // إدارة المخزون + الموظف المُخوَّل
   @Post('items')
   createItem(@CurrentUser() user: AuthenticatedUser, @Body() body: any) {
     return this.service.createItem(user.tenantId, body);
   }
 
+  @Roles('MANAGER', 'STAFF')
   @Patch('items/:id')
   updateItem(
     @CurrentUser() user: AuthenticatedUser,

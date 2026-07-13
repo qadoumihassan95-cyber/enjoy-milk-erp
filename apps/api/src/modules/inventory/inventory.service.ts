@@ -121,13 +121,38 @@ export class InventoryService {
   }
 
   async createItem(tenantId: string, data: any) {
+    // ─── Validation: تحقق من التكرار (الاسم/SKU/الباركود) داخل نفس الـ tenant ───
+    const trimmedName = String(data.name || '').trim();
+    if (!trimmedName) {
+      throw new BadRequestException('اسم المادة مطلوب');
+    }
+    const sku = String(data.sku || '').trim() || undefined;
+    const barcode = String(data.barcode || '').trim() || undefined;
+
+    const dup = await this.prisma.item.findFirst({
+      where: {
+        tenantId,
+        OR: [
+          { name: trimmedName },
+          ...(sku ? [{ sku }] : []),
+          ...(barcode ? [{ barcode }] : []),
+        ],
+      },
+    });
+    if (dup) {
+      if (dup.name === trimmedName) throw new BadRequestException('يوجد مادة بنفس الاسم');
+      if (sku && dup.sku === sku) throw new BadRequestException('SKU مكرر');
+      if (barcode && dup.barcode === barcode) throw new BadRequestException('الباركود مكرر');
+    }
+
     return this.prisma.item.create({
       data: {
         tenantId,
-        sku: data.sku,
-        barcode: data.barcode,
-        name: data.name,
-        type: data.type,
+        // SKU إجباري في الـ schema — نولّده إن لم يُعطَ
+        sku: sku ?? `ITM-${Date.now().toString(36).toUpperCase()}`,
+        barcode,
+        name: trimmedName,
+        type: data.type ?? 'CONSUMABLE',
         unit: data.unit ?? 'PCS',
         netWeightGrams: data.netWeightGrams,
         packagingFormat: data.packagingFormat,
@@ -143,6 +168,14 @@ export class InventoryService {
         reorderQty: data.reorderQty ? new Prisma.Decimal(data.reorderQty) : null,
         safetyStock: data.safetyStock ? new Prisma.Decimal(data.safetyStock) : null,
         leadTimeDays: data.leadTimeDays ?? null,
+        // ─── Extended metadata ───
+        nameEn: data.nameEn?.trim() || null,
+        category: data.category?.trim() || null,
+        notes: data.notes?.trim() || null,
+        defaultSupplierId: data.defaultSupplierId || null,
+        bagWeightKg: data.bagWeightKg ? new Prisma.Decimal(data.bagWeightKg) : null,
+        gramsPerUnit: data.gramsPerUnit ? new Prisma.Decimal(data.gramsPerUnit) : null,
+        active: data.active === undefined ? true : Boolean(data.active),
       },
     });
   }
