@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search, Trash2, X, ShoppingCart, Phone, MapPin, Wallet, Receipt, Printer, Pencil, Building2, Truck } from 'lucide-react';
+import { Plus, Search, Trash2, X, ShoppingCart, Phone, MapPin, Wallet, Receipt, Printer, Pencil, Building2, Truck, Copy, Check } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { Card, Button, Input, Badge, Stat } from '@/components/ui';
 import { useToast } from '@/components/toast';
@@ -207,110 +207,176 @@ export default function OrdersPage() {
               <p className="text-zinc-500">لا توجد طلبيات</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <>
+            <div className="overflow-x-auto hidden md:block">
+              <table className="w-full text-sm min-w-[1400px]">
                 <thead className="bg-zinc-50 border-b">
                   <tr>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">رقم</th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">النوع</th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">العميل</th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">الهاتف</th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">المنطقة</th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">التاريخ</th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">الإجمالي</th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">المدفوع</th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">المتبقي</th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase">الحالة</th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase print:hidden">إجراء</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">رقم</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">النوع</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">العميل</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">الهاتف</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">المنطقة</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">التاريخ</th>
+                    {/* ─── الأعمدة الجديدة: بيانات الشحن ─── */}
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">موقع التسليم</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">رقم الشحنة</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">تاريخ الشحن</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">تاريخ الوصول</th>
+                    {/* ─── نهاية الأعمدة الجديدة ─── */}
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">الإجمالي</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">المدفوع</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">المتبقي</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">الحالة</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase print:hidden whitespace-nowrap sticky left-0 bg-zinc-50">إجراء</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {orders.map((o: any) => (
-                    <tr key={o.id} className="border-b border-zinc-100 hover:bg-zinc-50">
-                      <td className="p-3 font-mono text-xs">{o.number}</td>
-                      <td className="p-3">
-                        {o.orderType === 'EXTERNAL' ? (
-                          <Badge variant="info" dot>خارجية</Badge>
-                        ) : (
-                          <Badge variant="default" dot>داخلية</Badge>
-                        )}
-                      </td>
-                      <td className="p-3 font-medium">
-                        {o.customerId ? (
-                          <a
-                            href={`/customers/${o.customerId}`}
-                            className="text-zinc-900 hover:text-blue-600 hover:underline"
-                            title="فتح ملف العميل"
-                          >
-                            {o.customerName}
-                          </a>
-                        ) : (
-                          <span title="عميل حر (بدون ربط)">{o.customerName}</span>
-                        )}
-                      </td>
-                      <td className="p-3 text-zinc-600">{o.customerPhone || '-'}</td>
-                      <td className="p-3 text-zinc-600">{o.region || '-'}</td>
-                      <td className="p-3 text-zinc-600">{formatDate(o.orderDate)}</td>
-                      <td className="p-3 font-bold" data-numeric>
-                        {Number(o.total).toFixed(2)}
-                      </td>
-                      <td className="p-3 text-emerald-700" data-numeric>
-                        {Number(o.paid).toFixed(2)}
-                      </td>
-                      <td
-                        className={cn(
-                          'p-3 font-bold',
-                          Number(o.balance) > 0 ? 'text-amber-600' : 'text-zinc-500',
-                        )}
-                        data-numeric
-                      >
-                        {Number(o.balance).toFixed(2)}
-                      </td>
-                      <td className="p-3">
-                        {o.status === 'PAID' ? (
-                          <Badge variant="success" dot>مدفوع</Badge>
-                        ) : o.status === 'PARTIAL' ? (
-                          <Badge variant="warning" dot>جزئي</Badge>
-                        ) : (
-                          <Badge variant="danger" dot>غير مدفوع</Badge>
-                        )}
-                      </td>
-                      <td className="p-3 flex gap-1 print:hidden">
-                        <button
-                          onClick={() => setPaymentsOrder(o)}
-                          className="text-xs px-2 py-1 rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 font-bold inline-flex items-center gap-1"
-                          title="الدفعات"
+                  {orders.map((o: any) => {
+                    const isExternal = o.orderType === 'EXTERNAL';
+                    return (
+                      <tr key={o.id} className="border-b border-zinc-100 hover:bg-zinc-50">
+                        <td className="p-3 font-mono text-xs whitespace-nowrap">{o.number}</td>
+                        <td className="p-3">
+                          {isExternal ? (
+                            <Badge variant="info" dot>خارجية</Badge>
+                          ) : (
+                            <Badge variant="default" dot>داخلية</Badge>
+                          )}
+                        </td>
+                        <td className="p-3 font-medium whitespace-nowrap">
+                          {o.customerId ? (
+                            <a
+                              href={`/customers/${o.customerId}`}
+                              className="text-zinc-900 hover:text-blue-600 hover:underline"
+                              title="فتح ملف العميل"
+                            >
+                              {o.customerName}
+                            </a>
+                          ) : (
+                            <span title="عميل حر (بدون ربط)">{o.customerName}</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-zinc-600 whitespace-nowrap">{o.customerPhone || '—'}</td>
+                        <td className="p-3 text-zinc-600 whitespace-nowrap">{o.region || '—'}</td>
+                        <td className="p-3 text-zinc-600 whitespace-nowrap">{formatDate(o.orderDate)}</td>
+                        {/* ─── القيم الجديدة: الشحن ─── */}
+                        <td className="p-3 text-zinc-700 max-w-[180px]">
+                          <LocationCell value={o.deliveryLocation} isExternal={isExternal} />
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          <TrackingCell value={o.shipmentTrackingNumber} isExternal={isExternal} />
+                        </td>
+                        <td className="p-3 text-zinc-600 whitespace-nowrap">
+                          {isExternal
+                            ? (o.expectedShippingDate ? formatDate(o.expectedShippingDate) : '—')
+                            : '—'}
+                        </td>
+                        <td className="p-3 text-zinc-600 whitespace-nowrap">
+                          {isExternal
+                            ? (o.expectedArrivalDate ? formatDate(o.expectedArrivalDate) : '—')
+                            : '—'}
+                        </td>
+                        {/* ─── نهاية القيم الجديدة ─── */}
+                        <td className="p-3 font-bold whitespace-nowrap" data-numeric>
+                          {Number(o.total).toFixed(2)}
+                        </td>
+                        <td className="p-3 text-emerald-700 whitespace-nowrap" data-numeric>
+                          {Number(o.paid).toFixed(2)}
+                        </td>
+                        <td
+                          className={cn(
+                            'p-3 font-bold whitespace-nowrap',
+                            Number(o.balance) > 0 ? 'text-amber-600' : 'text-zinc-500',
+                          )}
+                          data-numeric
                         >
-                          <Receipt className="h-3 w-3" /> دفعات
-                        </button>
-                        {Number(o.balance) > 0 && (
+                          {Number(o.balance).toFixed(2)}
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          {o.status === 'PAID' ? (
+                            <Badge variant="success" dot>مدفوع</Badge>
+                          ) : o.status === 'PARTIAL' ? (
+                            <Badge variant="warning" dot>جزئي</Badge>
+                          ) : (
+                            <Badge variant="danger" dot>غير مدفوع</Badge>
+                          )}
+                        </td>
+                        <td className="p-3 flex gap-1 print:hidden whitespace-nowrap sticky left-0 bg-white group-hover:bg-zinc-50">
                           <button
                             onClick={() => setPaymentsOrder(o)}
-                            className="text-xs px-2 py-1 rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-bold inline-flex items-center gap-1"
+                            className="text-xs px-2 py-1 rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 font-bold inline-flex items-center gap-1"
+                            title="الدفعات"
                           >
-                            <Wallet className="h-3 w-3" /> دفعة
+                            <Receipt className="h-3 w-3" /> دفعات
                           </button>
-                        )}
-                        <button
-                          onClick={() => setEditingOrder(o)}
-                          className="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold inline-flex items-center gap-1"
-                          title="تعديل"
-                        >
-                          <Pencil className="h-3 w-3" /> تعديل
-                        </button>
-                        <button
-                          onClick={() => remove(o.id)}
-                          className="text-red-500 hover:text-red-700 p-1"
-                          title="حذف"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                          {Number(o.balance) > 0 && (
+                            <button
+                              onClick={() => setPaymentsOrder(o)}
+                              className="text-xs px-2 py-1 rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-bold inline-flex items-center gap-1"
+                            >
+                              <Wallet className="h-3 w-3" /> دفعة
+                            </button>
+                          )}
+                          <button
+                            onClick={() => setEditingOrder(o)}
+                            className="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold inline-flex items-center gap-1"
+                            title="تعديل"
+                          >
+                            <Pencil className="h-3 w-3" /> تعديل
+                          </button>
+                          <button
+                            onClick={() => remove(o.id)}
+                            className="text-red-500 hover:text-red-700 p-1"
+                            title="حذف"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
+
+            {/* ─── بطاقات جوّال (mobile only) لعرض بيانات الشحن كاملة ── */}
+            <div className="md:hidden divide-y divide-zinc-100">
+              {orders.map((o: any) => {
+                const isExternal = o.orderType === 'EXTERNAL';
+                return (
+                  <div key={`m-${o.id}`} className="p-3 space-y-2 text-sm">
+                    <div className="flex items-center justify-between">
+                      <div className="font-mono text-xs text-zinc-500">{o.number}</div>
+                      {isExternal ? (
+                        <Badge variant="info" dot>خارجية</Badge>
+                      ) : (
+                        <Badge variant="default" dot>داخلية</Badge>
+                      )}
+                    </div>
+                    <div className="font-bold">{o.customerName}</div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[12px]">
+                      <MobileField label="الهاتف" value={o.customerPhone || '—'} />
+                      <MobileField label="المنطقة" value={o.region || '—'} />
+                      <MobileField label="التاريخ" value={formatDate(o.orderDate)} />
+                      <MobileField label="موقع التسليم" value={isExternal ? (o.deliveryLocation || '—') : '—'} />
+                      <MobileField label="رقم الشحنة" value={isExternal ? (o.shipmentTrackingNumber || '—') : '—'} mono />
+                      <MobileField label="تاريخ الشحن" value={isExternal && o.expectedShippingDate ? formatDate(o.expectedShippingDate) : '—'} />
+                      <MobileField label="تاريخ الوصول" value={isExternal && o.expectedArrivalDate ? formatDate(o.expectedArrivalDate) : '—'} />
+                      <MobileField label="الإجمالي" value={Number(o.total).toFixed(2)} />
+                      <MobileField label="المدفوع" value={Number(o.paid).toFixed(2)} />
+                      <MobileField label="المتبقي" value={Number(o.balance).toFixed(2)} />
+                    </div>
+                    <div className="flex gap-1 pt-1">
+                      <button onClick={() => setPaymentsOrder(o)} className="text-xs px-2 py-1 rounded bg-zinc-100 flex-1"><Receipt className="h-3 w-3 inline" /> دفعات</button>
+                      <button onClick={() => setEditingOrder(o)} className="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700 flex-1"><Pencil className="h-3 w-3 inline" /> تعديل</button>
+                      <button onClick={() => remove(o.id)} className="text-xs px-2 py-1 rounded text-red-500"><Trash2 className="h-3.5 w-3.5 inline" /></button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            </>
           )}
         </Card>
 
@@ -933,5 +999,65 @@ function NewOrderForm({
         </div>
       </form>
     </Card>
+  );
+}
+
+/* ═════════════════════════════════════════════
+   Helpers — بيانات الشحن في جدول الطلبيات
+════════════════════════════════════════════ */
+
+// موقع التسليم — يُقصر بصرياً ويعرض القيمة الكاملة في tooltip
+function LocationCell({ value, isExternal }: { value?: string | null; isExternal: boolean }) {
+  if (!isExternal) return <span className="text-zinc-400">—</span>;
+  if (!value) return <span className="text-zinc-400">—</span>;
+  return (
+    <span
+      className="block truncate max-w-[180px] cursor-help"
+      title={value}
+    >
+      {value}
+    </span>
+  );
+}
+
+// رقم الشحنة — قابل للنسخ بضغطة واحدة + مؤشر نجاح لحظي
+function TrackingCell({ value, isExternal }: { value?: string | null; isExternal: boolean }) {
+  const [copied, setCopied] = useState(false);
+  if (!isExternal) return <span className="text-zinc-400">—</span>;
+  if (!value) return <span className="text-zinc-400">—</span>;
+  const doCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* المتصفح لا يدعم — تجاهل */
+    }
+  };
+  return (
+    <span className="inline-flex items-center gap-1 font-mono text-xs">
+      <span title={value}>{value}</span>
+      <button
+        type="button"
+        onClick={doCopy}
+        className={cn(
+          'p-1 rounded transition-colors',
+          copied ? 'text-emerald-600' : 'text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100',
+        )}
+        title="نسخ رقم الشحنة"
+      >
+        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+      </button>
+    </span>
+  );
+}
+
+// حقل داخل بطاقة الموبايل
+function MobileField({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
+  return (
+    <div>
+      <div className="text-[10px] text-zinc-400 font-bold uppercase">{label}</div>
+      <div className={cn('text-zinc-800', mono && 'font-mono text-[11px]')}>{value}</div>
+    </div>
   );
 }
