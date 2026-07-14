@@ -150,9 +150,14 @@ export class InventoryController {
   listMovements(
     @CurrentUser() user: AuthenticatedUser,
     @Query('limit') limit?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('itemId') itemId?: string,
+    @Query('type') type?: string,
   ) {
     return this.service.listMovements(user.tenantId, {
-      limit: limit ? +limit : 50,
+      limit: limit ? +limit : 500,
+      from, to, itemId, type,
     });
   }
 

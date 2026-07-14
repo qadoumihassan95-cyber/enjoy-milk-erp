@@ -361,16 +361,31 @@ export class InventoryService {
     }
   }
 
-  async listMovements(tenantId: string, opts: { limit?: number } = {}) {
+  async listMovements(
+    tenantId: string,
+    opts: { limit?: number; from?: string; to?: string; itemId?: string; type?: string } = {},
+  ) {
+    const where: any = { tenantId };
+    if (opts.itemId) where.itemId = opts.itemId;
+    if (opts.type) where.type = opts.type;
+    if (opts.from || opts.to) {
+      where.performedAt = {};
+      if (opts.from) where.performedAt.gte = new Date(opts.from);
+      if (opts.to) {
+        const t = new Date(opts.to);
+        t.setDate(t.getDate() + 1);
+        where.performedAt.lt = t;
+      }
+    }
     return this.prisma.stockMovement.findMany({
-      where: { tenantId },
+      where,
       include: {
         item: true,
         fromWarehouse: true,
         toWarehouse: true,
       },
       orderBy: { performedAt: 'desc' },
-      take: opts.limit ?? 50,
+      take: opts.limit ?? 500,
     });
   }
 
