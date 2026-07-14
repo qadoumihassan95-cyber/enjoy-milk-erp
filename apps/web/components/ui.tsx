@@ -56,25 +56,36 @@ interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ label, hint, error, big, className, ...props }, ref) => (
-    <div className="space-y-1.5">
-      {label && <label className="text-xs font-bold text-zinc-700 block">{label}</label>}
-      <input
-        ref={ref}
-        className={cn(
-          'w-full rounded-lg border border-zinc-200 bg-white text-zinc-900 placeholder:text-zinc-400',
-          'focus:border-zinc-900 focus:ring-2 focus:ring-zinc-900/10 focus:outline-none',
-          'transition-colors duration-150',
-          error && 'border-red-500',
-          big ? 'h-14 px-4 text-2xl font-black text-center' : 'h-10 px-3 text-sm',
-          className,
-        )}
-        {...props}
-      />
-      {error && <p className="text-xs text-red-600">{error}</p>}
-      {hint && !error && <p className="text-xs text-zinc-500">{hint}</p>}
-    </div>
-  ),
+  ({ label, hint, error, big, className, type, onWheel, inputMode, ...props }, ref) => {
+    const isNumber = type === 'number';
+    return (
+      <div className="space-y-1.5">
+        {label && <label className="text-xs font-bold text-zinc-700 block">{label}</label>}
+        <input
+          ref={ref}
+          type={type}
+          // مهم: نمنع Wheel من تغيير قيمة الأرقام تلقائياً عند التمرير داخل حقل مركّز.
+          onWheel={(e) => {
+            if (isNumber) (e.target as HTMLInputElement).blur();
+            onWheel?.(e);
+          }}
+          // على الموبايل نُظهر لوحة أرقام مناسبة للأرقام العشرية
+          inputMode={inputMode ?? (isNumber ? 'decimal' : undefined)}
+          className={cn(
+            'w-full rounded-lg border border-zinc-200 bg-white text-zinc-900 placeholder:text-zinc-400',
+            'focus:border-zinc-900 focus:ring-2 focus:ring-zinc-900/10 focus:outline-none',
+            'transition-colors duration-150',
+            error && 'border-red-500',
+            big ? 'h-14 px-4 text-2xl font-black text-center' : 'h-10 px-3 text-sm',
+            className,
+          )}
+          {...props}
+        />
+        {error && <p className="text-xs text-red-600">{error}</p>}
+        {hint && !error && <p className="text-xs text-zinc-500">{hint}</p>}
+      </div>
+    );
+  },
 );
 Input.displayName = 'Input';
 

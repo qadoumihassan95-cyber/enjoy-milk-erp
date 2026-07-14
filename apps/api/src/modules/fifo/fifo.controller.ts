@@ -71,23 +71,30 @@ export class FifoController {
   @Post('settings')
   async setSettings(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() body: { costingMethod?: string; costingCurrency?: string },
+    @Body() body: { costingMethod?: string; costingCurrency?: string; baseCurrency?: string },
   ) {
     // حالياً FIFO فقط مسموح
     const method = body.costingMethod === 'FIFO' ? 'FIFO' : 'FIFO';
+    // ─── العملة الأساسية ─
+    const allowed = ['JOD', 'USD'];
+    const baseCurrency = body.baseCurrency && allowed.includes(body.baseCurrency)
+      ? body.baseCurrency
+      : undefined;
     return this.prisma.tenantSetting.upsert({
       where: { tenantId: user.tenantId },
       create: {
         tenantId: user.tenantId,
         costingMethod: method,
         costingCurrency: body.costingCurrency ?? 'JOD',
+        baseCurrency: baseCurrency ?? 'JOD',
         updatedById: user.id,
-      },
+      } as any,
       update: {
         costingMethod: method,
         costingCurrency: body.costingCurrency ?? undefined,
+        ...(baseCurrency ? { baseCurrency } : {}),
         updatedById: user.id,
-      },
+      } as any,
     });
   }
 }

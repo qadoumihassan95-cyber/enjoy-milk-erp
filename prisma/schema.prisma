@@ -716,6 +716,11 @@ model Expense {
   createdById String?
   createdAt   DateTime @default(now())
 
+  // ─── دعم عدة عملات ────────────────────────────
+  currency      String   @default("JOD")
+  exchangeRate  Decimal  @db.Decimal(18, 6) @default(1)
+  amountInBase  Decimal  @db.Decimal(18, 3) @default(0)
+
   @@unique([tenantId, number])
   @@index([tenantId, expenseDate])
 }
@@ -1182,6 +1187,14 @@ model SimpleOrder {
   shippingCost  Decimal  @db.Decimal(18, 2) @default(0)
   productsTotal Decimal  @db.Decimal(18, 2) @default(0)
 
+  // ─── دعم عدة عملات (JOD/USD) ────────────────────
+  // currency: العملة التي أُنشئت بها المعاملة.
+  // exchangeRate: سعر الصرف المحفوظ وقت المعاملة (baseCurrency per transactionCurrency).
+  // amountInBase: الإجمالي مُحوَّلاً للعملة الأساسية — يُستخدم في التقارير المُجمَّعة.
+  currency      String   @default("JOD")
+  exchangeRate  Decimal  @db.Decimal(18, 6) @default(1)
+  amountInBase  Decimal  @db.Decimal(18, 3) @default(0)
+
   lines    SimpleOrderLine[]
   payments SimpleOrderPayment[]
 
@@ -1206,6 +1219,11 @@ model SimpleOrderPayment {
   notes       String?
   createdById String?
   createdAt   DateTime @default(now())
+
+  // ─── دعم عدة عملات ────────────────────────────
+  currency      String   @default("JOD")
+  exchangeRate  Decimal  @db.Decimal(18, 6) @default(1)
+  amountInBase  Decimal  @db.Decimal(18, 3) @default(0)
 
   order SimpleOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
@@ -1302,6 +1320,9 @@ model TenantSetting {
   // ملاحظة: Prisma يقبل numeric literals بشكل قياسي، ونسمّي القيم بالكسر العشري.
   employeeSSRate        Decimal  @db.Decimal(6, 4) @default(0.075)   // 7.5%
   companySSRate         Decimal  @db.Decimal(6, 4) @default(0.1425)  // 14.25%
+
+  // ─── العملة الأساسية للنظام (JOD | USD) ─────────
+  baseCurrency          String   @default("JOD")
 
   updatedById           String?
   updatedAt             DateTime @updatedAt

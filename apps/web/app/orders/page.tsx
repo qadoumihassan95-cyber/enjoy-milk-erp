@@ -763,6 +763,9 @@ function NewOrderForm({
     shipmentTrackingNumber: '',
     tonPrice: '',        // سعر الطن الافتراضي على مستوى الطلبية
     shippingCost: '',    // أجور الشحن
+    // ─── العملة وسعر الصرف ───
+    currency: 'JOD' as 'JOD' | 'USD',
+    exchangeRate: '1',
   });
   const [lines, setLines] = useState<any[]>([
     { productName: '', size: '', quantity: 1, unitPrice: 0, itemId: '', unit: 'PCS', tonPrice: '' },
@@ -806,6 +809,8 @@ function NewOrderForm({
         shipmentTrackingNumber: form.shipmentTrackingNumber || undefined,
         tonPrice: form.tonPrice ? Number(form.tonPrice) : undefined,
         shippingCost: form.shippingCost ? Number(form.shippingCost) : 0,
+        currency: form.currency,
+        exchangeRate: Number(form.exchangeRate) || 1,
         lines: lines.map((l) => ({
           ...l,
           tonPrice: l.tonPrice ? Number(l.tonPrice) : undefined,
@@ -910,7 +915,7 @@ function NewOrderForm({
           {/* ─── الحقول الجديدة: سعر الطن + أجور الشحن (للطلبيات الخارجية) ─ */}
           <div className="grid md:grid-cols-2 gap-3 mt-3">
             <Input
-              label="سعر الطن (د.أ) — Ton Price"
+              label="سعر الطن — Ton Price"
               type="number"
               step="0.01"
               value={form.tonPrice}
@@ -918,13 +923,45 @@ function NewOrderForm({
               hint="افتراضي لجميع الأسطر ذات وحدة TON — يمكن تجاوزه لكل سطر"
             />
             <Input
-              label="أجور الشحن (د.أ) — Shipping Cost"
+              label="أجور الشحن — Shipping Cost"
               type="number"
               step="0.01"
               value={form.shippingCost}
               onChange={(e) => setForm({ ...form, shippingCost: e.target.value })}
               hint="يُضاف إلى إجمالي البضاعة لينتج الإجمالي النهائي"
             />
+          </div>
+
+          {/* ─── العملة وسعر الصرف ─ */}
+          <div className="grid md:grid-cols-3 gap-3 mt-3">
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-zinc-700 block">العملة *</label>
+              <select
+                value={form.currency}
+                onChange={(e) => setForm({ ...form, currency: e.target.value as any, exchangeRate: e.target.value === 'JOD' ? '1' : form.exchangeRate })}
+                className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+              >
+                <option value="JOD">الدينار الأردني (JOD)</option>
+                <option value="USD">الدولار الأمريكي (USD)</option>
+              </select>
+            </div>
+            <Input
+              label="سعر الصرف (لكل 1 من العملة → JOD)"
+              type="number"
+              step="0.000001"
+              value={form.exchangeRate}
+              onChange={(e) => setForm({ ...form, exchangeRate: e.target.value })}
+              disabled={form.currency === 'JOD'}
+              hint={form.currency === 'USD' ? 'مثال: 0.709 يعني 1 USD = 0.709 JOD' : 'JOD = العملة الأساسية (1)'}
+            />
+            {form.currency !== 'JOD' && (
+              <div className="rounded-lg bg-blue-50 border border-blue-100 p-2 text-xs text-blue-800 flex flex-col justify-center">
+                <div className="font-bold">المكافئ بالـ JOD:</div>
+                <div className="text-sm font-black mt-1">
+                  {((productsTotal + Number(form.shippingCost || 0)) * (Number(form.exchangeRate) || 1)).toFixed(3)} د.أ
+                </div>
+              </div>
+            )}
           </div>
         </Card>
 

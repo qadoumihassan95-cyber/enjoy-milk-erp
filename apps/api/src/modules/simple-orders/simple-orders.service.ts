@@ -137,6 +137,10 @@ export class SimpleOrdersService {
           expectedShippingDate: data.expectedShippingDate ? new Date(data.expectedShippingDate) : null,
           expectedArrivalDate: data.expectedArrivalDate ? new Date(data.expectedArrivalDate) : null,
           shipmentTrackingNumber: data.shipmentTrackingNumber ?? null,
+          // ─── العملة وسعر الصرف ─
+          currency: (data.currency || 'JOD').toUpperCase(),
+          exchangeRate: new Prisma.Decimal(Number(data.exchangeRate) || 1),
+          amountInBase: new Prisma.Decimal(total * (Number(data.exchangeRate) || 1)),
           lines: {
             create: lines.map((l: any, i: number) => {
               const c = computed[i];

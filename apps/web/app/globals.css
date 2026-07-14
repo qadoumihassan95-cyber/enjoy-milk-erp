@@ -34,3 +34,18 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #a1a1aa;
 }
+
+/* ═══════════════════════════════════════════════
+   Numeric inputs — hide spinner arrows globally
+   يبقى النوع number لدعم لوحة الأرقام والتحقق.
+═══════════════════════════════════════════════ */
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
