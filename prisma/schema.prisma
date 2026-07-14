@@ -821,15 +821,21 @@ model PayrollAdjustment {
 // ─── COMPLIANCE ────────────────────────────────────────────────────────
 
 model License {
-  id         String        @id @default(cuid())
-  tenantId   String
-  type       String
-  number     String
-  issueDate  DateTime
-  expiryDate DateTime
-  status     LicenseStatus @default(VALID)
-  notes      String?
-  createdAt  DateTime      @default(now())
+  id                   String        @id @default(cuid())
+  tenantId             String
+  type                 String
+  number               String
+  issueDate            DateTime
+  expiryDate           DateTime
+  status               LicenseStatus @default(VALID)
+  notes                String?
+  // ─── حقول ممتدة للتعديل ───────────────────────────
+  issuingAuthority     String?       // الجهة المصدرة
+  renewalReminderDays  Int?          // عدد أيام التذكير قبل الانتهاء
+  attachmentUrl        String?       // رابط مرفق (أو data URL)
+  attachmentName       String?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt @default(now())
 
   @@unique([tenantId, type, number])
   @@index([tenantId, expiryDate])
