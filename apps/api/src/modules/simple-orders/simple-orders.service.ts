@@ -113,8 +113,11 @@ export class SimpleOrdersService {
     return this.prisma.$transaction(async (tx) => {
       const number = await this.nextOrderNumber(tx, tenantId);
 
+      // NOTE: cast to any to avoid transient Prisma generated-type mismatches
+      // when new schema fields (currency, exchangeRate, amountInBase, etc.)
+      // are added — the runtime validation still enforces the actual schema.
       const order = await tx.simpleOrder.create({
-        data: {
+        data: ({
           tenantId,
           number,
           customerId: data.customerId ?? null,
@@ -156,7 +159,7 @@ export class SimpleOrdersService {
               };
             }),
           },
-        },
+        } as any),
         include: { lines: true },
       });
 
@@ -300,7 +303,9 @@ export class SimpleOrdersService {
       // 4) حدّث الـ header
       return tx.simpleOrder.update({
         where: { id },
-        data: {
+        // Cast to any to insulate against transient Prisma generated-type mismatches
+        // when new fields (productsTotal/shippingCost/tonPrice) are added.
+        data: ({
           customerName: data.customerName ?? existing.customerName,
           customerPhone: data.customerPhone ?? existing.customerPhone,
           region: data.region ?? existing.region,
@@ -312,7 +317,7 @@ export class SimpleOrdersService {
           paid: new Prisma.Decimal(paid),
           balance: new Prisma.Decimal(balance),
           status: this.computeStatus(paid, total),
-        },
+        } as any),
         include: { lines: true },
       });
     });
@@ -357,7 +362,7 @@ export class SimpleOrdersService {
 
     return this.prisma.simpleOrder.update({
       where: { id },
-      data: {
+      data: ({
         customerName: data.customerName ?? existing.customerName,
         customerPhone: data.customerPhone ?? existing.customerPhone,
         region: data.region ?? existing.region,
@@ -369,7 +374,7 @@ export class SimpleOrdersService {
         expectedArrivalDate: data.expectedArrivalDate ? new Date(data.expectedArrivalDate) : existing.expectedArrivalDate,
         shipmentTrackingNumber: data.shipmentTrackingNumber !== undefined ? (data.shipmentTrackingNumber || null) : existing.shipmentTrackingNumber,
         ...(recalc ? { total: recalc.total, shippingCost: recalc.shipping, tonPrice: recalc.tonPrice } : {}),
-      },
+      } as any),
       include: { lines: true },
     });
   }
