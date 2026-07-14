@@ -223,10 +223,15 @@ export default function OrdersPage() {
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">رقم الشحنة</th>
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">تاريخ الشحن</th>
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">تاريخ الوصول</th>
-                    {/* ─── نهاية الأعمدة الجديدة ─── */}
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">الإجمالي</th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">المدفوع</th>
-                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">المتبقي</th>
+                    {/* ─── أعمدة مالية جديدة (سعر الطن + الشحن) ─── */}
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap bg-sky-50">الكمية بالطن</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap bg-sky-50">سعر الطن</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap bg-sky-50">إجمالي البضاعة</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap bg-sky-50">أجور الشحن</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap bg-cyan-50">الإجمالي النهائي</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap bg-emerald-50">المسدد</th>
+                    <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap bg-amber-50">المتبقي</th>
+                    {/* الأعمدة القديمة للـ backward compat محذوفة لأنها مُدمجة أعلاه */}
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase whitespace-nowrap">الحالة</th>
                     <th className="text-right p-3 text-[10px] font-bold text-zinc-500 uppercase print:hidden whitespace-nowrap sticky left-0 bg-zinc-50">إجراء</th>
                   </tr>
@@ -277,22 +282,32 @@ export default function OrdersPage() {
                             ? (o.expectedArrivalDate ? formatDate(o.expectedArrivalDate) : '—')
                             : '—'}
                         </td>
-                        {/* ─── نهاية القيم الجديدة ─── */}
-                        <td className="p-3 font-bold whitespace-nowrap" data-numeric>
-                          {Number(o.total).toFixed(2)}
-                        </td>
-                        <td className="p-3 text-emerald-700 whitespace-nowrap" data-numeric>
-                          {Number(o.paid).toFixed(2)}
-                        </td>
-                        <td
-                          className={cn(
-                            'p-3 font-bold whitespace-nowrap',
-                            Number(o.balance) > 0 ? 'text-amber-600' : 'text-zinc-500',
-                          )}
-                          data-numeric
-                        >
-                          {Number(o.balance).toFixed(2)}
-                        </td>
+                        {/* ─── القيم المالية الجديدة ─── */}
+                        {(() => {
+                          // نجمع كميات الطن من الأسطر ذات الوحدة TON، وإجمالي البضاعة + الشحن
+                          const lines = o.lines ?? [];
+                          const tonsQty = lines
+                            .filter((l: any) => String(l.unit || '').toUpperCase() === 'TON')
+                            .reduce((s: number, l: any) => s + Number(l.quantity || 0), 0);
+                          const productsTotal = Number(o.productsTotal ?? 0) || lines.reduce((s: number, l: any) => s + Number(l.lineTotal || 0), 0);
+                          const shipping = Number(o.shippingCost ?? 0);
+                          const total = Number(o.total ?? 0);
+                          const paid = Number(o.paid ?? 0);
+                          const balance = Number(o.balance ?? 0);
+                          const showFin = isExternal || tonsQty > 0;
+                          const fmt = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                          return (
+                            <>
+                              <td className="p-3 whitespace-nowrap bg-sky-50/40" data-numeric>{showFin && tonsQty > 0 ? fmt(tonsQty) : '—'}</td>
+                              <td className="p-3 whitespace-nowrap bg-sky-50/40" data-numeric>{o.tonPrice != null ? fmt(Number(o.tonPrice)) : '—'}</td>
+                              <td className="p-3 font-bold whitespace-nowrap bg-sky-50/40" data-numeric>{fmt(productsTotal)}</td>
+                              <td className="p-3 whitespace-nowrap bg-sky-50/40" data-numeric>{shipping > 0 || isExternal ? fmt(shipping) : '—'}</td>
+                              <td className="p-3 font-black whitespace-nowrap bg-cyan-50/60" data-numeric>{fmt(total)}</td>
+                              <td className="p-3 text-emerald-700 font-bold whitespace-nowrap bg-emerald-50/40" data-numeric>{fmt(paid)}</td>
+                              <td className={cn('p-3 font-bold whitespace-nowrap bg-amber-50/40', balance > 0 ? 'text-amber-600' : 'text-zinc-500')} data-numeric>{fmt(balance)}</td>
+                            </>
+                          );
+                        })()}
                         <td className="p-3 whitespace-nowrap">
                           {o.status === 'PAID' ? (
                             <Badge variant="success" dot>مدفوع</Badge>
@@ -423,6 +438,8 @@ function EditOrderMetaModal({
     expectedArrivalDate: toDate(order.expectedArrivalDate),
     shipmentTrackingNumber: order.shipmentTrackingNumber ?? '',
     notes: order.notes ?? '',
+    tonPrice: order.tonPrice != null ? String(order.tonPrice) : '',
+    shippingCost: order.shippingCost != null ? String(order.shippingCost) : '',
   });
   const [saving, setSaving] = useState(false);
 
@@ -434,6 +451,8 @@ function EditOrderMetaModal({
         ...form,
         expectedShippingDate: form.expectedShippingDate || undefined,
         expectedArrivalDate: form.expectedArrivalDate || undefined,
+        tonPrice: form.tonPrice ? Number(form.tonPrice) : null,
+        shippingCost: form.shippingCost ? Number(form.shippingCost) : 0,
       });
       toast.success('تم تحديث بيانات الطلبية');
       onSaved();
@@ -487,6 +506,8 @@ function EditOrderMetaModal({
             <Input label="رقم الشحنة" value={form.shipmentTrackingNumber} onChange={(e) => setForm({ ...form, shipmentTrackingNumber: e.target.value })} />
             <Input label="تاريخ الشحن المتوقع" type="date" value={form.expectedShippingDate} onChange={(e) => setForm({ ...form, expectedShippingDate: e.target.value })} />
             <Input label="تاريخ الوصول المتوقع" type="date" value={form.expectedArrivalDate} onChange={(e) => setForm({ ...form, expectedArrivalDate: e.target.value })} />
+            <Input label="سعر الطن (د.أ)" type="number" step="0.01" value={form.tonPrice} onChange={(e) => setForm({ ...form, tonPrice: e.target.value })} />
+            <Input label="أجور الشحن (د.أ)" type="number" step="0.01" value={form.shippingCost} onChange={(e) => setForm({ ...form, shippingCost: e.target.value })} />
           </div>
           <Input label="ملاحظات" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
           <div className="rounded-lg bg-amber-50 border border-amber-100 p-3 text-xs text-amber-800">
@@ -639,6 +660,26 @@ function PaymentsModal({
                   السماح بتسجيل دفعة زائدة عن المبلغ الكلي (رصيد للعميل)
                 </label>
               </div>
+              {/* ─── معاينة لحظية للأرقام قبل التأكيد ─ */}
+              {(() => {
+                const newAmt = parseFloat(form.amount || '0') || 0;
+                if (newAmt <= 0) return null;
+                const updatedPaid = Number(paid) + newAmt;
+                const updatedBalance = Math.max(0, Number(total) - updatedPaid);
+                const over = updatedPaid > Number(total);
+                return (
+                  <div className="col-span-12 rounded-lg bg-white border border-zinc-200 p-3 grid grid-cols-5 gap-2 text-[11px]">
+                    <div><div className="text-zinc-500">إجمالي الطلبية</div><div className="font-bold" data-numeric>{Number(total).toFixed(2)}</div></div>
+                    <div><div className="text-zinc-500">مدفوع سابق</div><div className="font-bold" data-numeric>{Number(paid).toFixed(2)}</div></div>
+                    <div><div className="text-zinc-500">هذه الدفعة</div><div className="font-bold text-blue-700" data-numeric>+ {newAmt.toFixed(2)}</div></div>
+                    <div><div className="text-zinc-500">المدفوع بعد</div><div className="font-bold text-emerald-700" data-numeric>{updatedPaid.toFixed(2)}</div></div>
+                    <div><div className={cn('text-zinc-500', over && 'text-red-600')}>المتبقي بعد</div><div className={cn('font-bold', updatedBalance > 0 ? 'text-amber-600' : 'text-zinc-500')} data-numeric>{updatedBalance.toFixed(2)}</div></div>
+                    {over && !allowOverpay && (
+                      <div className="col-span-5 text-red-600 text-[11px] mt-1">⚠️ الدفعة تتجاوز الإجمالي — فعّل «السماح بدفعة زائدة» أولاً.</div>
+                    )}
+                  </div>
+                );
+              })()}
             </form>
           ) : (
             <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-sm text-emerald-800 text-center">
@@ -720,17 +761,27 @@ function NewOrderForm({
     expectedShippingDate: '',
     expectedArrivalDate: '',
     shipmentTrackingNumber: '',
+    tonPrice: '',        // سعر الطن الافتراضي على مستوى الطلبية
+    shippingCost: '',    // أجور الشحن
   });
   const [lines, setLines] = useState<any[]>([
-    { productName: '', size: '', quantity: 1, unitPrice: 0, itemId: '' },
+    { productName: '', size: '', quantity: 1, unitPrice: 0, itemId: '', unit: 'PCS', tonPrice: '' },
   ]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const total = lines.reduce(
-    (s, l) => s + Number(l.quantity || 0) * Number(l.unitPrice || 0),
-    0,
-  );
+  // إجمالي البضاعة = مجموع (كمية × (سعر الطن للسطر ?? سعر الطن للطلبية ?? unitPrice))
+  const productsTotal = lines.reduce((s, l) => {
+    const qty = Number(l.quantity || 0);
+    const lineTon = l.tonPrice !== '' && l.tonPrice != null ? Number(l.tonPrice) : null;
+    const orderTon = form.tonPrice !== '' ? Number(form.tonPrice) : null;
+    const price = String(l.unit || '').toUpperCase() === 'TON'
+      ? (lineTon ?? orderTon ?? Number(l.unitPrice || 0))
+      : (lineTon ?? Number(l.unitPrice || 0) ?? orderTon ?? 0);
+    return s + qty * price;
+  }, 0);
+  const shipping = Number(form.shippingCost || 0);
+  const total = productsTotal + shipping;
   const balance = total - Number(form.paid || 0);
 
   const submit = async (e: React.FormEvent) => {
@@ -753,7 +804,12 @@ function NewOrderForm({
         contractNumber: form.contractNumber || undefined,
         deliveryLocation: form.deliveryLocation || undefined,
         shipmentTrackingNumber: form.shipmentTrackingNumber || undefined,
-        lines,
+        tonPrice: form.tonPrice ? Number(form.tonPrice) : undefined,
+        shippingCost: form.shippingCost ? Number(form.shippingCost) : 0,
+        lines: lines.map((l) => ({
+          ...l,
+          tonPrice: l.tonPrice ? Number(l.tonPrice) : undefined,
+        })),
       });
       onSaved();
       onClose();
@@ -850,6 +906,26 @@ function NewOrderForm({
               onChange={(e) => setForm({ ...form, expectedArrivalDate: e.target.value })}
             />
           </div>
+
+          {/* ─── الحقول الجديدة: سعر الطن + أجور الشحن (للطلبيات الخارجية) ─ */}
+          <div className="grid md:grid-cols-2 gap-3 mt-3">
+            <Input
+              label="سعر الطن (د.أ) — Ton Price"
+              type="number"
+              step="0.01"
+              value={form.tonPrice}
+              onChange={(e) => setForm({ ...form, tonPrice: e.target.value })}
+              hint="افتراضي لجميع الأسطر ذات وحدة TON — يمكن تجاوزه لكل سطر"
+            />
+            <Input
+              label="أجور الشحن (د.أ) — Shipping Cost"
+              type="number"
+              step="0.01"
+              value={form.shippingCost}
+              onChange={(e) => setForm({ ...form, shippingCost: e.target.value })}
+              hint="يُضاف إلى إجمالي البضاعة لينتج الإجمالي النهائي"
+            />
+          </div>
         </Card>
 
         {/* Lines */}
@@ -938,7 +1014,15 @@ function NewOrderForm({
                 </div>
                 <div className="md:col-span-1 flex items-center gap-1">
                   <span className="text-xs text-zinc-500" data-numeric>
-                    {(l.quantity * l.unitPrice).toFixed(2)}
+                    {(() => {
+                      const qty = Number(l.quantity || 0);
+                      const lineTon = l.tonPrice !== '' && l.tonPrice != null ? Number(l.tonPrice) : null;
+                      const orderTon = form.tonPrice !== '' ? Number(form.tonPrice) : null;
+                      const price = String(l.unit || '').toUpperCase() === 'TON'
+                        ? (lineTon ?? orderTon ?? Number(l.unitPrice || 0))
+                        : (lineTon ?? Number(l.unitPrice || 0) ?? orderTon ?? 0);
+                      return (qty * price).toFixed(2);
+                    })()}
                   </span>
                   <button
                     type="button"
@@ -947,6 +1031,37 @@ function NewOrderForm({
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
+                </div>
+                {/* صف فرعي: الوحدة + سعر الطن (خاص بالسطر) */}
+                <div className="md:col-span-12 grid md:grid-cols-4 gap-2 md:pr-4">
+                  <select
+                    value={l.unit ?? 'PCS'}
+                    onChange={(e) => {
+                      const v = [...lines];
+                      v[i] = { ...v[i], unit: e.target.value };
+                      setLines(v);
+                    }}
+                    className="h-9 px-2 rounded border border-zinc-200 text-xs bg-white"
+                    title="الوحدة"
+                  >
+                    <option value="PCS">حبة / PCS</option>
+                    <option value="CTN">كرتون</option>
+                    <option value="KG">كيلوغرام</option>
+                    <option value="TON">طن / TON</option>
+                    <option value="BAG">شوال</option>
+                    <option value="ROLL">رول</option>
+                  </select>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    placeholder="سعر الطن لهذا السطر (اختياري)"
+                    value={l.tonPrice ?? ''}
+                    onChange={(e) => {
+                      const v = [...lines];
+                      v[i] = { ...v[i], tonPrice: e.target.value };
+                      setLines(v);
+                    }}
+                  />
                 </div>
               </div>
             ))}

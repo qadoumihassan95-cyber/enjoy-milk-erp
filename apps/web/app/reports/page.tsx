@@ -413,18 +413,27 @@ function OrdersReport() {
     rows.push([`من ${from} إلى ${to} · تاريخ: ${new Date().toLocaleString('ar-JO')}`]);
     rows.push([`الحالة: ${status || 'الكل'} · النوع: ${orderType || 'الكل'}`]);
     rows.push([]);
-    rows.push(['رقم الطلب', 'النوع', 'العميل', 'الهاتف', 'المنطقة', 'رقم العقد', 'موقع التسليم', 'رقم الشحنة', 'تاريخ الشحن', 'تاريخ الوصول', 'الإجمالي', 'المدفوع', 'المتبقي', 'الحالة']);
-    filtered.forEach((o: any) => rows.push([
-      o.number, o.orderType === 'EXTERNAL' ? 'خارجية' : 'داخلية',
-      o.customerName, o.customerPhone ?? '—', o.region ?? '—',
-      o.contractNumber ?? '—', o.deliveryLocation ?? '—', o.shipmentTrackingNumber ?? '—',
-      o.expectedShippingDate ? formatDate(o.expectedShippingDate) : '—',
-      o.expectedArrivalDate ? formatDate(o.expectedArrivalDate) : '—',
-      Number(o.total).toFixed(2), Number(o.paid).toFixed(2), Number(o.balance).toFixed(2),
-      o.status,
-    ]));
+    rows.push(['رقم الطلب', 'النوع', 'العميل', 'الهاتف', 'المنطقة', 'رقم العقد', 'موقع التسليم', 'رقم الشحنة', 'تاريخ الشحن', 'تاريخ الوصول', 'الكمية بالطن', 'سعر الطن', 'إجمالي البضاعة', 'أجور الشحن', 'الإجمالي النهائي', 'المسدد', 'المتبقي', 'الحالة']);
+    filtered.forEach((o: any) => {
+      const lines = o.lines ?? [];
+      const tonsQty = lines.filter((l: any) => String(l.unit || '').toUpperCase() === 'TON').reduce((s: number, l: any) => s + Number(l.quantity || 0), 0);
+      const productsTotal = Number(o.productsTotal ?? 0) || lines.reduce((s: number, l: any) => s + Number(l.lineTotal || 0), 0);
+      const shipping = Number(o.shippingCost ?? 0);
+      rows.push([
+        o.number, o.orderType === 'EXTERNAL' ? 'خارجية' : 'داخلية',
+        o.customerName, o.customerPhone ?? '—', o.region ?? '—',
+        o.contractNumber ?? '—', o.deliveryLocation ?? '—', o.shipmentTrackingNumber ?? '—',
+        o.expectedShippingDate ? formatDate(o.expectedShippingDate) : '—',
+        o.expectedArrivalDate ? formatDate(o.expectedArrivalDate) : '—',
+        tonsQty > 0 ? tonsQty.toFixed(2) : '—',
+        o.tonPrice != null ? Number(o.tonPrice).toFixed(2) : '—',
+        productsTotal.toFixed(2), shipping.toFixed(2),
+        Number(o.total).toFixed(2), Number(o.paid).toFixed(2), Number(o.balance).toFixed(2),
+        o.status,
+      ]);
+    });
     rows.push([]);
-    rows.push(['الإجماليات', '', '', '', '', '', '', '', '', '', totals.total.toFixed(2), totals.paid.toFixed(2), totals.balance.toFixed(2), '']);
+    rows.push(['الإجماليات', '', '', '', '', '', '', '', '', '', '', '', '', '', totals.total.toFixed(2), totals.paid.toFixed(2), totals.balance.toFixed(2), '']);
     exportToCsv(`orders-report-${from}_${to}.csv`, rows);
   };
 
@@ -466,56 +475,66 @@ function OrdersReport() {
         </div>
         <Card className="p-3">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm min-w-[1400px]">
+            <table className="w-full text-sm min-w-[1800px]">
               <thead className="bg-zinc-50 border-b">
                 <tr>
                   <th className="text-right p-2 text-[10px] font-bold uppercase">رقم</th>
                   <th className="text-right p-2 text-[10px] font-bold uppercase">النوع</th>
                   <th className="text-right p-2 text-[10px] font-bold uppercase">العميل</th>
-                  <th className="text-right p-2 text-[10px] font-bold uppercase">الهاتف</th>
-                  <th className="text-right p-2 text-[10px] font-bold uppercase">المنطقة</th>
                   <th className="text-right p-2 text-[10px] font-bold uppercase">رقم العقد</th>
                   <th className="text-right p-2 text-[10px] font-bold uppercase">موقع التسليم</th>
                   <th className="text-right p-2 text-[10px] font-bold uppercase">رقم الشحنة</th>
                   <th className="text-right p-2 text-[10px] font-bold uppercase">تاريخ الشحن</th>
                   <th className="text-right p-2 text-[10px] font-bold uppercase">تاريخ الوصول</th>
-                  <th className="text-right p-2 text-[10px] font-bold uppercase">الإجمالي</th>
-                  <th className="text-right p-2 text-[10px] font-bold uppercase">المدفوع</th>
-                  <th className="text-right p-2 text-[10px] font-bold uppercase">المتبقي</th>
+                  <th className="text-right p-2 text-[10px] font-bold uppercase bg-sky-50">الكمية بالطن</th>
+                  <th className="text-right p-2 text-[10px] font-bold uppercase bg-sky-50">سعر الطن</th>
+                  <th className="text-right p-2 text-[10px] font-bold uppercase bg-sky-50">إجمالي البضاعة</th>
+                  <th className="text-right p-2 text-[10px] font-bold uppercase bg-sky-50">أجور الشحن</th>
+                  <th className="text-right p-2 text-[10px] font-bold uppercase bg-cyan-50">الإجمالي النهائي</th>
+                  <th className="text-right p-2 text-[10px] font-bold uppercase bg-emerald-50">المسدد</th>
+                  <th className="text-right p-2 text-[10px] font-bold uppercase bg-amber-50">المتبقي</th>
                   <th className="text-right p-2 text-[10px] font-bold uppercase">الحالة</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={14} className="p-8 text-center text-zinc-400">لا توجد نتائج</td></tr>
-                ) : filtered.map((o: any) => (
-                  <tr key={o.id} className="border-b">
-                    <td className="p-2 font-mono text-xs">{o.number}</td>
-                    <td className="p-2">{o.orderType === 'EXTERNAL' ? 'خارجية' : 'داخلية'}</td>
-                    <td className="p-2 font-medium">{o.customerName}</td>
-                    <td className="p-2">{o.customerPhone || '—'}</td>
-                    <td className="p-2">{o.region || '—'}</td>
-                    <td className="p-2 font-mono text-xs">{o.contractNumber || '—'}</td>
-                    <td className="p-2">{o.deliveryLocation || '—'}</td>
-                    <td className="p-2 font-mono text-xs">{o.shipmentTrackingNumber || '—'}</td>
-                    <td className="p-2">{o.expectedShippingDate ? formatDate(o.expectedShippingDate) : '—'}</td>
-                    <td className="p-2">{o.expectedArrivalDate ? formatDate(o.expectedArrivalDate) : '—'}</td>
-                    <td className="p-2 font-bold" data-numeric>{Number(o.total).toFixed(2)}</td>
-                    <td className="p-2 text-emerald-700" data-numeric>{Number(o.paid).toFixed(2)}</td>
-                    <td className={cn('p-2', Number(o.balance) > 0 ? 'text-amber-600 font-bold' : 'text-zinc-500')} data-numeric>{Number(o.balance).toFixed(2)}</td>
-                    <td className="p-2">
-                      {o.status === 'PAID' ? <Badge variant="success" dot>مدفوع</Badge>
-                        : o.status === 'PARTIAL' ? <Badge variant="warning" dot>جزئي</Badge>
-                        : o.status === 'CANCELLED' ? <Badge variant="danger" dot>ملغي</Badge>
-                        : <Badge variant="danger" dot>غير مدفوع</Badge>}
-                    </td>
-                  </tr>
-                ))}
+                  <tr><td colSpan={16} className="p-8 text-center text-zinc-400">لا توجد نتائج</td></tr>
+                ) : filtered.map((o: any) => {
+                  const lines = o.lines ?? [];
+                  const tonsQty = lines.filter((l: any) => String(l.unit || '').toUpperCase() === 'TON').reduce((s: number, l: any) => s + Number(l.quantity || 0), 0);
+                  const productsTotal = Number(o.productsTotal ?? 0) || lines.reduce((s: number, l: any) => s + Number(l.lineTotal || 0), 0);
+                  const shipping = Number(o.shippingCost ?? 0);
+                  return (
+                    <tr key={o.id} className="border-b">
+                      <td className="p-2 font-mono text-xs">{o.number}</td>
+                      <td className="p-2">{o.orderType === 'EXTERNAL' ? 'خارجية' : 'داخلية'}</td>
+                      <td className="p-2 font-medium">{o.customerName}</td>
+                      <td className="p-2 font-mono text-xs">{o.contractNumber || '—'}</td>
+                      <td className="p-2">{o.deliveryLocation || '—'}</td>
+                      <td className="p-2 font-mono text-xs">{o.shipmentTrackingNumber || '—'}</td>
+                      <td className="p-2">{o.expectedShippingDate ? formatDate(o.expectedShippingDate) : '—'}</td>
+                      <td className="p-2">{o.expectedArrivalDate ? formatDate(o.expectedArrivalDate) : '—'}</td>
+                      <td className="p-2" data-numeric>{tonsQty > 0 ? tonsQty.toFixed(2) : '—'}</td>
+                      <td className="p-2" data-numeric>{o.tonPrice != null ? Number(o.tonPrice).toFixed(2) : '—'}</td>
+                      <td className="p-2 font-bold" data-numeric>{productsTotal.toFixed(2)}</td>
+                      <td className="p-2" data-numeric>{shipping.toFixed(2)}</td>
+                      <td className="p-2 font-black" data-numeric>{Number(o.total).toFixed(2)}</td>
+                      <td className="p-2 text-emerald-700 font-bold" data-numeric>{Number(o.paid).toFixed(2)}</td>
+                      <td className={cn('p-2', Number(o.balance) > 0 ? 'text-amber-600 font-bold' : 'text-zinc-500')} data-numeric>{Number(o.balance).toFixed(2)}</td>
+                      <td className="p-2">
+                        {o.status === 'PAID' ? <Badge variant="success" dot>مدفوع</Badge>
+                          : o.status === 'PARTIAL' ? <Badge variant="warning" dot>جزئي</Badge>
+                          : o.status === 'CANCELLED' ? <Badge variant="danger" dot>ملغي</Badge>
+                          : <Badge variant="danger" dot>غير مدفوع</Badge>}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
               <tfoot className="border-t-2 border-zinc-300">
                 <tr>
-                  <td className="p-2 font-bold" colSpan={10}>الإجماليات</td>
-                  <td className="p-2 font-bold" data-numeric>{totals.total.toFixed(2)}</td>
+                  <td className="p-2 font-bold" colSpan={12}>الإجماليات</td>
+                  <td className="p-2 font-black" data-numeric>{totals.total.toFixed(2)}</td>
                   <td className="p-2 font-bold text-emerald-700" data-numeric>{totals.paid.toFixed(2)}</td>
                   <td className="p-2 font-bold text-amber-600" data-numeric>{totals.balance.toFixed(2)}</td>
                   <td></td>

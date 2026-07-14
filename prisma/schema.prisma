@@ -1121,6 +1121,13 @@ model SimpleOrder {
   expectedArrivalDate   DateTime?
   shipmentTrackingNumber String?
 
+  // ─── الحقول المالية الجديدة (Ton pricing + Shipping) ───
+  // tonPrice على مستوى الطلبية يُستخدم كسعر افتراضي للأسطر التي لا تُحدّد
+  // سعر خاص بها. shippingCost يُضاف إلى إجمالي البضاعة لينتج الإجمالي النهائي.
+  tonPrice      Decimal? @db.Decimal(18, 2)
+  shippingCost  Decimal  @db.Decimal(18, 2) @default(0)
+  productsTotal Decimal  @db.Decimal(18, 2) @default(0)
+
   lines    SimpleOrderLine[]
   payments SimpleOrderPayment[]
 
@@ -1161,6 +1168,12 @@ model SimpleOrderLine {
   quantity    Decimal  @db.Decimal(18, 4)
   unitPrice   Decimal  @db.Decimal(18, 2)
   lineTotal   Decimal  @db.Decimal(18, 2)
+
+  // ─── حقول جديدة للسطر ───
+  // unit: PCS/CTN/TON — يحدّد وحدة الكمية.
+  // tonPrice: عند وحدة TON نستخدم tonPrice × quantity كـ lineTotal.
+  unit        String?
+  tonPrice    Decimal? @db.Decimal(18, 2)
 
   order SimpleOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
 

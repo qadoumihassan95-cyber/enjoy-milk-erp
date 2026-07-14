@@ -63,16 +63,51 @@ export class SimpleOrdersService {
     return order;
   }
 
+  /**
+   * حساب الإجماليات المالية للطلبية بشكل موحّد (الـ source of truth).
+   *   lineTotal = quantity × (tonPrice ?? order.tonPrice ?? unitPrice)
+   *   productsTotal = Σ lineTotal
+   *   final total = productsTotal + shippingCost
+   *   paid يُحسب من مجموع الدفعات (SimpleOrderPayment).
+   */
+  private computeLine(l: any, orderTonPrice?: number | null) {
+    const qty = Number(l.quantity || 0);
+    const unit = String(l.unit || '').toUpperCase();
+    const priceEach =
+      Number(
+        (unit === 'TON'
+          ? (l.tonPrice ?? orderTonPrice ?? l.unitPrice)
+          : (l.tonPrice ?? l.unitPrice ?? orderTonPrice)) || 0,
+      );
+    return {
+      qty,
+      unit: unit || null,
+      tonPrice: l.tonPrice != null ? Number(l.tonPrice) : null,
+      unitPrice: Number(l.unitPrice || priceEach || 0),
+      lineTotal: qty * priceEach,
+    };
+  }
+
+  private computeOrderTotals(lines: any[], data: { tonPrice?: any; shippingCost?: any }) {
+    const orderTon = data.tonPrice != null && data.tonPrice !== '' ? Number(data.tonPrice) : null;
+    const shipping = Number(data.shippingCost ?? 0) || 0;
+    const computed = lines.map((l) => this.computeLine(l, orderTon));
+    const productsTotal = computed.reduce((s, l) => s + l.lineTotal, 0);
+    const total = productsTotal + shipping;
+    return { computed, orderTon, shipping, productsTotal, total };
+  }
+
   // ─── Create ───────────────────────────────────────
   async create(tenantId: string, userId: string, data: any) {
     const lines = data.lines ?? [];
     if (!lines.length) throw new BadRequestException('أضف منتج واحد على الأقل');
 
-    const total = lines.reduce(
-      (s: number, l: any) => s + Number(l.quantity) * Number(l.unitPrice),
-      0,
-    );
-    const paid = Math.min(Number(data.paid ?? 0), total);
+    const { computed, orderTon, shipping, productsTotal, total } =
+      this.computeOrderTotals(lines, data);
+
+    // paid: نأخذ ما أُرسل (سيُصحَّح من مجموع الدفعات لاحقاً)، محدود بالإجمالي
+    const paidInput = Math.max(0, Number(data.paid ?? 0));
+    const paid = Math.min(paidInput, total);
     const balance = total - paid;
 
     return this.prisma.$transaction(async (tx) => {
@@ -88,6 +123,9 @@ export class SimpleOrdersService {
           region: data.region ?? null,
           orderDate: data.orderDate ? new Date(data.orderDate) : new Date(),
           total: new Prisma.Decimal(total),
+          productsTotal: new Prisma.Decimal(productsTotal),
+          shippingCost: new Prisma.Decimal(shipping),
+          tonPrice: orderTon != null ? new Prisma.Decimal(orderTon) : null,
           paid: new Prisma.Decimal(paid),
           balance: new Prisma.Decimal(balance),
           status: this.computeStatus(paid, total),
@@ -100,16 +138,19 @@ export class SimpleOrdersService {
           expectedArrivalDate: data.expectedArrivalDate ? new Date(data.expectedArrivalDate) : null,
           shipmentTrackingNumber: data.shipmentTrackingNumber ?? null,
           lines: {
-            create: lines.map((l: any) => ({
-              itemId: l.itemId ?? null,
-              productName: l.productName,
-              size: l.size ?? null,
-              quantity: new Prisma.Decimal(l.quantity),
-              unitPrice: new Prisma.Decimal(l.unitPrice),
-              lineTotal: new Prisma.Decimal(
-                Number(l.quantity) * Number(l.unitPrice),
-              ),
-            })),
+            create: lines.map((l: any, i: number) => {
+              const c = computed[i];
+              return {
+                itemId: l.itemId ?? null,
+                productName: l.productName,
+                size: l.size ?? null,
+                quantity: new Prisma.Decimal(c.qty),
+                unitPrice: new Prisma.Decimal(c.unitPrice),
+                lineTotal: new Prisma.Decimal(c.lineTotal),
+                unit: c.unit,
+                tonPrice: c.tonPrice != null ? new Prisma.Decimal(c.tonPrice) : null,
+              };
+            }),
           },
         },
         include: { lines: true },
@@ -195,26 +236,35 @@ export class SimpleOrdersService {
 
       // 3) أضف البنود الجديدة + خصم المخزون
       const newLines = data.lines ?? [];
-      const total = newLines.reduce(
-        (s: number, l: any) =>
-          s + Number(l.quantity) * Number(l.unitPrice),
-        0,
-      );
-      const paid = Math.min(Number(data.paid ?? existing.paid), total);
+      const orderTonRaw = data.tonPrice ?? (existing as any).tonPrice;
+      const shippingRaw = data.shippingCost ?? (existing as any).shippingCost ?? 0;
+      const { computed, productsTotal, total, shipping, orderTon } =
+        this.computeOrderTotals(newLines, {
+          tonPrice: orderTonRaw,
+          shippingCost: shippingRaw,
+        });
+      // نأخذ الدفعات الفعلية من قاعدة البيانات كمصدر للـ paid
+      const paidAgg = await tx.simpleOrderPayment.aggregate({
+        where: { orderId: id },
+        _sum: { amount: true },
+      });
+      const paid = Math.min(Number(paidAgg._sum.amount ?? 0), total);
       const balance = total - paid;
 
-      for (const l of newLines) {
+      for (let i = 0; i < newLines.length; i++) {
+        const l = newLines[i];
+        const c = computed[i];
         await tx.simpleOrderLine.create({
           data: {
             orderId: id,
             itemId: l.itemId ?? null,
             productName: l.productName,
             size: l.size ?? null,
-            quantity: new Prisma.Decimal(l.quantity),
-            unitPrice: new Prisma.Decimal(l.unitPrice),
-            lineTotal: new Prisma.Decimal(
-              Number(l.quantity) * Number(l.unitPrice),
-            ),
+            quantity: new Prisma.Decimal(c.qty),
+            unitPrice: new Prisma.Decimal(c.unitPrice),
+            lineTotal: new Prisma.Decimal(c.lineTotal),
+            unit: c.unit,
+            tonPrice: c.tonPrice != null ? new Prisma.Decimal(c.tonPrice) : null,
           },
         });
 
@@ -252,6 +302,9 @@ export class SimpleOrdersService {
           region: data.region ?? existing.region,
           notes: data.notes ?? existing.notes,
           total: new Prisma.Decimal(total),
+          productsTotal: new Prisma.Decimal(productsTotal),
+          shippingCost: new Prisma.Decimal(shipping),
+          tonPrice: orderTon != null ? new Prisma.Decimal(orderTon) : null,
           paid: new Prisma.Decimal(paid),
           balance: new Prisma.Decimal(balance),
           status: this.computeStatus(paid, total),
@@ -271,6 +324,33 @@ export class SimpleOrdersService {
     if (existing.status === 'CANCELLED') {
       throw new BadRequestException('لا يمكن تعديل طلبية ملغاة');
     }
+
+    // إذا تغيّرت shippingCost أو tonPrice نعيد حساب total = productsTotal + shipping
+    let recalc: { total: Prisma.Decimal; shipping: Prisma.Decimal; tonPrice: Prisma.Decimal | null } | null = null;
+    const shippingChanged = data.shippingCost !== undefined;
+    const tonPriceChanged = data.tonPrice !== undefined;
+    if (shippingChanged || tonPriceChanged) {
+      const shipping = Number(shippingChanged ? (data.shippingCost ?? 0) : (existing as any).shippingCost ?? 0);
+      const productsTotal = Number((existing as any).productsTotal ?? 0);
+      const total = productsTotal + shipping;
+      const paidNow = Number(existing.paid);
+      recalc = {
+        total: new Prisma.Decimal(total),
+        shipping: new Prisma.Decimal(shipping),
+        tonPrice: tonPriceChanged
+          ? (data.tonPrice === null || data.tonPrice === '' ? null : new Prisma.Decimal(Number(data.tonPrice)))
+          : (existing as any).tonPrice ?? null,
+      };
+      // نعيد حساب الحالة والرصيد أيضاً
+      await this.prisma.simpleOrder.update({
+        where: { id },
+        data: {
+          balance: new Prisma.Decimal(Math.max(0, total - paidNow)),
+          status: this.computeStatus(paidNow, total),
+        },
+      });
+    }
+
     return this.prisma.simpleOrder.update({
       where: { id },
       data: {
@@ -284,6 +364,7 @@ export class SimpleOrdersService {
         expectedShippingDate: data.expectedShippingDate ? new Date(data.expectedShippingDate) : existing.expectedShippingDate,
         expectedArrivalDate: data.expectedArrivalDate ? new Date(data.expectedArrivalDate) : existing.expectedArrivalDate,
         shipmentTrackingNumber: data.shipmentTrackingNumber !== undefined ? (data.shipmentTrackingNumber || null) : existing.shipmentTrackingNumber,
+        ...(recalc ? { total: recalc.total, shippingCost: recalc.shipping, tonPrice: recalc.tonPrice } : {}),
       },
       include: { lines: true },
     });
