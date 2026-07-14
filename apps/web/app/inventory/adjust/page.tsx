@@ -23,9 +23,9 @@ const ADJUST_TYPES = [
 export default function AdjustStockPage() {
   const router = useRouter();
   const toast = useToast();
+  // ─── مخزن واحد فقط (المخزن الرئيسي). لا حاجة لاختيار مستودع في الواجهة.
   const [form, setForm] = useState({
     itemId: '',
-    warehouseId: '',
     type: 'ADD',
     quantity: '',
     reason: '',
@@ -38,16 +38,11 @@ export default function AdjustStockPage() {
     queryFn: () => api.get('/inventory/items').then((r) => r.data),
   });
 
-  const { data: warehouses } = useQuery({
-    queryKey: ['warehouses'],
-    queryFn: () => api.get('/inventory/warehouses').then((r) => r.data),
-  });
-
   const submit = useMutation({
     mutationFn: (body: any) => api.post('/inventory/adjust', body).then((r) => r.data),
     onSuccess: (res) => {
       toast.success(`تم التعديل — الرصيد الحالي: ${res.after}`);
-      setForm({ itemId: '', warehouseId: '', type: 'ADD', quantity: '', reason: '', notes: '', imageUrl: '' });
+      setForm({ itemId: '', type: 'ADD', quantity: '', reason: '', notes: '', imageUrl: '' });
     },
     onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر التعديل'),
   });
@@ -85,35 +80,22 @@ export default function AdjustStockPage() {
           </CardHeader>
           <CardContent>
             <form onSubmit={handle} className="space-y-4">
-              <div className="grid md:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-zinc-700">المادة *</label>
-                  <select
-                    value={form.itemId}
-                    onChange={(e) => setForm({ ...form, itemId: e.target.value })}
-                    className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
-                    required
-                  >
-                    <option value="">— اختر —</option>
-                    {(items ?? []).map((it: any) => (
-                      <option key={it.id} value={it.id}>{it.name} ({it.sku})</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-zinc-700">المستودع *</label>
-                  <select
-                    value={form.warehouseId}
-                    onChange={(e) => setForm({ ...form, warehouseId: e.target.value })}
-                    className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
-                    required
-                  >
-                    <option value="">— اختر —</option>
-                    {(warehouses ?? []).map((w: any) => (
-                      <option key={w.id} value={w.id}>{w.name}</option>
-                    ))}
-                  </select>
-                </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-zinc-700">المادة *</label>
+                <select
+                  value={form.itemId}
+                  onChange={(e) => setForm({ ...form, itemId: e.target.value })}
+                  className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+                  required
+                >
+                  <option value="">— اختر —</option>
+                  {(items ?? []).map((it: any) => (
+                    <option key={it.id} value={it.id}>{it.name} ({it.sku})</option>
+                  ))}
+                </select>
+              </div>
+              <div className="rounded-lg bg-blue-50 border border-blue-100 p-2 text-[11px] text-blue-800">
+                📦 كل التعديلات تُطبَّق على «المخزن الرئيسي / Main Warehouse» — المصنع يعمل بمخزن واحد فقط.
               </div>
 
               <div className="space-y-1.5">

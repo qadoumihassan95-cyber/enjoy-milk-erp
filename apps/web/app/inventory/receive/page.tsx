@@ -40,9 +40,10 @@ export default function ReceiveStockPage() {
   const toast = useToast();
   const qc = useQueryClient();
 
+  // ─── مخزن واحد فقط في هذا المصنع: نُلغي حقل المستودع من الواجهة تماماً.
+  //     الـ backend يُعيّن "المخزن الرئيسي" تلقائياً عند غياب warehouseId.
   const [form, setForm] = useState({
     itemId: '',
-    warehouseId: '',
     source: 'SUPPLIER',
     quantity: '',
     unitCost: '',
@@ -70,10 +71,7 @@ export default function ReceiveStockPage() {
         .then((r) => r.data),
   });
 
-  const { data: warehouses } = useQuery({
-    queryKey: ['warehouses'],
-    queryFn: () => api.get('/inventory/warehouses').then((r) => r.data),
-  });
+  // ملاحظة: مخزن واحد فقط. لا نحتاج listWarehouses في الواجهة.
 
   const { data: suppliers } = useQuery({
     queryKey: ['suppliers'],
@@ -108,7 +106,7 @@ export default function ReceiveStockPage() {
     onSuccess: () => {
       toast.success('تم استلام المخزون بنجاح');
       setForm({
-        itemId: '', warehouseId: '', source: 'SUPPLIER', quantity: '', unitCost: '',
+        itemId: '', source: 'SUPPLIER', quantity: '', unitCost: '',
         supplierId: '', invoiceNumber: '', purchaseOrderNumber: '', batchNumber: '',
         serialNumber: '', productionDate: '', expiryDate: '', notes: '',
       });
@@ -124,7 +122,7 @@ export default function ReceiveStockPage() {
     const qty = parseFloat(form.quantity);
     if (isNaN(qty) || qty <= 0) return toast.error('كمية غير صحيحة');
     if (!form.itemId) return toast.error('اختر المادة');
-    if (!form.warehouseId) return toast.error('اختر المستودع');
+    // مخزن واحد فقط — الـ backend يُعيّن "المخزن الرئيسي" تلقائياً.
     submit.mutate({
       ...form,
       quantity: qty,
@@ -247,19 +245,11 @@ export default function ReceiveStockPage() {
                 )}
               </div>
 
+              {/* مخزن واحد فقط في المصنع — يُدار تلقائياً كـ "المخزن الرئيسي" */}
+              <div className="rounded-lg bg-blue-50 border border-blue-100 p-2 text-[11px] text-blue-800 flex items-center gap-1">
+                <span className="font-bold">📦</span> يُخزَّن في «المخزن الرئيسي / Main Warehouse» — المصنع يعمل بمخزن واحد فقط.
+              </div>
               <div className="grid md:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-zinc-700">المستودع *</label>
-                  <select
-                    value={form.warehouseId} onChange={(e) => setForm({ ...form, warehouseId: e.target.value })}
-                    className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" required
-                  >
-                    <option value="">— اختر —</option>
-                    {(warehouses ?? []).map((w: any) => (
-                      <option key={w.id} value={w.id}>{w.name}</option>
-                    ))}
-                  </select>
-                </div>
                 <Input
                   label="الكمية *" type="number" step="0.001"
                   value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} required

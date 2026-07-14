@@ -233,6 +233,8 @@ export class InventoryService {
 
   // ─── Warehouses ──────────────────────────────────
   async listWarehouses(tenantId: string) {
+    // المصنع يعمل بمخزن واحد فقط — نضمن وجود «المخزن الرئيسي» ثم نُرجعه.
+    await this.resolveMainWarehouse(tenantId);
     return this.prisma.warehouse.findMany({
       where: { tenantId, active: true },
       orderBy: { name: 'asc' },
@@ -246,6 +248,35 @@ export class InventoryService {
         code: data.code,
         name: data.name,
         type: data.type ?? 'GENERAL',
+      },
+    });
+  }
+
+  /**
+   * ─── Resolve MAIN warehouse ─────────────────────────
+   * المصنع يستخدم مخزناً واحداً باسم "المخزن الرئيسي" (code=MAIN).
+   * إذا لم يكن موجوداً نُنشئه تلقائياً. تُستخدم هذه الدالة داخل receive
+   * وadjust عند عدم تمرير warehouseId لكي يعمل النظام بمخزن واحد بشكل شفاف.
+   */
+  async resolveMainWarehouse(tenantId: string) {
+    // 1) ابحث عن MAIN
+    let wh = await this.prisma.warehouse.findFirst({
+      where: { tenantId, code: 'MAIN' },
+    });
+    if (wh) return wh;
+    // 2) fallback: خذ أول مخزن موجود واعتبره الرئيسي
+    wh = await this.prisma.warehouse.findFirst({
+      where: { tenantId, active: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (wh) return wh;
+    // 3) لا يوجد أي مخزن — أنشئ MAIN
+    return this.prisma.warehouse.create({
+      data: {
+        tenantId,
+        code: 'MAIN',
+        name: 'المخزن الرئيسي',
+        type: 'GENERAL',
       },
     });
   }
@@ -615,7 +646,11 @@ export class InventoryService {
    */
   async adjustStock(tenantId: string, userId: string, data: any) {
     if (!data.itemId) throw new BadRequestException('الصنف مطلوب');
-    if (!data.warehouseId) throw new BadRequestException('المستودع مطلوب');
+    // ─── مخزن واحد فقط: نستخدم "المخزن الرئيسي" تلقائياً ─
+    if (!data.warehouseId) {
+      const main = await this.resolveMainWarehouse(tenantId);
+      data.warehouseId = main.id;
+    }
     if (!data.reason?.trim()) throw new BadRequestException('السبب مطلوب');
 
     const type = String(data.type || 'ADD').toUpperCase();
@@ -724,7 +759,11 @@ export class InventoryService {
    */
   async receiveStock(tenantId: string, userId: string, data: any) {
     if (!data.itemId) throw new BadRequestException('الصنف مطلوب');
-    if (!data.warehouseId) throw new BadRequestException('المستودع مطلوب');
+    // ─── مخزن واحد فقط: نستخدم "المخزن الرئيسي" تلقائياً ─
+    if (!data.warehouseId) {
+      const main = await this.resolveMainWarehouse(tenantId);
+      data.warehouseId = main.id;
+    }
     const qty = Number(data.quantity);
     if (!(qty > 0)) throw new BadRequestException('الكمية يجب أن تكون أكبر من صفر');
     const source = String(data.source || 'MANUAL').toUpperCase();
