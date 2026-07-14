@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Banknote, Printer, Pencil, Wallet, CheckCircle2, X } from 'lucide-react';
+import { Banknote, Printer, Pencil, Wallet, CheckCircle2, X, FileText } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { Card, CardHeader, CardTitle, CardContent, Button, Input } from '@/components/ui';
 import { useToast } from '@/components/toast';
@@ -73,6 +73,15 @@ export default function PayrollPage() {
               window.open(`/payroll/annual?year=${y}`, '_blank');
             }} disabled={!data}>
               <Printer className="h-4 w-4" /> طباعة سنوي
+            </Button>
+            {/* ─── جديد: كشف الرواتب الرسمي (احترافي A4 Landscape) ─── */}
+            <Button
+              onClick={() => window.open(`/payroll/sheet?month=${month}`, '_blank', 'noopener')}
+              disabled={!data}
+              className="bg-amber-500 hover:bg-amber-600 border-amber-500"
+              title="فتح الكشف الرسمي بتنسيق محاسبي مناسب للطباعة على A4 Landscape"
+            >
+              <FileText className="h-4 w-4" /> كشف الرواتب الرسمي
             </Button>
           </div>
         </header>
