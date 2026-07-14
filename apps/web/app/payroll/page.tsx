@@ -1,53 +1,209 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Banknote, Printer, Pencil, Wallet, CheckCircle2, X, FileText } from 'lucide-react';
+import {
+  Banknote, Printer, FileSpreadsheet, Save, RefreshCw, CheckCircle2,
+  Filter, X, Pencil, Wallet,
+} from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
-import { Card, CardHeader, CardTitle, CardContent, Button, Input } from '@/components/ui';
+import { Button, Badge } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
-import { formatNumber } from '@/lib/utils';
+import { FACTORY_NAME } from '@/lib/branding';
 
+/**
+ * الصفحة الرئيسية للرواتب (Payroll) — واجهة محاسبية تفاعلية.
+ *
+ * دمجت مع تصميم "كشف الرواتب الرسمي":
+ *  - عرض + تحرير + حفظ + إعادة حساب + طباعة + Excel كلها في نفس الصفحة.
+ *  - الحقول القابلة للتحرير: الراتب الأساسي، بدل مواصلات، عمل إضافي،
+ *    سلف الموظفين، خصم الدوام.
+ *  - الحقول المحسوبة تلقائياً (إجمالي، ضمان، صافي) تُعرض live أثناء التحرير،
+ *    والـ backend يُصحّحها بعد الحفظ (المصدر الرسمي للأرقام).
+ *  - زر طباعة يفتح /payroll/sheet للطباعة الرسمية (نفس الأرقام).
+ *  - زر Excel يصدّر CSV بنفس التنسيق.
+ */
 export default function PayrollPage() {
   const qc = useQueryClient();
   const toast = useToast();
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
-  const [editing, setEditing] = useState<any>(null);
-  const [payCashbox, setPayCashbox] = useState('');
+  const [department, setDepartment] = useState('');
+  const [employee, setEmployee] = useState('');
+  const [paidFilter, setPaidFilter] = useState<'ALL' | 'PAID' | 'UNPAID'>('ALL');
+  const [dirty, setDirty] = useState<Record<string, any>>({});
+  const [editingRow, setEditingRow] = useState<any>(null);
 
-  const { data, isLoading, error, isFetching } = useQuery({
+  const { data, refetch, isFetching } = useQuery({
     queryKey: ['payroll', month],
     queryFn: () => api.get(`/employees/payroll?month=${month}`).then((r) => r.data),
   });
 
-  const { data: cashboxes } = useQuery({
-    queryKey: ['cashboxes'],
-    queryFn: () => api.get('/finance/cashboxes').then((r) => r.data),
-  });
+  const rows = useMemo(() => {
+    const list = (data?.rows ?? []) as any[];
+    return list.filter((r) => {
+      if (department && (r.department || '') !== department) return false;
+      if (employee && !((r.fullName || '') as string).includes(employee)) return false;
+      if (paidFilter === 'PAID' && !r.paid) return false;
+      if (paidFilter === 'UNPAID' && r.paid) return false;
+      return true;
+    });
+  }, [data, department, employee, paidFilter]);
 
-  const refresh = () => {
-    qc.invalidateQueries({ queryKey: ['payroll'] });
-    qc.invalidateQueries({ queryKey: ['cashboxes'] });
-    qc.invalidateQueries({ queryKey: ['finance'] });
-    qc.invalidateQueries({ queryKey: ['cash-movements'] });
+  const departments = useMemo(() => {
+    const set = new Set<string>();
+    (data?.rows ?? []).forEach((r: any) => r.department && set.add(r.department));
+    return Array.from(set).sort();
+  }, [data]);
+
+  // ─── القيم الفعلية (بعد تطبيق التعديلات الظاهرة على الشاشة) ─
+  const effective = (r: any) => {
+    const d = dirty[r.employeeId] ?? {};
+    const base = d.baseSalary != null ? Number(d.baseSalary) : Number(r.baseSalary || 0);
+    const transport = d.transportOverride != null ? Number(d.transportOverride) : Number(r.transportAllowance || 0);
+    const overtime = d.overtimeAmount != null ? Number(d.overtimeAmount) : Number(r.overtimeAmount || 0);
+    const advance = d.advanceDeduction != null ? Number(d.advanceDeduction) : Number(r.advanceDeduction || 0);
+    const attendance = d.attendanceOverride != null ? Number(d.attendanceOverride) : Number(r.attendanceDeduction || 0);
+    // إعادة حساب الضمان بنفس قاعدة الـ backend
+    const empSSRate = Number(data?.settings?.employeeSSRate ?? 0.075);
+    const compSSRate = Number(data?.settings?.companySSRate ?? 0.1425);
+    const basis = data?.settings?.socialSecurityBasis ?? 'BASIC';
+    const gross = base + overtime + transport;
+    const ssBase = basis === 'GROSS' ? gross : basis === 'BASIC_PLUS_TRANSPORT' ? base + transport : base;
+    const empSS = ssBase * empSSRate;
+    const compSS = ssBase * compSSRate;
+    const totalDed = empSS + advance + attendance;
+    const net = gross - totalDed;
+    return { base, transport, overtime, advance, attendance, gross, empSS, compSS, totalDed, net };
   };
 
-  const pay = useMutation({
-    mutationFn: (body: { month: string; employeeId?: string; cashboxId?: string }) =>
-      api.post('/employees/payroll/pay', body).then((r) => r.data),
-    onSuccess: (res) => {
-      toast.success(res?.message || 'تم صرف الرواتب وخصمها من الصندوق');
-      refresh();
+  // ─── إجماليات تُحسب من القيم الفعلية للصفوف المُصفَّاة ─
+  const totals = useMemo(() => {
+    let baseSalary = 0, transport = 0, overtime = 0, gross = 0;
+    let empSS = 0, compSS = 0, advance = 0, attendance = 0, netDed = 0, net = 0;
+    rows.forEach((r: any) => {
+      const e = effective(r);
+      baseSalary += e.base; transport += e.transport; overtime += e.overtime;
+      gross += e.gross; empSS += e.empSS; compSS += e.compSS;
+      advance += e.advance; attendance += e.attendance;
+      netDed += e.totalDed; net += e.net;
+    });
+    return {
+      baseSalary, transport, overtime, gross,
+      empSS, compSS, advance, attendance, netDed, net,
+      totalCompanyCost: gross + compSS,
+      count: rows.length,
+    };
+  }, [rows, dirty, data]);
+
+  const setF = (empId: string, field: string, value: any) => {
+    setDirty((d) => ({ ...d, [empId]: { ...d[empId], [field]: value } }));
+  };
+
+  const saveRow = useMutation({
+    mutationFn: async (row: any) => {
+      const d = dirty[row.employeeId] ?? {};
+      const patch: any = { employeeId: row.employeeId, month };
+      // baseSalary — نُخزنه على الموظف مباشرة (تعديل دائم)
+      if (d.baseSalary != null && Number(d.baseSalary) !== Number(row.baseSalary || 0)) {
+        await api.patch(`/employees/${row.employeeId}`, { baseSalary: Number(d.baseSalary) });
+      }
+      if (d.transportOverride != null) patch.transportOverride = Number(d.transportOverride);
+      if (d.overtimeAmount != null) patch.overtimeAmount = Number(d.overtimeAmount);
+      if (d.attendanceOverride != null) patch.deduction = Number(d.attendanceOverride);
+      if (d.notes != null) patch.notes = d.notes;
+      if (d.overrideReason != null) patch.overrideReason = d.overrideReason;
+      return api.post('/employees/payroll/adjustment', patch).then((r) => r.data);
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر صرف الراتب'),
+    onSuccess: (_, row) => {
+      toast.success(`تم حفظ راتب ${row.fullName}`);
+      setDirty((d) => { const c = { ...d }; delete c[row.employeeId]; return c; });
+      refetch();
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الحفظ'),
   });
 
-  const totals = data?.totals;
+  const saveAll = useMutation({
+    mutationFn: async () => {
+      // 1) خزن أي baseSalary تغيّر على مستوى الموظف
+      for (const empId of Object.keys(dirty)) {
+        const d = dirty[empId];
+        const row = (data?.rows ?? []).find((r: any) => r.employeeId === empId);
+        if (row && d.baseSalary != null && Number(d.baseSalary) !== Number(row.baseSalary || 0)) {
+          await api.patch(`/employees/${empId}`, { baseSalary: Number(d.baseSalary) });
+        }
+      }
+      // 2) bulk-save التعديلات الشهرية
+      const payload = {
+        month,
+        rows: Object.entries(dirty).map(([employeeId, d]: any) => ({
+          employeeId,
+          transportOverride: d.transportOverride != null ? Number(d.transportOverride) : undefined,
+          overtimeAmount: d.overtimeAmount != null ? Number(d.overtimeAmount) : undefined,
+          deduction: d.attendanceOverride != null ? Number(d.attendanceOverride) : undefined,
+          notes: d.notes,
+          overrideReason: d.overrideReason,
+        })),
+      };
+      return api.post('/employees/payroll/save-all', payload).then((r) => r.data);
+    },
+    onSuccess: (res) => {
+      toast.success(`تم حفظ ${res?.saved ?? 0} صف${res?.failed ? ` (فشل ${res.failed})` : ''}`);
+      setDirty({});
+      refetch();
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الحفظ'),
+  });
+
+  const dirtyCount = Object.keys(dirty).length;
+
+  // ─── Excel export (نفس المخرَج المستخدم في /payroll/sheet) ─
+  const exportExcel = () => {
+    const BOM = '﻿';
+    const headers = [
+      'الرقم', 'اسم الموظف', 'الراتب الأساسي', 'بدل مواصلات', 'عمل إضافي',
+      'إجمالي الراتب', 'ضمان الشركة 14.25%', 'ضمان الموظف 7.5%',
+      'سلف الموظفين', 'خصم الدوام', 'صافي الاقتطاعات', 'صافي الراتب',
+    ];
+    const csvRows: any[][] = [headers];
+    rows.forEach((r: any, i: number) => {
+      const e = effective(r);
+      csvRows.push([
+        i + 1, r.fullName,
+        e.base.toFixed(3), e.transport.toFixed(3), e.overtime.toFixed(3),
+        e.gross.toFixed(3), e.compSS.toFixed(3), e.empSS.toFixed(3),
+        e.advance.toFixed(3), e.attendance.toFixed(3),
+        e.totalDed.toFixed(3), e.net.toFixed(3),
+      ]);
+    });
+    csvRows.push([
+      'الإجماليات', '',
+      totals.baseSalary.toFixed(3), totals.transport.toFixed(3), totals.overtime.toFixed(3),
+      totals.gross.toFixed(3), totals.compSS.toFixed(3), totals.empSS.toFixed(3),
+      totals.advance.toFixed(3), totals.attendance.toFixed(3),
+      totals.netDed.toFixed(3), totals.net.toFixed(3),
+    ]);
+    csvRows.push([]);
+    csvRows.push(['إجمالي تكلفة الرواتب على الشركة', totals.totalCompanyCost.toFixed(3)]);
+    const csv = BOM + csvRows.map((r) => r.map((v) => {
+      const s = String(v ?? '');
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    }).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `payroll-${month}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <AppShell>
-      <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6 print:p-0">
+      <div className="max-w-[297mm] mx-auto p-4 md:p-6 space-y-4 print:p-0">
+        {/* شريط الأدوات — يختفي عند الطباعة */}
         <header className="flex items-center justify-between flex-wrap gap-3 print:hidden">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-zinc-900 text-white flex items-center justify-center">
@@ -55,7 +211,9 @@ export default function PayrollPage() {
             </div>
             <div>
               <h1 className="text-2xl md:text-3xl font-black tracking-tight">كشف الرواتب</h1>
-              <p className="text-sm text-zinc-500 mt-0.5">حساب تلقائي + مكافآت وخصومات وصرف من الصندوق</p>
+              <p className="text-sm text-zinc-500 mt-0.5">
+                تحرير مباشر · حفظ · طباعة · Excel — كل شيء في نفس الصفحة
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -65,281 +223,308 @@ export default function PayrollPage() {
               onChange={(e) => setMonth(e.target.value)}
               className="h-10 px-3 rounded-lg border border-zinc-200 text-sm"
             />
-            <Button variant="outline" onClick={() => window.print()} disabled={!data}>
-              <Printer className="h-4 w-4" /> طباعة شهري
+            <Button variant="outline" onClick={() => refetch()} loading={isFetching}>
+              <RefreshCw className="h-4 w-4" /> إعادة حساب
             </Button>
-            <Button variant="outline" onClick={() => {
-              const y = month.slice(0, 4);
-              window.open(`/payroll/annual?year=${y}`, '_blank');
-            }} disabled={!data}>
-              <Printer className="h-4 w-4" /> طباعة سنوي
+            <Button variant="outline" onClick={exportExcel}>
+              <FileSpreadsheet className="h-4 w-4" /> Excel
             </Button>
-            {/* ─── جديد: كشف الرواتب الرسمي (احترافي A4 Landscape) ─── */}
             <Button
+              variant="outline"
               onClick={() => window.open(`/payroll/sheet?month=${month}`, '_blank', 'noopener')}
-              disabled={!data}
-              className="bg-amber-500 hover:bg-amber-600 border-amber-500"
-              title="فتح الكشف الرسمي بتنسيق محاسبي مناسب للطباعة على A4 Landscape"
             >
-              <FileText className="h-4 w-4" /> كشف الرواتب الرسمي
+              <Printer className="h-4 w-4" /> طباعة / PDF
+            </Button>
+            <Button
+              onClick={() => saveAll.mutate()}
+              disabled={dirtyCount === 0 || saveAll.isPending}
+              loading={saveAll.isPending}
+              className="bg-emerald-600 hover:bg-emerald-700 border-emerald-600"
+            >
+              <Save className="h-4 w-4" /> حفظ الكل {dirtyCount > 0 && `(${dirtyCount})`}
             </Button>
           </div>
         </header>
 
-        {/* رأس الطباعة */}
-        <div className="hidden print:block mb-4">
-          <div className="text-lg font-black">مصنع الدانا لمنتجات الحليب واللبن — كشف رواتب شهر {month}</div>
+        {/* شريط الفلاتر */}
+        <div className="flex gap-2 items-center flex-wrap print:hidden">
+          <Filter className="h-4 w-4 text-zinc-400" />
+          <select value={department} onChange={(e) => setDepartment(e.target.value)}
+            className="h-9 px-2 rounded border border-zinc-200 text-sm">
+            <option value="">كل الأقسام</option>
+            {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+          <input value={employee} onChange={(e) => setEmployee(e.target.value)}
+            placeholder="بحث موظف" className="h-9 px-2 rounded border border-zinc-200 text-sm w-40" />
+          <select value={paidFilter} onChange={(e) => setPaidFilter(e.target.value as any)}
+            className="h-9 px-2 rounded border border-zinc-200 text-sm">
+            <option value="ALL">الكل</option>
+            <option value="PAID">مصروف</option>
+            <option value="UNPAID">غير مصروف</option>
+          </select>
+          <div className="text-xs text-zinc-500" data-numeric>{rows.length} موظف</div>
         </div>
 
-        {/* الإجماليات */}
-        {totals && (
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-            <div className="rounded-xl bg-zinc-50 border border-zinc-100 p-3">
-              <div className="text-[10px] font-bold text-zinc-500 uppercase">الرواتب الأساسية</div>
-              <div className="text-lg font-black mt-1" data-numeric>{formatNumber(totals.baseSalary, 0)}</div>
-            </div>
-            <div className="rounded-xl bg-red-50 border border-red-100 p-3">
-              <div className="text-[10px] font-bold text-red-700 uppercase">الخصومات</div>
-              <div className="text-lg font-black mt-1 text-red-700" data-numeric>{formatNumber(totals.deductions, 0)}</div>
-            </div>
-            <div className="rounded-xl bg-blue-50 border border-blue-100 p-3">
-              <div className="text-[10px] font-bold text-blue-700 uppercase">مكافآت + إضافي</div>
-              <div className="text-lg font-black mt-1 text-blue-700" data-numeric>{formatNumber((totals.bonus ?? 0) + (totals.overtimePay ?? 0), 0)}</div>
-            </div>
-            <div className="rounded-xl bg-amber-50 border border-amber-100 p-3">
-              <div className="text-[10px] font-bold text-amber-700 uppercase">غير مدفوع</div>
-              <div className="text-lg font-black mt-1 text-amber-700" data-numeric>{formatNumber(totals.unpaid ?? 0, 0)}</div>
-            </div>
-            <div className="rounded-xl bg-emerald-600 text-white p-3">
-              <div className="text-[10px] font-bold uppercase opacity-90">صافي المستحق</div>
-              <div className="text-lg font-black mt-1" data-numeric>{formatNumber(totals.net, 0)} د.أ</div>
-            </div>
-          </div>
-        )}
+        {/* KPIs */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 print:hidden">
+          <Kpi label="عدد الموظفين" value={totals.count} />
+          <Kpi label="إجمالي الرواتب" value={fmt(totals.gross)} tint="cyan" />
+          <Kpi label="صافي الرواتب" value={fmt(totals.net)} tint="cyan" />
+          <Kpi label="تكلفة الشركة الكاملة" value={fmt(totals.totalCompanyCost)} tint="orange" />
+        </div>
 
-        {/* صرف جماعي */}
-        {totals && (totals.unpaid ?? 0) > 0 && (
-          <div className="flex items-center gap-2 flex-wrap rounded-xl border border-zinc-200 bg-white p-3 print:hidden">
-            <Wallet className="h-4 w-4 text-zinc-500" />
-            <span className="text-sm text-zinc-600">صرف من الصندوق:</span>
-            <select
-              value={payCashbox}
-              onChange={(e) => setPayCashbox(e.target.value)}
-              className="h-9 px-2 rounded-lg border border-zinc-200 text-sm"
-            >
-              <option value="">الصندوق الرئيسي (افتراضي)</option>
-              {cashboxes?.map((c: any) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} — {formatNumber(c.balance, 0)} د.أ
-                </option>
-              ))}
-            </select>
-            <Button
-              onClick={() => {
-                if (!confirm(`صرف جميع الرواتب غير المدفوعة لشهر ${month}؟ سيتم خصمها من الصندوق.`)) return;
-                pay.mutate({ month, cashboxId: payCashbox || undefined });
-              }}
-              loading={pay.isPending && !pay.variables?.employeeId}
-            >
-              <Wallet className="h-4 w-4" /> صرف كل الرواتب المستحقة
-            </Button>
-          </div>
-        )}
-
-        <Card>
-          {isLoading ? (
-            <div className="p-8 text-center text-zinc-500">جاري الحساب...</div>
-          ) : error ? (
-            <div className="p-8 text-center text-amber-600 text-sm">لا تملك صلاحية عرض الرواتب (للمدراء/المحاسب/الموارد البشرية).</div>
-          ) : !data?.rows || data.rows.length === 0 ? (
-            <div className="p-12 text-center text-zinc-500">لا يوجد موظفون لهذا الشهر</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-zinc-50 border-b border-zinc-200">
-                  <tr>
-                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase">الموظف</th>
-                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase">الأساسي</th>
-                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase">حضور</th>
-                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase">غياب</th>
-                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase">تأخير(س)</th>
-                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase">إضافي(س)</th>
-                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase">خصومات</th>
-                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase">مكافأة</th>
-                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase">أجر إضافي</th>
-                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase">الصافي</th>
-                    <th className="text-right p-2.5 text-[10px] font-bold text-zinc-500 uppercase print:hidden">إجراء</th>
+        {/* الجدول — التفاعلي */}
+        <div className="bg-white rounded-xl border border-zinc-200 overflow-x-auto">
+          <table className="w-full text-[11px] border-collapse min-w-[1300px]">
+            <thead>
+              <tr className="bg-amber-300">
+                <Th w="30">الرقم</Th>
+                <Th>اسم الموظف</Th>
+                <ThTint c="blue">الراتب الأساسي</ThTint>
+                <ThTint c="green">بدل مواصلات</ThTint>
+                <ThTint c="green">عمل إضافي</ThTint>
+                <ThTint c="cyan">إجمالي الراتب</ThTint>
+                <ThTint c="orange">ضمان الشركة</ThTint>
+                <ThTint c="orange">ضمان الموظف</ThTint>
+                <ThTint c="orange">سلف الموظفين</ThTint>
+                <ThTint c="orange">خصم الدوام</ThTint>
+                <ThTint c="orange">صافي الاقتطاعات</ThTint>
+                <ThTint c="cyan">صافي الراتب</ThTint>
+                <Th>الحالة</Th>
+                <Th>إجراء</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr><td colSpan={14} className="p-8 text-center text-zinc-400 border">لا توجد بيانات لهذا الشهر</td></tr>
+              ) : rows.map((r: any, i: number) => {
+                const e = effective(r);
+                const isDirty = !!dirty[r.employeeId];
+                return (
+                  <tr key={r.employeeId} className={`border-b border-zinc-200 ${isDirty ? 'bg-amber-50' : 'hover:bg-zinc-50'}`}>
+                    <Td>{i + 1}</Td>
+                    <Td strong>{r.fullName}</Td>
+                    <TdInput c="blue" value={e.base} onChange={(v) => setF(r.employeeId, 'baseSalary', v)} disabled={r.paid} />
+                    <TdInput c="green" value={e.transport} onChange={(v) => setF(r.employeeId, 'transportOverride', v)} disabled={r.paid} />
+                    <TdInput c="green" value={e.overtime} onChange={(v) => setF(r.employeeId, 'overtimeAmount', v)} disabled={r.paid} />
+                    <TdTint c="cyan" strong>{fmt(e.gross)}</TdTint>
+                    <TdTint c="orange">{fmt(e.compSS)}</TdTint>
+                    <TdTint c="orange">{fmt(e.empSS)}</TdTint>
+                    <TdInput c="orange" value={e.advance} onChange={(v) => setF(r.employeeId, 'advanceDeduction', v)} disabled={r.paid} />
+                    <TdInput c="orange" value={e.attendance} onChange={(v) => setF(r.employeeId, 'attendanceOverride', v)} disabled={r.paid} />
+                    <TdTint c="orange" strong>{fmt(e.totalDed)}</TdTint>
+                    <TdTint c="cyan" strong>{fmt(e.net)}</TdTint>
+                    <Td>
+                      {r.paid ? <Badge variant="success" dot>مصروف</Badge>
+                        : isDirty ? <Badge variant="warning" dot>تعديل</Badge>
+                        : <Badge variant="default" dot>مسودة</Badge>}
+                    </Td>
+                    <Td>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => saveRow.mutate(r)}
+                          disabled={!isDirty || saveRow.isPending || r.paid}
+                          className="text-xs px-2 py-1 rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-bold disabled:opacity-40"
+                          title="حفظ هذا السطر"
+                        >
+                          <Save className="h-3 w-3" />
+                        </button>
+                        <button
+                          onClick={() => setEditingRow(r)}
+                          className="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold"
+                          title="تفاصيل + تعديل موسّع"
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                      </div>
+                    </Td>
                   </tr>
-                </thead>
-                <tbody>
-                  {data.rows.map((r: any) => (
-                    <tr key={r.employeeId} className="border-b border-zinc-100 hover:bg-zinc-50">
-                      <td className="p-2.5">
-                        <div className="font-medium flex items-center gap-1.5">
-                          {r.fullName}
-                          {r.paid && (
-                            <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5">
-                              <CheckCircle2 className="h-3 w-3" /> مدفوع
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-zinc-400">{r.department || '—'}</div>
-                        {r.notes && <div className="text-[11px] text-zinc-500 mt-0.5">📝 {r.notes}</div>}
-                      </td>
-                      <td className="p-2.5" data-numeric>{formatNumber(r.baseSalary, 0)}</td>
-                      <td className="p-2.5" data-numeric>{r.presentDays}</td>
-                      <td className="p-2.5" data-numeric>{r.absentDays > 0 ? <span className="text-red-600 font-bold">{r.absentDays}</span> : 0}</td>
-                      <td className="p-2.5" data-numeric>{r.lateHours}</td>
-                      <td className="p-2.5" data-numeric>{r.overtimeHours}</td>
-                      <td className="p-2.5 text-red-600" data-numeric>{formatNumber(r.absenceDeduction + r.lateDeduction + r.manualDeduction, 0)}</td>
-                      <td className="p-2.5 text-blue-600" data-numeric>{r.bonus > 0 ? formatNumber(r.bonus, 0) : '—'}</td>
-                      <td className="p-2.5 text-blue-600" data-numeric>{formatNumber(r.overtimePay, 0)}</td>
-                      <td className="p-2.5 font-black text-emerald-700" data-numeric>
-                        {formatNumber(r.net, 0)}
-                        {r.overrideNet != null && <span className="text-[10px] text-amber-600 mr-1">(يدوي)</span>}
-                      </td>
-                      <td className="p-2.5 print:hidden">
-                        <div className="flex gap-1.5">
-                          <Button size="sm" variant="outline" onClick={() => setEditing(r)}>
-                            <Pencil className="h-3 w-3" /> تعديل
-                          </Button>
-                          {!r.paid && r.net > 0 && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="text-emerald-700 border-emerald-200 hover:bg-emerald-50"
-                              onClick={() => {
-                                if (!confirm(`صرف راتب ${r.fullName} (${formatNumber(r.net, 0)} د.أ)؟`)) return;
-                                pay.mutate({ month, employeeId: r.employeeId, cashboxId: payCashbox || undefined });
-                              }}
-                              loading={pay.isPending && pay.variables?.employeeId === r.employeeId}
-                            >
-                              <Wallet className="h-3 w-3" /> صرف
-                            </Button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="bg-cyan-100 border-t-2 border-zinc-900 font-black">
+                <Td colSpan={2} strong>الإجماليات</Td>
+                <TdTint c="blue" strong>{fmt(totals.baseSalary)}</TdTint>
+                <TdTint c="green" strong>{fmt(totals.transport)}</TdTint>
+                <TdTint c="green" strong>{fmt(totals.overtime)}</TdTint>
+                <TdTint c="cyan" strong>{fmt(totals.gross)}</TdTint>
+                <TdTint c="orange" strong>{fmt(totals.compSS)}</TdTint>
+                <TdTint c="orange" strong>{fmt(totals.empSS)}</TdTint>
+                <TdTint c="orange" strong>{fmt(totals.advance)}</TdTint>
+                <TdTint c="orange" strong>{fmt(totals.attendance)}</TdTint>
+                <TdTint c="orange" strong>{fmt(totals.netDed)}</TdTint>
+                <TdTint c="cyan" strong>{fmt(totals.net)}</TdTint>
+                <Td colSpan={2}></Td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
 
-        <p className="text-[11px] text-zinc-400 print:hidden">
-          الحساب: اليومية = الراتب ÷ {data?.workingDays ?? 26} يوم · الساعة = اليومية ÷ 8 · الإضافي بمعدل 1.5×. علّم الغياب/التأخير/الإضافي من صفحة الموظفين، وأضف المكافآت/الخصومات اليدوية من زر «تعديل».
-        </p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Kpi label="مجموع الرواتب الأساسية" value={fmt(totals.baseSalary)} tint="blue" />
+          <Kpi label="مجموع بدل المواصلات" value={fmt(totals.transport)} tint="green" />
+          <Kpi label="مجموع العمل الإضافي" value={fmt(totals.overtime)} tint="green" />
+          <Kpi label="مجموع ضمان الموظفين" value={fmt(totals.empSS)} tint="orange" />
+          <Kpi label="مجموع ضمان الشركة" value={fmt(totals.compSS)} tint="orange" />
+          <Kpi label="مجموع السلف" value={fmt(totals.advance)} tint="orange" />
+          <Kpi label="مجموع خصم الدوام" value={fmt(totals.attendance)} tint="orange" />
+          <Kpi label="إجمالي تكلفة الرواتب على الشركة" value={fmt(totals.totalCompanyCost)} tint="cyan" />
+        </div>
       </div>
 
-      {editing && (
-        <PayrollEditModal
-          row={editing}
-          month={month}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            toast.success('تم حفظ تعديل الراتب');
-            setEditing(null);
-            qc.invalidateQueries({ queryKey: ['payroll'] });
-          }}
-          onError={(m) => toast.error(m)}
+      {editingRow && (
+        <DetailModal
+          row={editingRow}
+          effective={effective(editingRow)}
+          onChange={(field, value) => setF(editingRow.employeeId, field, value)}
+          onSave={() => { saveRow.mutate(editingRow); setEditingRow(null); }}
+          onClose={() => setEditingRow(null)}
         />
       )}
+
+      <style jsx global>{`
+        table th, table td { border: 1px solid #d4d4d8; padding: 4px 6px; text-align: right; }
+        input.pay-cell {
+          width: 100%; text-align: right; background: transparent;
+          border: 1px dashed transparent; padding: 2px 4px; font-family: inherit;
+          font-size: inherit; direction: ltr;
+        }
+        input.pay-cell:hover { border-color: #d4d4d8; }
+        input.pay-cell:focus { border-color: #18181b; background: white; outline: none; }
+      `}</style>
     </AppShell>
   );
 }
 
-function PayrollEditModal({
-  row,
-  month,
-  onClose,
-  onSaved,
-  onError,
+function fmt(v: any) {
+  const n = Number(v || 0);
+  return n.toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+}
+
+function Th({ children, w }: { children: React.ReactNode; w?: string }) {
+  return <th style={w ? { width: `${w}px` } : undefined} className="font-black text-[10px] whitespace-nowrap">{children}</th>;
+}
+function ThTint({ children, c }: { children: React.ReactNode; c: 'blue' | 'green' | 'orange' | 'cyan' }) {
+  const bg = { blue: 'bg-sky-200', green: 'bg-emerald-200', orange: 'bg-orange-200', cyan: 'bg-cyan-200' }[c];
+  return <th className={`${bg} font-black text-[10px] whitespace-nowrap`}>{children}</th>;
+}
+function Td({ children, strong, colSpan }: { children?: React.ReactNode; strong?: boolean; colSpan?: number }) {
+  return <td colSpan={colSpan} className={`${strong ? 'font-black' : ''} whitespace-nowrap`}>{children}</td>;
+}
+function TdTint({ children, c, strong }: { children: React.ReactNode; c: 'blue' | 'green' | 'orange' | 'cyan'; strong?: boolean }) {
+  const bg = { blue: 'bg-sky-50', green: 'bg-emerald-50', orange: 'bg-orange-50', cyan: 'bg-cyan-50' }[c];
+  return <td className={`${bg} ${strong ? 'font-black' : ''} whitespace-nowrap`} data-numeric>{children}</td>;
+}
+function TdInput({
+  value, onChange, disabled, c,
+}: { value: number; onChange: (v: string) => void; disabled?: boolean; c: 'blue' | 'green' | 'orange' }) {
+  const bg = { blue: 'bg-sky-50', green: 'bg-emerald-50', orange: 'bg-orange-50' }[c];
+  return (
+    <td className={`${bg} whitespace-nowrap`}>
+      <input
+        type="number"
+        step="0.001"
+        min={0}
+        defaultValue={value.toFixed(3)}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={(e) => { if (Number(e.target.value) < 0) e.target.value = '0'; }}
+        disabled={disabled}
+        className="pay-cell"
+      />
+    </td>
+  );
+}
+function Kpi({ label, value, tint }: { label: string; value: any; tint?: 'blue' | 'green' | 'orange' | 'cyan' }) {
+  const bg = tint === 'blue' ? 'bg-sky-50' : tint === 'green' ? 'bg-emerald-50' : tint === 'orange' ? 'bg-orange-50' : tint === 'cyan' ? 'bg-cyan-50' : 'bg-zinc-50';
+  return (
+    <div className={`${bg} rounded p-3 border border-zinc-200`}>
+      <div className="text-[10px] text-zinc-500 font-bold">{label}</div>
+      <div className="text-base font-black mt-1">{value}</div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   Detail Modal — تعديل موسّع لصف واحد
+═══════════════════════════════════════════ */
+function DetailModal({
+  row, effective, onChange, onSave, onClose,
 }: {
   row: any;
-  month: string;
+  effective: any;
+  onChange: (field: string, value: string) => void;
+  onSave: () => void;
   onClose: () => void;
-  onSaved: () => void;
-  onError: (m: string) => void;
 }) {
-  const [bonus, setBonus] = useState(String(row.bonus || ''));
-  const [deduction, setDeduction] = useState(String(row.manualDeduction || ''));
-  const [overrideNet, setOverrideNet] = useState(row.overrideNet != null ? String(row.overrideNet) : '');
-  const [notes, setNotes] = useState(row.notes || '');
-  const [saving, setSaving] = useState(false);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      await api.post('/employees/payroll/adjustment', {
-        employeeId: row.employeeId,
-        month,
-        bonus: bonus === '' ? 0 : +bonus,
-        deduction: deduction === '' ? 0 : +deduction,
-        overrideNet: overrideNet === '' ? null : +overrideNet,
-        notes: notes || null,
-      });
-      onSaved();
-    } catch (err: any) {
-      onError(err?.response?.data?.message || 'تعذّر حفظ التعديل');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  // معاينة الصافي
-  const previewNet =
-    overrideNet !== ''
-      ? +overrideNet
-      : row.computedNet + (bonus === '' ? 0 : +bonus) - (deduction === '' ? 0 : +deduction);
-
+  const [reason, setReason] = useState('');
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-5 border-b border-zinc-100">
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose} dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="sticky top-0 bg-white flex items-center justify-between p-5 border-b border-zinc-100 z-10">
           <div>
-            <h3 className="font-bold">تعديل راتب — {row.fullName}</h3>
-            <p className="text-xs text-zinc-500 mt-0.5">شهر {month}</p>
+            <h3 className="font-bold text-lg">تعديل راتب: {row.fullName}</h3>
+            <p className="text-xs text-zinc-500">{row.department || '—'} — {row.position || '—'}</p>
           </div>
-          <button onClick={onClose}>
-            <X className="h-5 w-5 text-zinc-400" />
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-900">
+            <X className="h-5 w-5" />
           </button>
         </div>
-        <form onSubmit={submit} className="p-5 space-y-4">
-          <div className="rounded-lg bg-zinc-50 border border-zinc-100 p-3 text-xs text-zinc-600 space-y-1">
-            <div className="flex justify-between"><span>الأساسي</span><span data-numeric>{formatNumber(row.baseSalary, 0)} د.أ</span></div>
-            <div className="flex justify-between"><span>خصم غياب/تأخير</span><span className="text-red-600" data-numeric>{formatNumber(row.absenceDeduction + row.lateDeduction, 1)}</span></div>
-            <div className="flex justify-between"><span>أجر إضافي</span><span className="text-blue-600" data-numeric>{formatNumber(row.overtimePay, 1)}</span></div>
-            <div className="flex justify-between font-bold border-t border-zinc-200 pt-1"><span>الصافي التلقائي</span><span data-numeric>{formatNumber(row.computedNet, 1)} د.أ</span></div>
+        <div className="p-5 space-y-4">
+          <div className="grid md:grid-cols-2 gap-3">
+            <Field label="الراتب الأساسي" value={effective.base} onChange={(v) => onChange('baseSalary', v)} />
+            <Field label="بدل مواصلات" value={effective.transport} onChange={(v) => onChange('transportOverride', v)} />
+            <Field label="عمل إضافي (المبلغ)" value={effective.overtime} onChange={(v) => onChange('overtimeAmount', v)} />
+            <Field label="سلف الموظفين (القسط الشهري)" value={effective.advance} onChange={(v) => onChange('advanceDeduction', v)} />
+            <Field label="خصم الدوام" value={effective.attendance} onChange={(v) => onChange('attendanceOverride', v)} />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <Input label="مكافأة (د.أ)" type="number" step="0.01" value={bonus} onChange={(e) => setBonus(e.target.value)} placeholder="0" />
-            <Input label="خصم يدوي (د.أ)" type="number" step="0.01" value={deduction} onChange={(e) => setDeduction(e.target.value)} placeholder="0" />
+          {/* المحسوبة (Read-only) */}
+          <div className="grid md:grid-cols-3 gap-3 bg-zinc-50 border border-zinc-100 rounded-lg p-3">
+            <RO label="إجمالي الراتب" value={effective.gross} tint="cyan" />
+            <RO label="ضمان الموظف 7.5%" value={effective.empSS} tint="orange" />
+            <RO label="ضمان الشركة 14.25%" value={effective.compSS} tint="orange" />
+            <RO label="صافي الاقتطاعات" value={effective.totalDed} tint="orange" />
+            <RO label="صافي الراتب" value={effective.net} tint="cyan" />
+            <RO label="تكلفة الشركة" value={effective.gross + effective.compSS} tint="cyan" />
           </div>
-          <Input
-            label="تجاوز الصافي يدوياً (اختياري)"
-            type="number"
-            step="0.01"
-            value={overrideNet}
-            onChange={(e) => setOverrideNet(e.target.value)}
-            placeholder="اتركه فارغاً للحساب التلقائي"
-            hint="إن أدخلت قيمة هنا، يصبح الصافي = هذه القيمة بالضبط"
-          />
-          <Input label="ملاحظات" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="ملاحظة على راتب الشهر" />
 
-          <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 flex justify-between items-center">
-            <span className="text-sm font-bold text-emerald-800">الصافي بعد التعديل</span>
-            <span className="text-lg font-black text-emerald-700" data-numeric>{formatNumber(previewNet, 1)} د.أ</span>
+          <div>
+            <label className="text-xs font-bold text-zinc-700 block mb-1">سبب التعديل (Audit)</label>
+            <input value={reason} onChange={(e) => { setReason(e.target.value); onChange('overrideReason', e.target.value); }}
+              placeholder="مطلوب عند التعديل اليدوي"
+              className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" />
           </div>
 
           <div className="flex justify-end gap-3">
-            <Button type="button" variant="ghost" onClick={onClose}>إلغاء</Button>
-            <Button type="submit" loading={saving}>حفظ التعديل</Button>
+            <Button variant="ghost" onClick={onClose}>إلغاء</Button>
+            <Button onClick={onSave}><Save className="h-4 w-4" /> حفظ التعديلات</Button>
           </div>
-        </form>
+        </div>
       </div>
+    </div>
+  );
+}
+
+function Field({ label, value, onChange }: { label: string; value: number; onChange: (v: string) => void }) {
+  return (
+    <div>
+      <label className="text-xs font-bold text-zinc-700 block mb-1">{label}</label>
+      <input
+        type="number" step="0.001" min={0}
+        defaultValue={value.toFixed(3)}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+      />
+    </div>
+  );
+}
+function RO({ label, value, tint }: { label: string; value: number; tint?: 'orange' | 'cyan' }) {
+  const bg = tint === 'orange' ? 'bg-orange-50' : tint === 'cyan' ? 'bg-cyan-50' : 'bg-zinc-50';
+  return (
+    <div className={`${bg} rounded p-2 border border-zinc-200`}>
+      <div className="text-[10px] text-zinc-500 font-bold">{label}</div>
+      <div className="text-sm font-black mt-1" data-numeric>{fmt(value)}</div>
     </div>
   );
 }

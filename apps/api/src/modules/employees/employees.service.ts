@@ -554,16 +554,35 @@ export class EmployeesService {
       deduction?: number;
       overrideNet?: number | null;
       notes?: string | null;
+      // ─── الحقول المحاسبية الجديدة ───
+      overtimeAmount?: number | null;
+      transportOverride?: number | null;
+      extraDeductions?: number;
+      overrideReason?: string | null;
+      // كذلك ندعم تحديث بدل المواصلات الافتراضي على مستوى الموظف (اختياري)
+      updateEmployeeTransport?: boolean;
     },
   ) {
     if (!data.employeeId || !data.month) {
       throw new BadRequestException('الموظف والشهر مطلوبان');
     }
-    // تأكد أن الموظف يتبع نفس المنشأة
     const emp = await this.prisma.employee.findFirst({
       where: { id: data.employeeId, tenantId },
     });
     if (!emp) throw new NotFoundException('الموظف غير موجود');
+
+    // Validation: منع القيم السالبة
+    const nonNeg = (v: any, name: string) => {
+      if (v == null || v === '') return;
+      const n = Number(v);
+      if (isNaN(n)) throw new BadRequestException(`${name} غير صالح`);
+      if (n < 0) throw new BadRequestException(`${name} لا يمكن أن يكون سالباً`);
+    };
+    nonNeg(data.bonus, 'المكافأة');
+    nonNeg(data.deduction, 'الخصم');
+    nonNeg(data.overtimeAmount, 'أجر الإضافي');
+    nonNeg(data.transportOverride, 'بدل المواصلات');
+    nonNeg(data.extraDeductions, 'الخصومات الإضافية');
 
     const bonus = new Prisma.Decimal(Number(data.bonus) || 0);
     const deduction = new Prisma.Decimal(Number(data.deduction) || 0);
@@ -573,6 +592,30 @@ export class EmployeesService {
         : new Prisma.Decimal(Number(data.overrideNet));
     const notes = data.notes || null;
 
+    const dec = (v: any) =>
+      v === null || v === undefined || v === '' ? null : new Prisma.Decimal(Number(v));
+
+    const patch: any = {
+      bonus,
+      deduction,
+      overrideNet,
+      notes,
+      overtimeAmount: dec(data.overtimeAmount),
+      transportOverride: dec(data.transportOverride),
+      extraDeductions: data.extraDeductions != null ? new Prisma.Decimal(Number(data.extraDeductions) || 0) : undefined,
+      overrideReason: data.overrideReason ?? null,
+    };
+    // نظّف undefined حتى لا يمس Prisma الحقول التي لم يُرسلها المستخدم
+    Object.keys(patch).forEach((k) => patch[k] === undefined && delete patch[k]);
+
+    // تحديث بدل المواصلات الافتراضي على ملف الموظف (اختياري)
+    if (data.updateEmployeeTransport && data.transportOverride != null) {
+      await this.prisma.employee.update({
+        where: { id: data.employeeId },
+        data: { transportAllowance: new Prisma.Decimal(Number(data.transportOverride) || 0) },
+      });
+    }
+
     return this.prisma.payrollAdjustment.upsert({
       where: {
         tenantId_employeeId_month: {
@@ -581,18 +624,54 @@ export class EmployeesService {
           month: data.month,
         },
       },
-      update: { bonus, deduction, overrideNet, notes },
+      update: patch,
       create: {
         tenantId,
         employeeId: data.employeeId,
         month: data.month,
-        bonus,
-        deduction,
-        overrideNet,
-        notes,
+        ...patch,
+        // ensure required defaults on create
+        bonus: patch.bonus ?? new Prisma.Decimal(0),
+        deduction: patch.deduction ?? new Prisma.Decimal(0),
         createdById: userId,
       },
     });
+  }
+
+  // ─── Bulk save (حفظ الكل) ─────────────────────────
+  async saveAllPayroll(
+    tenantId: string,
+    userId: string,
+    body: { month: string; rows: any[] },
+  ) {
+    if (!body.month || !Array.isArray(body.rows)) {
+      throw new BadRequestException('الشهر والصفوف مطلوبة');
+    }
+    const results: any[] = [];
+    for (const row of body.rows) {
+      try {
+        const r = await this.savePayrollAdjustment(tenantId, userId, {
+          employeeId: row.employeeId,
+          month: body.month,
+          bonus: row.bonus,
+          deduction: row.deduction,
+          overrideNet: row.overrideNet,
+          notes: row.notes,
+          overtimeAmount: row.overtimeAmount,
+          transportOverride: row.transportOverride,
+          extraDeductions: row.extraDeductions,
+          overrideReason: row.overrideReason,
+        });
+        results.push({ ok: true, employeeId: row.employeeId, id: r.id });
+      } catch (e: any) {
+        results.push({ ok: false, employeeId: row.employeeId, error: e?.message });
+      }
+    }
+    const failed = results.filter((r) => !r.ok).length;
+    if (failed > 0 && failed === results.length) {
+      throw new BadRequestException(`فشلت جميع الصفوف (${failed})`);
+    }
+    return { saved: results.length - failed, failed, results };
   }
 
   /**

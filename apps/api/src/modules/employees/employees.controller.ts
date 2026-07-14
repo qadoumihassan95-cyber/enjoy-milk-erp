@@ -157,9 +157,24 @@ export class EmployeesController {
       deduction?: number;
       overrideNet?: number | null;
       notes?: string | null;
+      overtimeAmount?: number | null;
+      transportOverride?: number | null;
+      extraDeductions?: number;
+      overrideReason?: string | null;
+      updateEmployeeTransport?: boolean;
     },
   ) {
     return this.service.savePayrollAdjustment(user.tenantId, user.id, body);
+  }
+
+  /** حفظ الكل — bulk save لصفوف الشهر */
+  @Post('payroll/save-all')
+  @Roles('MANAGER', 'ACCOUNTANT', 'HR')
+  saveAllPayroll(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: { month: string; rows: any[] },
+  ) {
+    return this.service.saveAllPayroll(user.tenantId, user.id, body);
   }
 
   /** صرف الرواتب (لموظف أو للكل) — يخصم من الصندوق ويسجّل مصروف */
