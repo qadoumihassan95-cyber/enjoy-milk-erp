@@ -584,38 +584,39 @@ export class EmployeesService {
     nonNeg(data.transportOverride, 'بدل المواصلات');
     nonNeg(data.extraDeductions, 'الخصومات الإضافية');
 
-    const bonus = new Prisma.Decimal(Number(data.bonus) || 0);
-    const deduction = new Prisma.Decimal(Number(data.deduction) || 0);
-    const overrideNet =
-      data.overrideNet === null || data.overrideNet === undefined || data.overrideNet === ('' as any)
-        ? null
-        : new Prisma.Decimal(Number(data.overrideNet));
-    const notes = data.notes || null;
-
+    // ─── تحديث جزئي فقط: نلمس فقط الحقول التي أرسلها المستخدم بشكل واضح.
+    //    هذا يمنع مسح `notes` أو `overtimeAmount` عندما يُرسل الـ FE فقط
+    //    الحقول التي عدّلها المستخدم.
     const dec = (v: any) =>
-      v === null || v === undefined || v === '' ? null : new Prisma.Decimal(Number(v));
+      v === null || v === '' ? null : new Prisma.Decimal(Number(v));
 
-    const patch: any = {
-      bonus,
-      deduction,
-      overrideNet,
-      notes,
-      overtimeAmount: dec(data.overtimeAmount),
-      transportOverride: dec(data.transportOverride),
-      extraDeductions: data.extraDeductions != null ? new Prisma.Decimal(Number(data.extraDeductions) || 0) : undefined,
-      overrideReason: data.overrideReason ?? null,
-    };
-    // نظّف undefined حتى لا يمس Prisma الحقول التي لم يُرسلها المستخدم
-    Object.keys(patch).forEach((k) => patch[k] === undefined && delete patch[k]);
+    const patch: any = {};
+    if (data.bonus !== undefined) patch.bonus = dec(data.bonus) ?? new Prisma.Decimal(0);
+    if (data.deduction !== undefined) patch.deduction = dec(data.deduction) ?? new Prisma.Decimal(0);
+    if (data.overrideNet !== undefined) patch.overrideNet = dec(data.overrideNet);
+    if (data.notes !== undefined) patch.notes = data.notes || null;
+    if (data.overtimeAmount !== undefined) patch.overtimeAmount = dec(data.overtimeAmount);
+    if (data.transportOverride !== undefined) patch.transportOverride = dec(data.transportOverride);
+    if (data.extraDeductions !== undefined) {
+      patch.extraDeductions = new Prisma.Decimal(Number(data.extraDeductions) || 0);
+    }
+    if (data.overrideReason !== undefined) patch.overrideReason = data.overrideReason || null;
 
-    // تحديث بدل المواصلات الافتراضي على ملف الموظف (اختياري)
+    // تحديث بدل المواصلات الافتراضي على ملف الموظف (اختياري) — Best-effort
+    // نُلفّه بـ try/catch لأن schema.transportAllowance قد لا تكون موجودة
+    // في نسخ Prisma client قديمة (يحدث بين الـ deploy وقبل الـ prisma generate).
     if (data.updateEmployeeTransport && data.transportOverride != null) {
-      await this.prisma.employee.update({
-        where: { id: data.employeeId },
-        data: { transportAllowance: new Prisma.Decimal(Number(data.transportOverride) || 0) },
-      });
+      try {
+        await (this.prisma.employee as any).update({
+          where: { id: data.employeeId },
+          data: { transportAllowance: new Prisma.Decimal(Number(data.transportOverride) || 0) },
+        });
+      } catch {
+        /* غير حرج — سيطبَّق كـ override شهري بدل الافتراضي */
+      }
     }
 
+    // upsert مع defaults ذكية على الـ create (بدل patch ??):
     return this.prisma.payrollAdjustment.upsert({
       where: {
         tenantId_employeeId_month: {
@@ -629,10 +630,14 @@ export class EmployeesService {
         tenantId,
         employeeId: data.employeeId,
         month: data.month,
-        ...patch,
-        // ensure required defaults on create
         bonus: patch.bonus ?? new Prisma.Decimal(0),
         deduction: patch.deduction ?? new Prisma.Decimal(0),
+        overrideNet: patch.overrideNet ?? null,
+        notes: patch.notes ?? null,
+        overtimeAmount: patch.overtimeAmount ?? null,
+        transportOverride: patch.transportOverride ?? null,
+        extraDeductions: patch.extraDeductions ?? new Prisma.Decimal(0),
+        overrideReason: patch.overrideReason ?? null,
         createdById: userId,
       },
     });

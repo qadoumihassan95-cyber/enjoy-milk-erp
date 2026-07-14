@@ -1299,7 +1299,8 @@ model TenantSetting {
   // BASIC_PLUS_TRANSPORT → الأساسي + بدل المواصلات
   // GROSS              → إجمالي الراتب (أساسي + مواصلات + إضافي)
   socialSecurityBasis   String   @default("BASIC")
-  employeeSSRate        Decimal  @db.Decimal(6, 4) @default(0.0750)  // 7.5%
+  // ملاحظة: Prisma يقبل numeric literals بشكل قياسي، ونسمّي القيم بالكسر العشري.
+  employeeSSRate        Decimal  @db.Decimal(6, 4) @default(0.075)   // 7.5%
   companySSRate         Decimal  @db.Decimal(6, 4) @default(0.1425)  // 14.25%
 
   updatedById           String?
