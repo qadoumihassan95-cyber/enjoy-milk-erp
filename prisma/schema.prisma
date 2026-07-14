@@ -1161,3 +1161,66 @@ model SimpleOrderLine {
   @@index([orderId])
   @@index([itemId])
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FIFO Costing (feature) — دفعات شراء + توزيع تكلفة البيع + إعدادات المستأجر
+// إضافي بالكامل، لا يمس أي بيانات موجودة.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// دفعة شراء (Purchase Batch) — تُنشأ عند كل استلام مادة
+model PurchaseBatch {
+  id             String   @id @default(cuid())
+  tenantId       String
+  itemId         String
+  batchNumber    String?              // مرجع اختياري (رقم الفاتورة/التشغيلة)
+  purchaseDate   DateTime @default(now())
+  quantity       Decimal  @db.Decimal(18, 4)   // الكمية الأصلية
+  remaining      Decimal  @db.Decimal(18, 4)   // ما تبقى بعد استهلاك FIFO
+  unitCost       Decimal  @db.Decimal(18, 4)   // سعر الوحدة
+  currency       String   @default("JOD")
+  sourceType     String?              // RECEIPT | MANUAL | TRANSFER_IN | PRODUCTION
+  sourceRefId    String?              // ربط بـ StockReceipt.id مثلاً
+  supplierId     String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+
+  allocations SaleCostAllocation[]
+
+  @@index([tenantId, itemId, purchaseDate])
+  @@index([itemId, remaining])
+  @@index([sourceType, sourceRefId])
+}
+
+// توزيع تكلفة عملية بيع على دفعات الشراء (سجل دائم لضمان ثبات الأرباح)
+model SaleCostAllocation {
+  id             String   @id @default(cuid())
+  tenantId       String
+  saleOrderId    String              // SimpleOrder.id
+  saleLineId     String?             // SimpleOrderLine.id (اختياري)
+  itemId         String
+  batchId        String
+  quantity       Decimal  @db.Decimal(18, 4)
+  unitCost       Decimal  @db.Decimal(18, 4)
+  totalCost      Decimal  @db.Decimal(18, 4)
+  method         String   @default("FIFO")   // FIFO | AVG | LIFO (مستقبلاً)
+  createdAt      DateTime @default(now())
+
+  batch PurchaseBatch @relation(fields: [batchId], references: [id])
+
+  @@index([tenantId, saleOrderId])
+  @@index([saleOrderId])
+  @@index([saleLineId])
+  @@index([batchId])
+  @@index([itemId])
+}
+
+// إعدادات المستأجر — الأسلوب الحسابي (FIFO افتراضي، قابل للتوسع)
+model TenantSetting {
+  id                 String   @id @default(cuid())
+  tenantId           String   @unique
+  costingMethod      String   @default("FIFO")  // FIFO | AVG | LIFO (المستقبل)
+  costingCurrency    String   @default("JOD")
+  updatedById        String?
+  updatedAt          DateTime @updatedAt
+  createdAt          DateTime @default(now())
+}

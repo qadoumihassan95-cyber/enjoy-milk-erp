@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import { FifoCostingService } from '../fifo/fifo.service';
 
 /**
  * Simple Orders Service
@@ -21,7 +22,10 @@ import { PrismaService } from '../../core/prisma/prisma.service';
  */
 @Injectable()
 export class SimpleOrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly fifo: FifoCostingService,
+  ) {}
 
   // ─── List ─────────────────────────────────────────
   async list(
@@ -111,7 +115,7 @@ export class SimpleOrdersService {
         include: { lines: true },
       });
 
-      // خصم المخزون فوراً للمنتجات المرتبطة بـ item
+      // خصم المخزون فوراً للمنتجات المرتبطة بـ item + احتساب FIFO
       const finWh = await tx.warehouse.findFirst({
         where: { tenantId, code: 'FIN' },
       });
@@ -138,6 +142,23 @@ export class SimpleOrdersService {
               performedById: userId,
             },
           });
+
+          // ─── FIFO: توزيع التكلفة على أقدم الدفعات (best-effort) ─
+          try {
+            await this.fifo.consumeForSale(
+              tenantId,
+              {
+                saleOrderId: order.id,
+                saleLineId: line.id,
+                itemId: line.itemId,
+                quantity: Number(line.quantity),
+              },
+              tx,
+            );
+          } catch {
+            /* لا توجد دفعات كافية بعد — نتجاهل بأمان،
+               التوزيع يمكن أن يُنفَّذ لاحقاً عند إضافة دفعات مطابقة */
+          }
         }
       }
 
@@ -480,6 +501,13 @@ export class SimpleOrdersService {
             },
           });
         }
+      }
+
+      // ─── FIFO: عكس التوزيع واسترجاع الرصيد إلى الدفعات ───
+      try {
+        await this.fifo.reverseForSale(tenantId, id, tx);
+      } catch {
+        /* لا توجد توزيعات — تجاهل بأمان */
       }
 
       await tx.simpleOrder.delete({ where: { id } });

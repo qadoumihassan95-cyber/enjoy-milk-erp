@@ -21,6 +21,7 @@ import { DailyProductionModule } from './modules/daily-production/daily-producti
 import { SimpleOrdersModule } from './modules/simple-orders/simple-orders.module';
 import { MachinesModule } from './modules/machines/machines.module';
 import { TelegramModule } from './modules/telegram/telegram.module';
+import { FifoModule } from './modules/fifo/fifo.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { TelegramModule } from './modules/telegram/telegram.module';
     SimpleOrdersModule,
     MachinesModule,
     TelegramModule,
+    FifoModule,
   ],
   providers: [
     // الترتيب مهم: المصادقة أولاً (تملأ req.user)، ثم فحص الأدوار

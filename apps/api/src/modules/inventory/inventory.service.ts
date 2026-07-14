@@ -796,6 +796,27 @@ export class InventoryService {
         },
       });
 
+      // ─── FIFO: أنشئ دفعة شراء (Purchase Batch) لكل استلام ─
+      // كل استلام يخلق سطراً مستقلاً في PurchaseBatch مع remaining = quantity.
+      // العمليات المستقبلية ستستهلك FIFO من هذا السطر.
+      if (qty > 0) {
+        await tx.purchaseBatch.create({
+          data: {
+            tenantId,
+            itemId: data.itemId,
+            batchNumber: data.batchNumber ?? data.invoiceNumber ?? null,
+            purchaseDate: data.productionDate ? new Date(data.productionDate) : new Date(),
+            quantity: new Prisma.Decimal(qty),
+            remaining: new Prisma.Decimal(qty),
+            unitCost: new Prisma.Decimal(data.unitCost ? Number(data.unitCost) : 0),
+            sourceType: source,
+            sourceRefId: receipt.id,
+            supplierId: data.supplierId ?? null,
+            createdById: userId,
+          },
+        });
+      }
+
       // حدّث بيانات الصنف (متوسط تكلفة مرجّح، آخر شراء)
       if (data.unitCost && source === 'SUPPLIER') {
         const currentAvg = item.avgCost ? Number(item.avgCost) : Number(item.costPrice ?? 0);
