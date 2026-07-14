@@ -733,8 +733,10 @@ model Employee {
   department         String?
   position           String?
   hireDate           DateTime?
-  baseSalary         Decimal?  @db.Decimal(18, 3)
-  // ─── بدل مواصلات افتراضي (يمكن تجاوزه شهرياً عبر PayrollAdjustment) ─
+  // NOTE: precision kept at (18,2) لتفادي أي مشاكل migration على الأعمدة الحالية
+  // الحسابات في الـ backend تُقرِّب لـ 3 خانات في المخرجات فقط.
+  baseSalary         Decimal?  @db.Decimal(18, 2)
+  // ─── بدل مواصلات افتراضي (حقل جديد — نستخدم 18,3 للدقة على JOD) ─
   transportAllowance Decimal   @db.Decimal(18, 3) @default(0)
   notes              String?
   active             Boolean   @default(true)
@@ -847,14 +849,16 @@ model PayrollAdjustment {
   tenantId           String
   employeeId         String
   month              String              // "2026-05"
-  bonus              Decimal   @db.Decimal(18, 3) @default(0)   // مكافأة
-  deduction          Decimal   @db.Decimal(18, 3) @default(0)   // خصم يدوي إضافي
-  overrideNet        Decimal?  @db.Decimal(18, 3)               // تجاوز الصافي بالكامل (اختياري)
-  // ─── حقول محاسبية ممتدة ─────────────────────────
+  // NOTE: الأعمدة الموجودة مسبقاً تبقى (18,2) لتفادي مشاكل migration؛
+  // الأعمدة الجديدة تستخدم (18,3) للدقة على الدينار الأردني.
+  bonus              Decimal   @db.Decimal(18, 2) @default(0)   // مكافأة
+  deduction          Decimal   @db.Decimal(18, 2) @default(0)   // خصم يدوي إضافي
+  overrideNet        Decimal?  @db.Decimal(18, 2)               // تجاوز الصافي بالكامل
+  // ─── حقول محاسبية ممتدة (جديدة — 18,3) ─────────
   overtimeAmount     Decimal?  @db.Decimal(18, 3)               // تجاوز يدوي لأجر العمل الإضافي
   transportOverride  Decimal?  @db.Decimal(18, 3)               // بدل مواصلات مخصص لهذا الشهر
   extraDeductions    Decimal   @db.Decimal(18, 3) @default(0)   // خصومات موظف معتمدة أخرى
-  employeeSSOverride Decimal?  @db.Decimal(18, 3)               // تجاوز يدوي لضمان الموظف (يتطلب صلاحية)
+  employeeSSOverride Decimal?  @db.Decimal(18, 3)               // تجاوز يدوي لضمان الموظف
   overrideReason     String?                                     // سبب أي تجاوز يدوي (للـ audit)
   notes              String?                                     // ملاحظات على راتب الشهر
   paid               Boolean   @default(false)
@@ -885,7 +889,7 @@ model License {
   attachmentUrl        String?       // رابط مرفق (أو data URL)
   attachmentName       String?
   createdAt            DateTime      @default(now())
-  updatedAt            DateTime      @updatedAt @default(now())
+  updatedAt            DateTime      @updatedAt
 
   @@unique([tenantId, type, number])
   @@index([tenantId, expiryDate])
