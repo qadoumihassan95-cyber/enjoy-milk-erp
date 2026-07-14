@@ -90,9 +90,16 @@ export class SimpleOrdersService {
 
   private computeOrderTotals(lines: any[], data: { tonPrice?: any; shippingCost?: any }) {
     const orderTon = data.tonPrice != null && data.tonPrice !== '' ? Number(data.tonPrice) : null;
-    const shipping = Number(data.shippingCost ?? 0) || 0;
+    // ⚠️ shippingCost حقل مستقل تماماً — يُنسخ من مدخل المستخدم فقط،
+    // ولا يُشتقّ أبداً من productsTotal أو من total.
+    const shippingRaw = data.shippingCost;
+    const shipping = shippingRaw == null || shippingRaw === '' ? 0 : Number(shippingRaw);
+    if (isNaN(shipping) || shipping < 0) {
+      throw new BadRequestException('أجور الشحن غير صالحة (يجب أن تكون رقماً غير سالب)');
+    }
     const computed = lines.map((l) => this.computeLine(l, orderTon));
     const productsTotal = computed.reduce((s, l) => s + l.lineTotal, 0);
+    // Grand Total = Products Total + Shipping (+ future: fees + taxes − discounts)
     const total = productsTotal + shipping;
     return { computed, orderTon, shipping, productsTotal, total };
   }
@@ -334,13 +341,44 @@ export class SimpleOrdersService {
       throw new BadRequestException('لا يمكن تعديل طلبية ملغاة');
     }
 
-    // إذا تغيّرت shippingCost أو tonPrice نعيد حساب total = productsTotal + shipping
+    // إذا تغيّرت shippingCost أو tonPrice نعيد حساب total = productsTotal + shipping.
+    //
+    // ⚠️ CRITICAL BUG FIX: productsTotal للطلبات القديمة يساوي 0 (backfill default)
+    // لكن total الأصلي يحتوي القيمة الصحيحة. لو استخدمنا productsTotal الافتراضي
+    // (=0) نُنتِج total = 0 + shipping = shipping — أي شحن يستبدل إجمالي الطلبية!
+    //
+    // الحل: نستخدم productsTotal المخزّن إن كان > 0، وإلا نُحسبه من مجموع lineTotal
+    // الفعلي (أو من total - existingShipping كخط دفاع أخير).
     let recalc: { total: Prisma.Decimal; shipping: Prisma.Decimal; tonPrice: Prisma.Decimal | null } | null = null;
     const shippingChanged = data.shippingCost !== undefined;
     const tonPriceChanged = data.tonPrice !== undefined;
     if (shippingChanged || tonPriceChanged) {
+      // ─── Validation: أجور الشحن يجب أن تكون رقماً غير سالب ───
+      if (shippingChanged) {
+        const raw = data.shippingCost;
+        if (raw !== null && raw !== '' && (isNaN(Number(raw)) || Number(raw) < 0)) {
+          throw new BadRequestException('أجور الشحن غير صالحة (رقم غير سالب مطلوب)');
+        }
+      }
       const shipping = Number(shippingChanged ? (data.shippingCost ?? 0) : (existing as any).shippingCost ?? 0);
-      const productsTotal = Number((existing as any).productsTotal ?? 0);
+
+      // نحسب productsTotal الصحيح بثلاث طبقات دفاع:
+      let productsTotal = Number((existing as any).productsTotal ?? 0);
+      if (productsTotal <= 0) {
+        // (1) نُشتقّه من مجموع lineTotal الفعلي على الطلبية
+        const lineSum = (existing.lines ?? []).reduce(
+          (s: number, l: any) => s + Number(l.lineTotal || 0),
+          0,
+        );
+        productsTotal = lineSum;
+      }
+      if (productsTotal <= 0) {
+        // (2) نستخرجه من total - shippingCost القديم (يحفظ التاريخ)
+        const oldShip = Number((existing as any).shippingCost ?? 0);
+        const derived = Number(existing.total) - oldShip;
+        productsTotal = Math.max(0, derived);
+      }
+
       const total = productsTotal + shipping;
       const paidNow = Number(existing.paid);
       recalc = {
@@ -350,13 +388,15 @@ export class SimpleOrdersService {
           ? (data.tonPrice === null || data.tonPrice === '' ? null : new Prisma.Decimal(Number(data.tonPrice)))
           : (existing as any).tonPrice ?? null,
       };
-      // نعيد حساب الحالة والرصيد أيضاً
+      // نعيد حساب الحالة والرصيد أيضاً — بناءً على total الجديد الصحيح
       await this.prisma.simpleOrder.update({
         where: { id },
-        data: {
+        data: ({
           balance: new Prisma.Decimal(Math.max(0, total - paidNow)),
           status: this.computeStatus(paidNow, total),
-        },
+          // نُخزّن productsTotal المُشتَق أيضاً حتى لا يتكرر الاشتقاق مستقبلاً
+          productsTotal: new Prisma.Decimal(productsTotal),
+        } as any),
       });
     }
 
