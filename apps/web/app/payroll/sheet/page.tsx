@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Printer, FileSpreadsheet, Filter } from 'lucide-react';
@@ -13,8 +13,22 @@ import { FACTORY_NAME } from '@/lib/branding';
  * تصميم محاسبي احترافي (A4 Landscape) للطباعة و PDF و Excel.
  * لا يعدّل الداشبورد الحالي — صفحة منفصلة تفتح في تبويب جديد.
  * تستخدم نفس الـ endpoint /employees/payroll ولا تكرر أي حسابات.
+ *
+ * ملاحظة معمارية: Next.js 14 يشترط أن يكون useSearchParams داخل
+ * حدود Suspense وقت الـ prerender؛ لذلك نُصدِّر Wrapper يلفّ المكوّن
+ * الفعلي بـ <Suspense> لتجنّب فشل الـ build (missing-suspense-with-csr-bailout).
  */
+export const dynamic = 'force-dynamic';
+
 export default function PayrollSheetPage() {
+  return (
+    <Suspense fallback={<div dir="rtl" className="p-8 text-center text-zinc-500">جاري تحميل الكشف...</div>}>
+      <PayrollSheetInner />
+    </Suspense>
+  );
+}
+
+function PayrollSheetInner() {
   const search = useSearchParams();
   const [month, setMonth] = useState<string>(() => search?.get('month') ?? new Date().toISOString().slice(0, 7));
   const [department, setDepartment] = useState('');
