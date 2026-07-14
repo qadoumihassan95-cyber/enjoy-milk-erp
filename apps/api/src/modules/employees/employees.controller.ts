@@ -13,12 +13,100 @@ import { CurrentUser } from '../../core/auth/current-user.decorator';
 import { Roles } from '../../core/auth/roles.decorator';
 import type { AuthenticatedUser } from '../../core/auth/jwt.strategy';
 import { EmployeesService } from './employees.service';
+import { PrismaService } from '../../core/prisma/prisma.service';
 
 @ApiTags('employees')
 @ApiBearerAuth()
 @Controller('employees')
 export class EmployeesController {
-  constructor(private readonly service: EmployeesService) {}
+  constructor(
+    private readonly service: EmployeesService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  // ─── Payroll Settings (SS basis + rates) ─────────
+  @Get('payroll/settings')
+  @Roles('MANAGER', 'ACCOUNTANT', 'HR')
+  async getPayrollSettings(@CurrentUser() user: AuthenticatedUser) {
+    let s = await this.prisma.tenantSetting.findUnique({ where: { tenantId: user.tenantId } });
+    if (!s) {
+      s = await this.prisma.tenantSetting.create({
+        data: { tenantId: user.tenantId },
+      });
+    }
+    return {
+      socialSecurityBasis: s.socialSecurityBasis ?? 'BASIC',
+      employeeSSRate: Number((s as any).employeeSSRate ?? 0.075),
+      companySSRate: Number((s as any).companySSRate ?? 0.1425),
+      availableBases: ['BASIC', 'BASIC_PLUS_TRANSPORT', 'GROSS'],
+    };
+  }
+
+  @Post('payroll/settings')
+  @Roles('MANAGER', 'ACCOUNTANT')
+  async setPayrollSettings(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: { socialSecurityBasis?: string; employeeSSRate?: number; companySSRate?: number },
+  ) {
+    const allowed = ['BASIC', 'BASIC_PLUS_TRANSPORT', 'GROSS'];
+    const basis = allowed.includes(String(body.socialSecurityBasis)) ? body.socialSecurityBasis : 'BASIC';
+    return this.prisma.tenantSetting.upsert({
+      where: { tenantId: user.tenantId },
+      create: {
+        tenantId: user.tenantId,
+        socialSecurityBasis: basis!,
+        employeeSSRate: body.employeeSSRate ?? 0.075,
+        companySSRate: body.companySSRate ?? 0.1425,
+        updatedById: user.id,
+      },
+      update: {
+        socialSecurityBasis: basis!,
+        employeeSSRate: body.employeeSSRate ?? undefined,
+        companySSRate: body.companySSRate ?? undefined,
+        updatedById: user.id,
+      },
+    });
+  }
+
+  // ─── Employee advances (سلف الموظفين) ─────────────
+  @Get('advances')
+  @Roles('MANAGER', 'ACCOUNTANT', 'HR')
+  listAdvances(@CurrentUser() user: AuthenticatedUser, @Query('employeeId') employeeId?: string) {
+    return this.prisma.employeeAdvance.findMany({
+      where: { tenantId: user.tenantId, ...(employeeId ? { employeeId } : {}) },
+      include: { installments: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  @Post('advances')
+  @Roles('MANAGER', 'ACCOUNTANT', 'HR')
+  async createAdvance(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: {
+      employeeId: string;
+      amount: number;
+      installmentAmount: number;
+      installmentsCount: number;
+      startMonth: string;
+      notes?: string;
+    },
+  ) {
+    if (!(body.amount > 0)) throw new Error('مبلغ السلفة غير صحيح');
+    if (!(body.installmentAmount > 0)) throw new Error('قيمة القسط غير صحيحة');
+    return this.prisma.employeeAdvance.create({
+      data: {
+        tenantId: user.tenantId,
+        employeeId: body.employeeId,
+        amount: body.amount,
+        installmentAmount: body.installmentAmount,
+        installmentsCount: body.installmentsCount,
+        startMonth: body.startMonth,
+        notes: body.notes ?? null,
+        createdById: user.id,
+      },
+    });
+  }
 
   @Get()
   list(@CurrentUser() user: AuthenticatedUser) {

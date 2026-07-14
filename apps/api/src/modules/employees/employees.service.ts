@@ -311,9 +311,18 @@ export class EmployeesService {
     const end = new Date(ref.getFullYear(), ref.getMonth() + 1, 1);
     const monthKey = start.toISOString().slice(0, 7);
     const WORKING_DAYS = 26;
-    const round = (n: number) => Math.round(n * 100) / 100;
+    // JOD payroll: 3 عشريات، قواعد تقريب موحّدة
+    const round = (n: number) => Math.round(n * 1000) / 1000;
 
-    const [employees, records, adjustments] = await Promise.all([
+    // ─── جلب إعدادات المستأجر (SS basis + rates) ─
+    const settings = await this.prisma.tenantSetting.findUnique({
+      where: { tenantId },
+    }).catch(() => null);
+    const ssBasis = (settings?.socialSecurityBasis ?? 'BASIC') as 'BASIC' | 'BASIC_PLUS_TRANSPORT' | 'GROSS';
+    const empSSRate = settings ? Number(settings.employeeSSRate) : 0.075;
+    const compSSRate = settings ? Number(settings.companySSRate) : 0.1425;
+
+    const [employees, records, adjustments, activeAdvances, installments] = await Promise.all([
       this.prisma.employee.findMany({ where: { tenantId, active: true } }),
       this.prisma.attendanceRecord.findMany({
         where: { tenantId, date: { gte: start, lt: end } },
@@ -321,6 +330,12 @@ export class EmployeesService {
       this.prisma.payrollAdjustment.findMany({
         where: { tenantId, month: monthKey },
       }),
+      this.prisma.employeeAdvance.findMany({
+        where: { tenantId, status: 'ACTIVE' },
+      }).catch(() => [] as any[]),
+      this.prisma.advanceInstallment.findMany({
+        where: { tenantId, month: monthKey },
+      }).catch(() => [] as any[]),
     ]);
 
     const byEmp = new Map<
@@ -338,6 +353,15 @@ export class EmployeesService {
     }
 
     const adjByEmp = new Map(adjustments.map((a) => [a.employeeId, a]));
+    // خريطة السلف الفعّالة لكل موظف مع رصيد متبقٍ
+    const advancesByEmp = new Map<string, any[]>();
+    for (const a of activeAdvances) {
+      const list = advancesByEmp.get(a.employeeId) ?? [];
+      list.push(a);
+      advancesByEmp.set(a.employeeId, list);
+    }
+    // خريطة السلف المخصومة هذا الشهر (لتفادي الخصم المكرر)
+    const installmentByAdvance = new Map(installments.map((i) => [i.advanceId, i]));
 
     const rows = employees.map((emp) => {
       const base = Number(emp.baseSalary ?? 0);
@@ -346,16 +370,68 @@ export class EmployeesService {
       const hourlyRate = dailyRate / 8;
       const absenceDeduction = s.absent * dailyRate;
       const lateDeduction = (s.lateMin / 60) * hourlyRate;
-      const overtimePay = (s.overtimeMin / 60) * hourlyRate * 1.5;
-      // الصافي المحسوب تلقائياً (قبل التعديلات اليدوية)
-      const computedNet = base - absenceDeduction - lateDeduction + overtimePay;
+      const overtimePayAuto = (s.overtimeMin / 60) * hourlyRate * 1.5;
 
-      // ── التعديلات اليدوية ──
       const adj = adjByEmp.get(emp.id);
-      const bonus = Number(adj?.bonus ?? 0);
-      const manualDeduction = Number(adj?.deduction ?? 0);
+
+      // ── بدل مواصلات ──
+      const transportDefault = Number((emp as any).transportAllowance ?? 0);
+      const transport =
+        adj && (adj as any).transportOverride != null
+          ? Number((adj as any).transportOverride)
+          : transportDefault;
+
+      // ── أجر إضافي: إذا فيه تجاوز يدوي نأخذه، وإلا الحساب التلقائي + مكافأة ──
+      const overtimeAmount =
+        adj && (adj as any).overtimeAmount != null
+          ? Number((adj as any).overtimeAmount)
+          : overtimePayAuto + Number(adj?.bonus ?? 0);
+
+      // ── الإجمالي (Gross): أساسي + إضافي + مواصلات ──
+      const grossSalary = base + overtimeAmount + transport;
+
+      // ── أساس الضمان حسب الإعداد ──
+      const ssBase =
+        ssBasis === 'GROSS' ? grossSalary
+        : ssBasis === 'BASIC_PLUS_TRANSPORT' ? base + transport
+        : base;
+      const employeeSSAuto = ssBase * empSSRate;
+      const companySS = ssBase * compSSRate;
+      // السماح بتجاوز يدوي للضمان (صلاحية مُدار عليها من الـ controller)
+      const employeeSS = adj && (adj as any).employeeSSOverride != null
+        ? Number((adj as any).employeeSSOverride)
+        : employeeSSAuto;
+
+      // ── سلف الموظفين: قسط الشهر ──
+      let advanceDeduction = 0;
+      const advanceDetails: Array<{ id: string; installment: number; remaining: number }> = [];
+      for (const adv of advancesByEmp.get(emp.id) ?? []) {
+        // إذا الشهر أقدم من startMonth نتجاهله
+        if (String(adv.startMonth) > monthKey) continue;
+        const remaining = Number(adv.amount) - Number(adv.paidAmount);
+        if (remaining <= 0) continue;
+        // إذا كان القسط مخصوم هذا الشهر مسبقاً نأخذ قيمته من السجل
+        const already = installmentByAdvance.get(adv.id);
+        const installmentAmt = already
+          ? Number(already.amount)
+          : Math.min(Number(adv.installmentAmount), remaining);
+        advanceDeduction += installmentAmt;
+        advanceDetails.push({ id: adv.id, installment: installmentAmt, remaining });
+      }
+
+      // ── خصم الدوام (مُجمَّع): غياب + تأخير + خصم يدوي ──
+      const attendanceDeduction = absenceDeduction + lateDeduction + Number(adj?.deduction ?? 0);
+
+      // ── صافي الاقتطاعات: ضمان الموظف + سلف + خصم دوام + خصومات أخرى معتمدة ──
+      const extraDeductions = Number((adj as any)?.extraDeductions ?? 0);
+      const totalDeductions = employeeSS + advanceDeduction + attendanceDeduction + extraDeductions;
+
+      // ── صافي الراتب: إجمالي − اقتطاعات ──
       const overrideNet = adj?.overrideNet != null ? Number(adj.overrideNet) : null;
-      const net = overrideNet != null ? overrideNet : computedNet + bonus - manualDeduction;
+      const netSalary = overrideNet != null ? overrideNet : grossSalary - totalDeductions;
+
+      // تكلفة الشركة الكلية = Gross + Company SS (الموظف SS جزء من Gross)
+      const totalCompanyCost = grossSalary + companySS;
 
       return {
         employeeId: emp.id,
@@ -363,6 +439,7 @@ export class EmployeesService {
         fullName: emp.fullName,
         department: emp.department,
         position: emp.position,
+
         baseSalary: round(base),
         dailyRate: round(dailyRate),
         hourlyRate: round(hourlyRate),
@@ -370,46 +447,98 @@ export class EmployeesService {
         absentDays: s.absent,
         lateHours: round(s.lateMin / 60),
         overtimeHours: round(s.overtimeMin / 60),
+
+        // ─── الحقول المحاسبية المطلوبة ─
+        transportAllowance: round(transport),
+        overtimeAmount: round(overtimeAmount),
+        grossSalary: round(grossSalary),
+
+        ssBase: round(ssBase),
+        ssBasis,
+        employeeSSRate: empSSRate,
+        companySSRate: compSSRate,
+        employeeSS: round(employeeSS),
+        companySS: round(companySS),
+
+        advanceDeduction: round(advanceDeduction),
+        advanceDetails,
+
+        attendanceDeduction: round(attendanceDeduction),
+        // تفصيل خصم الدوام (لمودال التفاصيل)
         absenceDeduction: round(absenceDeduction),
         lateDeduction: round(lateDeduction),
-        overtimePay: round(overtimePay),
-        computedNet: round(computedNet),
-        // التعديلات اليدوية
-        bonus: round(bonus),
-        manualDeduction: round(manualDeduction),
+        manualAttendancePenalty: round(Number(adj?.deduction ?? 0)),
+
+        extraDeductions: round(extraDeductions),
+        totalDeductions: round(totalDeductions),
+        netSalary: round(netSalary),
+        totalCompanyCost: round(totalCompanyCost),
+
+        // ── حقول للتوافق الرجعي مع الشاشات القديمة ──
+        bonus: round(Number(adj?.bonus ?? 0)),
+        manualDeduction: round(Number(adj?.deduction ?? 0)),
+        overtimePay: round(overtimePayAuto),
         overrideNet: overrideNet != null ? round(overrideNet) : null,
+        computedNet: round(grossSalary - attendanceDeduction),
+        net: round(netSalary),
+
         notes: adj?.notes ?? null,
         paid: adj?.paid ?? false,
         paidAt: adj?.paidAt ?? null,
-        net: round(net),
       };
     });
 
     const totals = rows.reduce(
       (t, r) => ({
         baseSalary: t.baseSalary + r.baseSalary,
+        transportAllowance: t.transportAllowance + r.transportAllowance,
+        overtimeAmount: t.overtimeAmount + r.overtimeAmount,
+        grossSalary: t.grossSalary + r.grossSalary,
+        employeeSS: t.employeeSS + r.employeeSS,
+        companySS: t.companySS + r.companySS,
+        advanceDeduction: t.advanceDeduction + r.advanceDeduction,
+        attendanceDeduction: t.attendanceDeduction + r.attendanceDeduction,
+        totalDeductions: t.totalDeductions + r.totalDeductions,
+        net: t.net + r.netSalary,
+        paid: t.paid + (r.paid ? r.netSalary : 0),
+        unpaid: t.unpaid + (r.paid ? 0 : r.netSalary),
+        // legacy
         deductions: t.deductions + r.absenceDeduction + r.lateDeduction + r.manualDeduction,
         bonus: t.bonus + r.bonus,
         overtimePay: t.overtimePay + r.overtimePay,
-        net: t.net + r.net,
-        paid: t.paid + (r.paid ? r.net : 0),
-        unpaid: t.unpaid + (r.paid ? 0 : r.net),
       }),
-      { baseSalary: 0, deductions: 0, bonus: 0, overtimePay: 0, net: 0, paid: 0, unpaid: 0 },
+      {
+        baseSalary: 0, transportAllowance: 0, overtimeAmount: 0, grossSalary: 0,
+        employeeSS: 0, companySS: 0, advanceDeduction: 0, attendanceDeduction: 0,
+        totalDeductions: 0, net: 0, paid: 0, unpaid: 0,
+        deductions: 0, bonus: 0, overtimePay: 0,
+      },
     );
 
     return {
       month: monthKey,
       workingDays: WORKING_DAYS,
+      settings: { socialSecurityBasis: ssBasis, employeeSSRate: empSSRate, companySSRate: compSSRate },
       rows,
       totals: {
         baseSalary: round(totals.baseSalary),
-        deductions: round(totals.deductions),
-        bonus: round(totals.bonus),
-        overtimePay: round(totals.overtimePay),
+        transportAllowance: round(totals.transportAllowance),
+        overtimeAmount: round(totals.overtimeAmount),
+        grossSalary: round(totals.grossSalary),
+        employeeSS: round(totals.employeeSS),
+        companySS: round(totals.companySS),
+        advanceDeduction: round(totals.advanceDeduction),
+        attendanceDeduction: round(totals.attendanceDeduction),
+        totalDeductions: round(totals.totalDeductions),
         net: round(totals.net),
         paid: round(totals.paid),
         unpaid: round(totals.unpaid),
+        // إجمالي تكلفة الرواتب على الشركة = Gross + Company SS
+        totalCompanyCost: round(totals.grossSalary + totals.companySS),
+        // legacy
+        deductions: round(totals.deductions),
+        bonus: round(totals.bonus),
+        overtimePay: round(totals.overtimePay),
       },
     };
   }

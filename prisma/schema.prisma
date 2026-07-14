@@ -723,27 +723,71 @@ model Expense {
 // ─── HR ────────────────────────────────────────────────────────────────
 
 model Employee {
-  id         String    @id @default(cuid())
-  tenantId   String
-  code       String
-  fullName   String
-  nationalId String?
-  phone      String?
-  email      String?
-  department String?
-  position   String?
-  hireDate   DateTime?
-  baseSalary Decimal?  @db.Decimal(18, 2)
-  notes      String?
-  active     Boolean   @default(true)
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  tenantId           String
+  code               String
+  fullName           String
+  nationalId         String?
+  phone              String?
+  email              String?
+  department         String?
+  position           String?
+  hireDate           DateTime?
+  baseSalary         Decimal?  @db.Decimal(18, 3)
+  // ─── بدل مواصلات افتراضي (يمكن تجاوزه شهرياً عبر PayrollAdjustment) ─
+  transportAllowance Decimal   @db.Decimal(18, 3) @default(0)
+  notes              String?
+  active             Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   attendance AttendanceRecord[]
   documents  EmployeeDocument[]
+  advances   EmployeeAdvance[]
 
   @@unique([tenantId, code])
   @@index([tenantId, active])
+}
+
+// ─── سلف الموظفين (Advances / Loans) ─────────────────
+// السلفة تُنشأ بمبلغ كامل وعدد أقساط. كل شهر يُخصم قسط واحد
+// (installmentAmount) من راتب الموظف حتى ينفد المبلغ. يمنع الخصم
+// المكرر عن طريق تسجيل الشهور المخصومة في AdvanceInstallment.
+model EmployeeAdvance {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  employeeId         String
+  amount             Decimal  @db.Decimal(18, 3)   // المبلغ الكلي
+  installmentAmount  Decimal  @db.Decimal(18, 3)   // قسط شهري
+  installmentsCount  Int                            // عدد الأقساط الكلي
+  paidAmount         Decimal  @db.Decimal(18, 3) @default(0)
+  status             String   @default("ACTIVE")   // ACTIVE | CLOSED | CANCELLED
+  notes              String?
+  startMonth         String                        // "YYYY-MM" — أول شهر خصم
+  createdById        String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  employee     Employee               @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  installments AdvanceInstallment[]
+
+  @@index([tenantId, employeeId])
+  @@index([tenantId, status])
+}
+
+// سجل خصم قسط سلفة في شهر معيّن — يمنع الخصم المزدوج
+model AdvanceInstallment {
+  id         String   @id @default(cuid())
+  tenantId   String
+  advanceId  String
+  month      String                                 // "YYYY-MM"
+  amount     Decimal  @db.Decimal(18, 3)
+  createdAt  DateTime @default(now())
+
+  advance EmployeeAdvance @relation(fields: [advanceId], references: [id], onDelete: Cascade)
+
+  @@unique([advanceId, month])
+  @@index([tenantId, month])
 }
 
 // ─── ملفات الموظف (وثائق) ─────────────────────────────
@@ -799,20 +843,26 @@ enum AttendanceStatus {
 // ── تعديلات الرواتب اليدوية (مكافآت/خصومات/تجاوز يدوي/ملاحظات) ──
 // سجل واحد لكل موظف لكل شهر. يُطبَّق فوق الحساب التلقائي في كشف الرواتب.
 model PayrollAdjustment {
-  id          String    @id @default(cuid())
-  tenantId    String
-  employeeId  String
-  month       String              // "2026-05"
-  bonus       Decimal   @db.Decimal(18, 2) @default(0)   // مكافأة
-  deduction   Decimal   @db.Decimal(18, 2) @default(0)   // خصم يدوي إضافي
-  overrideNet Decimal?  @db.Decimal(18, 2)               // تجاوز الصافي بالكامل (اختياري)
-  notes       String?                                     // ملاحظات على راتب الشهر
-  paid        Boolean   @default(false)                  // تم الصرف؟
-  paidAt      DateTime?
-  cashboxId   String?                                     // الصندوق الذي صُرف منه
-  createdById String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  tenantId           String
+  employeeId         String
+  month              String              // "2026-05"
+  bonus              Decimal   @db.Decimal(18, 3) @default(0)   // مكافأة
+  deduction          Decimal   @db.Decimal(18, 3) @default(0)   // خصم يدوي إضافي
+  overrideNet        Decimal?  @db.Decimal(18, 3)               // تجاوز الصافي بالكامل (اختياري)
+  // ─── حقول محاسبية ممتدة ─────────────────────────
+  overtimeAmount     Decimal?  @db.Decimal(18, 3)               // تجاوز يدوي لأجر العمل الإضافي
+  transportOverride  Decimal?  @db.Decimal(18, 3)               // بدل مواصلات مخصص لهذا الشهر
+  extraDeductions    Decimal   @db.Decimal(18, 3) @default(0)   // خصومات موظف معتمدة أخرى
+  employeeSSOverride Decimal?  @db.Decimal(18, 3)               // تجاوز يدوي لضمان الموظف (يتطلب صلاحية)
+  overrideReason     String?                                     // سبب أي تجاوز يدوي (للـ audit)
+  notes              String?                                     // ملاحظات على راتب الشهر
+  paid               Boolean   @default(false)
+  paidAt             DateTime?
+  cashboxId          String?
+  createdById        String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   @@unique([tenantId, employeeId, month])
   @@index([tenantId, month])
@@ -1235,11 +1285,20 @@ model SaleCostAllocation {
 
 // إعدادات المستأجر — الأسلوب الحسابي (FIFO افتراضي، قابل للتوسع)
 model TenantSetting {
-  id                 String   @id @default(cuid())
-  tenantId           String   @unique
-  costingMethod      String   @default("FIFO")  // FIFO | AVG | LIFO (المستقبل)
-  costingCurrency    String   @default("JOD")
-  updatedById        String?
-  updatedAt          DateTime @updatedAt
-  createdAt          DateTime @default(now())
+  id                    String   @id @default(cuid())
+  tenantId              String   @unique
+  costingMethod         String   @default("FIFO")  // FIFO | AVG | LIFO
+  costingCurrency       String   @default("JOD")
+
+  // ─── إعدادات الرواتب / الضمان الاجتماعي ─────────
+  // BASIC              → الضمان على الراتب الأساسي فقط (افتراضي)
+  // BASIC_PLUS_TRANSPORT → الأساسي + بدل المواصلات
+  // GROSS              → إجمالي الراتب (أساسي + مواصلات + إضافي)
+  socialSecurityBasis   String   @default("BASIC")
+  employeeSSRate        Decimal  @db.Decimal(6, 4) @default(0.0750)  // 7.5%
+  companySSRate         Decimal  @db.Decimal(6, 4) @default(0.1425)  // 14.25%
+
+  updatedById           String?
+  updatedAt             DateTime @updatedAt
+  createdAt             DateTime @default(now())
 }

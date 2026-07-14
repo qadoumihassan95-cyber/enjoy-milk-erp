@@ -56,30 +56,42 @@ function PayrollSheetInner() {
     });
   }, [data, department, employee, paidFilter]);
 
+  // نستخدم إجماليات الـ backend مباشرة (source of truth) عندما تكون متاحة،
+  // ونعيد الحساب من الصفوف المُصفّاة عندما يكون في فلترة أمامية.
   const totals = useMemo(() => {
-    let baseSalary = 0, totalBonus = 0, totalDeduct = 0, gross = 0, net = 0;
-    rows.forEach((r) => {
-      const b = Number(r.baseSalary || 0);
-      const bonus = Number(r.bonus || 0);
-      const overtime = Number(r.overtimePay || 0);
-      const totalBonusRow = bonus + overtime;
-      const absenceDed = Number(r.absenceDeduction || 0);
-      const lateDed = Number(r.lateDeduction || 0);
-      const manualDed = Number(r.manualDeduction || 0);
-      const totalDedRow = absenceDed + lateDed + manualDed;
-      const grossRow = b + totalBonusRow;
-      baseSalary += b;
-      totalBonus += totalBonusRow;
-      totalDeduct += totalDedRow;
-      gross += grossRow;
-      net += Number(r.net || 0);
+    const t = (data?.totals ?? {}) as any;
+    let baseSalary = 0, transport = 0, overtime = 0, gross = 0;
+    let empSS = 0, compSS = 0, advance = 0, attendance = 0, netDed = 0, net = 0;
+    rows.forEach((r: any) => {
+      baseSalary += Number(r.baseSalary || 0);
+      transport += Number(r.transportAllowance || 0);
+      overtime += Number(r.overtimeAmount || 0);
+      gross += Number(r.grossSalary || 0);
+      empSS += Number(r.employeeSS || 0);
+      compSS += Number(r.companySS || 0);
+      advance += Number(r.advanceDeduction || 0);
+      attendance += Number(r.attendanceDeduction || 0);
+      netDed += Number(r.totalDeductions || 0);
+      net += Number(r.netSalary ?? r.net ?? 0);
     });
+    // إن لم يوجد فلترة أمامية نستخدم أرقام الـ backend للتأكد من التطابق
+    const useBackend = rows.length === (data?.rows?.length ?? 0);
     return {
-      baseSalary, totalBonus, totalDeduct, gross, net,
+      baseSalary: useBackend ? Number(t.baseSalary ?? baseSalary) : baseSalary,
+      transport: useBackend ? Number(t.transportAllowance ?? transport) : transport,
+      overtime: useBackend ? Number(t.overtimeAmount ?? overtime) : overtime,
+      gross: useBackend ? Number(t.grossSalary ?? gross) : gross,
+      empSS: useBackend ? Number(t.employeeSS ?? empSS) : empSS,
+      compSS: useBackend ? Number(t.companySS ?? compSS) : compSS,
+      advance: useBackend ? Number(t.advanceDeduction ?? advance) : advance,
+      attendance: useBackend ? Number(t.attendanceDeduction ?? attendance) : attendance,
+      netDed: useBackend ? Number(t.totalDeductions ?? netDed) : netDed,
+      net: useBackend ? Number(t.net ?? net) : net,
+      totalCompanyCost: useBackend ? Number(t.totalCompanyCost ?? gross + compSS) : gross + compSS,
       count: rows.length,
       avg: rows.length > 0 ? net / rows.length : 0,
     };
-  }, [rows]);
+  }, [rows, data]);
 
   const departments = useMemo(() => {
     const set = new Set<string>();
@@ -90,30 +102,26 @@ function PayrollSheetInner() {
   const exportExcel = () => {
     const BOM = '﻿';
     const headers = [
-      '#', 'الاسم', 'القسم', 'المسمى الوظيفي', 'الراتب الأساسي',
-      'أيام الحضور', 'أيام الغياب', 'ساعات التأخير', 'ساعات إضافية',
-      'أجر الإضافي', 'مكافأة', 'إجمالي البدلات',
-      'خصم الغياب', 'خصم التأخير', 'خصومات يدوية', 'إجمالي الخصومات',
-      'الإجمالي', 'الصافي', 'الحالة', 'ملاحظات',
+      'الرقم', 'اسم الموظف', 'الراتب الأساسي', 'بدل مواصلات', 'عمل إضافي',
+      'إجمالي الراتب', 'ضمان الشركة 14.25%', 'ضمان الموظف 7.5%',
+      'سلف الموظفين', 'خصم الدوام', 'صافي الاقتطاعات', 'صافي الراتب',
     ];
-    const rowsCsv = [headers, ...rows.map((r: any, i: number) => {
-      const totalBonusRow = Number(r.bonus || 0) + Number(r.overtimePay || 0);
-      const totalDedRow = Number(r.absenceDeduction || 0) + Number(r.lateDeduction || 0) + Number(r.manualDeduction || 0);
-      const grossRow = Number(r.baseSalary || 0) + totalBonusRow;
-      return [
-        i + 1, r.fullName, r.department ?? '—', r.position ?? '—', num(r.baseSalary),
-        r.presentDays, r.absentDays, num(r.lateHours), num(r.overtimeHours),
-        num(r.overtimePay), num(r.bonus), num(totalBonusRow),
-        num(r.absenceDeduction), num(r.lateDeduction), num(r.manualDeduction), num(totalDedRow),
-        num(grossRow), num(r.net), r.paid ? 'مصروف' : 'غير مصروف', r.notes ?? '—',
-      ];
-    })];
+    const rowsCsv = [headers, ...rows.map((r: any, i: number) => [
+      i + 1, r.fullName,
+      num(r.baseSalary), num(r.transportAllowance), num(r.overtimeAmount),
+      num(r.grossSalary), num(r.companySS), num(r.employeeSS),
+      num(r.advanceDeduction), num(r.attendanceDeduction),
+      num(r.totalDeductions), num(r.netSalary ?? r.net),
+    ])];
     rowsCsv.push([
-      'الإجماليات', '', '', '', num(totals.baseSalary),
-      '', '', '', '', '', '', num(totals.totalBonus),
-      '', '', '', num(totals.totalDeduct),
-      num(totals.gross), num(totals.net), '', '',
+      'الإجماليات', '',
+      num(totals.baseSalary), num(totals.transport), num(totals.overtime),
+      num(totals.gross), num(totals.compSS), num(totals.empSS),
+      num(totals.advance), num(totals.attendance),
+      num(totals.netDed), num(totals.net),
     ]);
+    rowsCsv.push([]);
+    rowsCsv.push(['إجمالي تكلفة الرواتب على الشركة', '', '', '', '', num(totals.totalCompanyCost)]);
     const csv = BOM + rowsCsv.map((r) => r.map((v) => {
       const s = String(v ?? '');
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -194,99 +202,84 @@ function PayrollSheetInner() {
             </div>
           </header>
 
-          {/* الجدول */}
+          {/* الجدول (12 عمود محاسبي حسب المواصفة) */}
           <div className="overflow-x-auto p-2">
             <table className="w-full text-[10px] border-collapse">
               <thead>
                 <tr className="bg-amber-300">
-                  <Th w="24">#</Th>
-                  <Th>الاسم</Th>
-                  <Th>القسم</Th>
-                  <Th>الوظيفة</Th>
+                  <Th w="24">الرقم</Th>
+                  <Th>اسم الموظف</Th>
                   <ThTint c="blue">الراتب الأساسي</ThTint>
-                  <ThTint c="blue">أيام الحضور</ThTint>
-                  <ThTint c="blue">أيام الغياب</ThTint>
-                  <ThTint c="blue">ساعات التأخير</ThTint>
-                  <ThTint c="blue">الساعات الإضافية</ThTint>
-                  <ThTint c="green">أجر إضافي</ThTint>
-                  <ThTint c="green">مكافآت</ThTint>
-                  <ThTint c="green">إجمالي البدلات</ThTint>
-                  <ThTint c="orange">خصم الغياب</ThTint>
-                  <ThTint c="orange">خصم التأخير</ThTint>
-                  <ThTint c="orange">خصومات أخرى</ThTint>
-                  <ThTint c="orange">إجمالي الخصومات</ThTint>
-                  <ThTint c="cyan">الإجمالي</ThTint>
-                  <ThTint c="cyan">الصافي</ThTint>
-                  <Th>توقيع الموظف</Th>
-                  <Th>توقيع المدير</Th>
-                  <Th>ملاحظات</Th>
+                  <ThTint c="green">بدل مواصلات</ThTint>
+                  <ThTint c="green">عمل إضافي</ThTint>
+                  <ThTint c="cyan">إجمالي الراتب</ThTint>
+                  <ThTint c="orange">ضمان الشركة 14.25%</ThTint>
+                  <ThTint c="orange">ضمان الموظف 7.5%</ThTint>
+                  <ThTint c="orange">سلف الموظفين</ThTint>
+                  <ThTint c="orange">خصم الدوام</ThTint>
+                  <ThTint c="orange">صافي الاقتطاعات</ThTint>
+                  <ThTint c="cyan">صافي الراتب</ThTint>
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 ? (
-                  <tr><td colSpan={21} className="p-8 text-center text-zinc-400 border">لا توجد بيانات لهذا الشهر</td></tr>
-                ) : rows.map((r: any, i: number) => {
-                  const totalBonusRow = Number(r.bonus || 0) + Number(r.overtimePay || 0);
-                  const totalDedRow = Number(r.absenceDeduction || 0) + Number(r.lateDeduction || 0) + Number(r.manualDeduction || 0);
-                  const grossRow = Number(r.baseSalary || 0) + totalBonusRow;
-                  return (
-                    <tr key={r.employeeId} className="border-b border-zinc-200 hover:bg-zinc-50">
-                      <Td>{i + 1}</Td>
-                      <Td strong>{r.fullName}</Td>
-                      <Td small>{r.department || '—'}</Td>
-                      <Td small>{r.position || '—'}</Td>
-                      <TdTint c="blue">{num(r.baseSalary)}</TdTint>
-                      <TdTint c="blue">{r.presentDays}</TdTint>
-                      <TdTint c="blue">{r.absentDays}</TdTint>
-                      <TdTint c="blue">{num(r.lateHours)}</TdTint>
-                      <TdTint c="blue">{num(r.overtimeHours)}</TdTint>
-                      <TdTint c="green">{num(r.overtimePay)}</TdTint>
-                      <TdTint c="green">{num(r.bonus)}</TdTint>
-                      <TdTint c="green" strong>{num(totalBonusRow)}</TdTint>
-                      <TdTint c="orange">{num(r.absenceDeduction)}</TdTint>
-                      <TdTint c="orange">{num(r.lateDeduction)}</TdTint>
-                      <TdTint c="orange">{num(r.manualDeduction)}</TdTint>
-                      <TdTint c="orange" strong>{num(totalDedRow)}</TdTint>
-                      <TdTint c="cyan" strong>{num(grossRow)}</TdTint>
-                      <TdTint c="cyan" strong>{num(r.net)}</TdTint>
-                      <Td>{'—'}</Td>
-                      <Td>{'—'}</Td>
-                      <Td small>{r.notes || '—'}</Td>
-                    </tr>
-                  );
-                })}
+                  <tr><td colSpan={12} className="p-8 text-center text-zinc-400 border">لا توجد بيانات لهذا الشهر</td></tr>
+                ) : rows.map((r: any, i: number) => (
+                  <tr key={r.employeeId} className="border-b border-zinc-200 hover:bg-zinc-50">
+                    <Td>{i + 1}</Td>
+                    <Td strong>{r.fullName}</Td>
+                    <TdTint c="blue">{num(r.baseSalary)}</TdTint>
+                    <TdTint c="green">{num(r.transportAllowance)}</TdTint>
+                    <TdTint c="green">{num(r.overtimeAmount)}</TdTint>
+                    <TdTint c="cyan" strong>{num(r.grossSalary)}</TdTint>
+                    <TdTint c="orange">{num(r.companySS)}</TdTint>
+                    <TdTint c="orange">{num(r.employeeSS)}</TdTint>
+                    <TdTint c="orange">{num(r.advanceDeduction)}</TdTint>
+                    <TdTint c="orange">{num(r.attendanceDeduction)}</TdTint>
+                    <TdTint c="orange" strong>{num(r.totalDeductions)}</TdTint>
+                    <TdTint c="cyan" strong>{num(r.netSalary ?? r.net)}</TdTint>
+                  </tr>
+                ))}
               </tbody>
               <tfoot>
                 <tr className="bg-cyan-100 border-t-2 border-zinc-900 font-black">
-                  <Td colSpan={4} strong>الإجماليات · TOTALS</Td>
-                  <TdTint c="cyan" strong>{num(totals.baseSalary)}</TdTint>
-                  <Td colSpan={4}></Td>
-                  <Td colSpan={2}></Td>
-                  <TdTint c="green" strong>{num(totals.totalBonus)}</TdTint>
-                  <Td colSpan={3}></Td>
-                  <TdTint c="orange" strong>{num(totals.totalDeduct)}</TdTint>
+                  <Td colSpan={2} strong>الإجماليات · TOTALS</Td>
+                  <TdTint c="blue" strong>{num(totals.baseSalary)}</TdTint>
+                  <TdTint c="green" strong>{num(totals.transport)}</TdTint>
+                  <TdTint c="green" strong>{num(totals.overtime)}</TdTint>
                   <TdTint c="cyan" strong>{num(totals.gross)}</TdTint>
+                  <TdTint c="orange" strong>{num(totals.compSS)}</TdTint>
+                  <TdTint c="orange" strong>{num(totals.empSS)}</TdTint>
+                  <TdTint c="orange" strong>{num(totals.advance)}</TdTint>
+                  <TdTint c="orange" strong>{num(totals.attendance)}</TdTint>
+                  <TdTint c="orange" strong>{num(totals.netDed)}</TdTint>
                   <TdTint c="cyan" strong>{num(totals.net)}</TdTint>
-                  <Td colSpan={3}></Td>
                 </tr>
               </tfoot>
             </table>
           </div>
 
-          {/* Summary box + Signatures */}
+          {/* Summary box + إجمالي التكلفة على الشركة */}
           <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
             <Kpi label="عدد الموظفين" value={totals.count} />
-            <Kpi label="متوسط الراتب" value={num(totals.avg)} />
-            <Kpi label="إجمالي الرواتب الأساسية" value={num(totals.baseSalary)} tint="blue" />
-            <Kpi label="إجمالي البدلات" value={num(totals.totalBonus)} tint="green" />
-            <Kpi label="إجمالي الخصومات" value={num(totals.totalDeduct)} tint="orange" />
-            <Kpi label="إجمالي الرواتب" value={num(totals.gross)} tint="cyan" />
-            <Kpi label="صافي الرواتب" value={num(totals.net)} tint="cyan" />
+            <Kpi label="مجموع الرواتب الأساسية" value={num(totals.baseSalary)} tint="blue" />
+            <Kpi label="مجموع بدل المواصلات" value={num(totals.transport)} tint="green" />
+            <Kpi label="مجموع العمل الإضافي" value={num(totals.overtime)} tint="green" />
+            <Kpi label="مجموع إجمالي الرواتب" value={num(totals.gross)} tint="cyan" />
+            <Kpi label="مجموع ضمان الموظفين" value={num(totals.empSS)} tint="orange" />
+            <Kpi label="مجموع ضمان الشركة" value={num(totals.compSS)} tint="orange" />
+            <Kpi label="مجموع سلف الموظفين" value={num(totals.advance)} tint="orange" />
+            <Kpi label="مجموع خصم الدوام" value={num(totals.attendance)} tint="orange" />
+            <Kpi label="مجموع صافي الاقتطاعات" value={num(totals.netDed)} tint="orange" />
+            <Kpi label="مجموع صافي الرواتب" value={num(totals.net)} tint="cyan" />
+            <Kpi label="إجمالي تكلفة الرواتب على الشركة" value={num(totals.totalCompanyCost)} tint="cyan" />
           </div>
+
+          {/* توقيعات: الموظف / المالية / الإدارة */}
 
           {/* Signatures */}
           <div className="p-6 grid grid-cols-3 gap-6 border-t border-zinc-200 text-xs">
-            {['أعدّه', 'راجعه', 'اعتمده'].map((role) => (
+            {['توقيع الموظف', 'الدائرة المالية', 'اعتماد الإدارة'].map((role) => (
               <div key={role} className="text-center">
                 <div className="font-bold mb-8">{role}</div>
                 <div className="border-t border-zinc-400 pt-1 text-zinc-500">التوقيع والتاريخ</div>
@@ -319,8 +312,9 @@ function PayrollSheetInner() {
 
 /* helpers */
 function num(v: any) {
+  // JOD payroll: 3 خانات عشرية
   const n = Number(v || 0);
-  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return n.toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
 }
 function Th({ children, w }: { children: React.ReactNode; w?: string }) {
   return <th style={w ? { width: `${w}px` } : undefined} className="font-black text-[10px]">{children}</th>;
