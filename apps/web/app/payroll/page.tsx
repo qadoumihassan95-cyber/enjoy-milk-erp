@@ -11,6 +11,7 @@ import { Button, Badge } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { FACTORY_NAME } from '@/lib/branding';
+import { computePayrollRow, computePayrollTotals } from '@/lib/payroll-calc';
 
 /**
  * الصفحة الرئيسية للرواتب (Payroll) — واجهة محاسبية تفاعلية.
@@ -56,45 +57,13 @@ export default function PayrollPage() {
     return Array.from(set).sort();
   }, [data]);
 
-  // ─── القيم الفعلية (بعد تطبيق التعديلات الظاهرة على الشاشة) ─
-  const effective = (r: any) => {
-    const d = dirty[r.employeeId] ?? {};
-    const base = d.baseSalary != null ? Number(d.baseSalary) : Number(r.baseSalary || 0);
-    const transport = d.transportOverride != null ? Number(d.transportOverride) : Number(r.transportAllowance || 0);
-    const overtime = d.overtimeAmount != null ? Number(d.overtimeAmount) : Number(r.overtimeAmount || 0);
-    const advance = d.advanceDeduction != null ? Number(d.advanceDeduction) : Number(r.advanceDeduction || 0);
-    const attendance = d.attendanceOverride != null ? Number(d.attendanceOverride) : Number(r.attendanceDeduction || 0);
-    // إعادة حساب الضمان بنفس قاعدة الـ backend
-    const empSSRate = Number(data?.settings?.employeeSSRate ?? 0.075);
-    const compSSRate = Number(data?.settings?.companySSRate ?? 0.1425);
-    const basis = data?.settings?.socialSecurityBasis ?? 'BASIC';
-    const gross = base + overtime + transport;
-    const ssBase = basis === 'GROSS' ? gross : basis === 'BASIC_PLUS_TRANSPORT' ? base + transport : base;
-    const empSS = ssBase * empSSRate;
-    const compSS = ssBase * compSSRate;
-    const totalDed = empSS + advance + attendance;
-    const net = gross - totalDed;
-    return { base, transport, overtime, advance, attendance, gross, empSS, compSS, totalDed, net };
-  };
+  // ─── القيم الفعلية — من مصدر الحقيقة الواحد lib/payroll-calc.ts ─
+  // نفس الحاسبة التي تستخدمها صفحة الكشف الرسمي /payroll/sheet،
+  // فتبقى أرقام Desktop و Sheet و PDF و Excel و Mobile متطابقة تماماً.
+  const effective = (r: any) => computePayrollRow(r, data?.settings, dirty[r.employeeId]);
 
   // ─── إجماليات تُحسب من القيم الفعلية للصفوف المُصفَّاة ─
-  const totals = useMemo(() => {
-    let baseSalary = 0, transport = 0, overtime = 0, gross = 0;
-    let empSS = 0, compSS = 0, advance = 0, attendance = 0, netDed = 0, net = 0;
-    rows.forEach((r: any) => {
-      const e = effective(r);
-      baseSalary += e.base; transport += e.transport; overtime += e.overtime;
-      gross += e.gross; empSS += e.empSS; compSS += e.compSS;
-      advance += e.advance; attendance += e.attendance;
-      netDed += e.totalDed; net += e.net;
-    });
-    return {
-      baseSalary, transport, overtime, gross,
-      empSS, compSS, advance, attendance, netDed, net,
-      totalCompanyCost: gross + compSS,
-      count: rows.length,
-    };
-  }, [rows, dirty, data]);
+  const totals = useMemo(() => computePayrollTotals(rows.map(effective)), [rows, dirty, data]);
 
   const setF = (empId: string, field: string, value: any) => {
     setDirty((d) => ({ ...d, [empId]: { ...d[empId], [field]: value } }));
@@ -158,9 +127,16 @@ export default function PayrollPage() {
   const dirtyCount = Object.keys(dirty).length;
 
   // ─── Excel export (shared enterprise builder — lazy-loaded ExcelJS) ─
+  const [xlsBusy, setXlsBusy] = useState(false);
   const exportExcel = async () => {
-    const { exportXlsx } = await import('@/lib/xlsx-export');
-    await exportXlsx({
+    if (xlsBusy) return;
+    setXlsBusy(true);
+    try {
+      const mod = await import('@/lib/xlsx-export');
+      if (typeof mod.exportXlsx !== 'function') {
+        throw new Error('exportXlsx غير متاح — تحقق من تحديث الصفحة');
+      }
+      await mod.exportXlsx({
       filename: `payroll-${month}.xlsx`,
       reportTitle: 'كشف الرواتب — الواجهة التفاعلية',
       reportTitleEn: 'Payroll (Interactive View)',
@@ -226,6 +202,15 @@ export default function PayrollPage() {
         footnote: `إجمالي تكلفة الرواتب على الشركة = ${totals.totalCompanyCost.toFixed(3)} د.أ`,
       },
     });
+      toast.success('تم تحضير ملف Excel');
+    } catch (err: any) {
+      // Runtime failures are surfaced instead of silently vanishing —
+      // covers cases like Safari <14, blocked download, or ExcelJS chunk load fail.
+      console.error('[payroll] Excel export failed:', err);
+      toast.error(err?.message || 'تعذّر تصدير Excel — راجع الاتصال');
+    } finally {
+      setXlsBusy(false);
+    }
   };
 
   return (
@@ -254,7 +239,7 @@ export default function PayrollPage() {
             <Button variant="outline" onClick={() => refetch()} loading={isFetching}>
               <RefreshCw className="h-4 w-4" /> إعادة حساب
             </Button>
-            <Button variant="outline" onClick={exportExcel}>
+            <Button variant="outline" onClick={exportExcel} disabled={xlsBusy} loading={xlsBusy}>
               <FileSpreadsheet className="h-4 w-4" /> Excel
             </Button>
             <Button

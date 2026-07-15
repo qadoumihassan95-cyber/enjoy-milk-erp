@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Printer, FileSpreadsheet, Filter } from 'lucide-react';
 import { api } from '@/lib/api';
 import { FACTORY_NAME } from '@/lib/branding';
+import { computePayrollRow, computePayrollTotals } from '@/lib/payroll-calc';
 
 /**
  * كشف الرواتب الرسمي (Official Payroll Sheet)
@@ -56,42 +57,17 @@ function PayrollSheetInner() {
     });
   }, [data, department, employee, paidFilter]);
 
-  // نستخدم إجماليات الـ backend مباشرة (source of truth) عندما تكون متاحة،
-  // ونعيد الحساب من الصفوف المُصفّاة عندما يكون في فلترة أمامية.
+  // مصدر الحقيقة الواحد — نفس الحاسبة التي يستخدمها /payroll التفاعلي.
+  // كل صف يمر عبر computePayrollRow(...) الذي يعتمد على القيم المُخزَّنة
+  // في الـ backend عند غياب أي تعديلات، فتتطابق أرقام الشاشة والـ PDF والـ Excel.
+  const computedRows = useMemo(
+    () => rows.map((r: any) => computePayrollRow(r, (data as any)?.settings)),
+    [rows, data],
+  );
   const totals = useMemo(() => {
-    const t = (data?.totals ?? {}) as any;
-    let baseSalary = 0, transport = 0, overtime = 0, gross = 0;
-    let empSS = 0, compSS = 0, advance = 0, attendance = 0, netDed = 0, net = 0;
-    rows.forEach((r: any) => {
-      baseSalary += Number(r.baseSalary || 0);
-      transport += Number(r.transportAllowance || 0);
-      overtime += Number(r.overtimeAmount || 0);
-      gross += Number(r.grossSalary || 0);
-      empSS += Number(r.employeeSS || 0);
-      compSS += Number(r.companySS || 0);
-      advance += Number(r.advanceDeduction || 0);
-      attendance += Number(r.attendanceDeduction || 0);
-      netDed += Number(r.totalDeductions || 0);
-      net += Number(r.netSalary ?? r.net ?? 0);
-    });
-    // إن لم يوجد فلترة أمامية نستخدم أرقام الـ backend للتأكد من التطابق
-    const useBackend = rows.length === (data?.rows?.length ?? 0);
-    return {
-      baseSalary: useBackend ? Number(t.baseSalary ?? baseSalary) : baseSalary,
-      transport: useBackend ? Number(t.transportAllowance ?? transport) : transport,
-      overtime: useBackend ? Number(t.overtimeAmount ?? overtime) : overtime,
-      gross: useBackend ? Number(t.grossSalary ?? gross) : gross,
-      empSS: useBackend ? Number(t.employeeSS ?? empSS) : empSS,
-      compSS: useBackend ? Number(t.companySS ?? compSS) : compSS,
-      advance: useBackend ? Number(t.advanceDeduction ?? advance) : advance,
-      attendance: useBackend ? Number(t.attendanceDeduction ?? attendance) : attendance,
-      netDed: useBackend ? Number(t.totalDeductions ?? netDed) : netDed,
-      net: useBackend ? Number(t.net ?? net) : net,
-      totalCompanyCost: useBackend ? Number(t.totalCompanyCost ?? gross + compSS) : gross + compSS,
-      count: rows.length,
-      avg: rows.length > 0 ? net / rows.length : 0,
-    };
-  }, [rows, data]);
+    const t = computePayrollTotals(computedRows);
+    return { ...t, avg: t.count > 0 ? t.net / t.count : 0 };
+  }, [computedRows]);
 
   const departments = useMemo(() => {
     const set = new Set<string>();
@@ -99,11 +75,18 @@ function PayrollSheetInner() {
     return Array.from(set).sort();
   }, [data]);
 
+  const [xlsBusy, setXlsBusy] = useState(false);
   const exportExcel = async () => {
-    // Lazy-load the shared enterprise xlsx builder — ExcelJS is only fetched
-    // when the user actually clicks Export, keeping the initial bundle small.
-    const { exportXlsx } = await import('@/lib/xlsx-export');
-    await exportXlsx({
+    if (xlsBusy) return;
+    setXlsBusy(true);
+    try {
+      // Lazy-load the shared enterprise xlsx builder — ExcelJS is only fetched
+      // when the user actually clicks Export, keeping the initial bundle small.
+      const mod = await import('@/lib/xlsx-export');
+      if (typeof mod.exportXlsx !== 'function') {
+        throw new Error('exportXlsx غير متاح — جرّب تحديث الصفحة');
+      }
+      await mod.exportXlsx({
       filename: `official-payroll-${month}.xlsx`,
       reportTitle: 'كشف الرواتب الرسمي',
       reportTitleEn: 'Official Payroll Statement',
@@ -148,20 +131,23 @@ function PayrollSheetInner() {
           { key: 'totalDed',  header: 'صافي الاقتطاعات', format: 'jod', tint: 'orange', strong: true },
           { key: 'net',       header: 'صافي الراتب', format: 'jod', tint: 'cyan', strong: true },
         ],
-        rows: rows.map((r: any, i: number) => ({
-          num: i + 1,
-          name: r.fullName,
-          base: Number(r.baseSalary || 0),
-          transport: Number(r.transportAllowance || 0),
-          overtime: Number(r.overtimeAmount || 0),
-          gross: Number(r.grossSalary || 0),
-          compSS: Number(r.companySS || 0),
-          empSS: Number(r.employeeSS || 0),
-          advance: Number(r.advanceDeduction || 0),
-          attend: Number(r.attendanceDeduction || 0),
-          totalDed: Number(r.totalDeductions || 0),
-          net: Number(r.netSalary ?? r.net ?? 0),
-        })),
+        rows: rows.map((r: any, i: number) => {
+          const c = computedRows[i];
+          return {
+            num: i + 1,
+            name: r.fullName,
+            base: c.base,
+            transport: c.transport,
+            overtime: c.overtime,
+            gross: c.gross,
+            compSS: c.compSS,
+            empSS: c.empSS,
+            advance: c.advance,
+            attend: c.attendance,
+            totalDed: c.totalDed,
+            net: c.net,
+          };
+        }),
         totals: {
           num: null,
           name: 'الإجماليات · TOTALS',
@@ -186,6 +172,13 @@ function PayrollSheetInner() {
       },
       signatures: ['توقيع الموظف', 'الدائرة المالية', 'اعتماد الإدارة'],
     });
+    } catch (err: any) {
+      console.error('[payroll-sheet] Excel export failed:', err);
+      // eslint-disable-next-line no-alert
+      alert(err?.message || 'تعذّر تصدير Excel — راجع الاتصال ثم أعد المحاولة');
+    } finally {
+      setXlsBusy(false);
+    }
   };
 
   return (
@@ -213,9 +206,9 @@ function PayrollSheetInner() {
           <input value={preparedBy} onChange={(e) => setPreparedBy(e.target.value)}
             placeholder="Prepared by" className="h-9 px-2 rounded border border-zinc-200 text-sm w-36" />
           <div className="flex-1" />
-          <button onClick={exportExcel}
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700">
-            <FileSpreadsheet className="h-4 w-4" /> Excel
+          <button onClick={exportExcel} disabled={xlsBusy}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 disabled:opacity-60">
+            <FileSpreadsheet className="h-4 w-4" /> {xlsBusy ? 'جارٍ التحضير…' : 'Excel'}
           </button>
           <button onClick={() => window.print()}
             className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-zinc-900 text-white text-sm font-bold hover:bg-zinc-800">
@@ -275,22 +268,25 @@ function PayrollSheetInner() {
               <tbody>
                 {rows.length === 0 ? (
                   <tr><td colSpan={12} className="p-8 text-center text-zinc-400 border">لا توجد بيانات لهذا الشهر</td></tr>
-                ) : rows.map((r: any, i: number) => (
-                  <tr key={r.employeeId} className="border-b border-zinc-200 hover:bg-zinc-50">
-                    <Td>{i + 1}</Td>
-                    <Td strong>{r.fullName}</Td>
-                    <TdTint c="blue">{num(r.baseSalary)}</TdTint>
-                    <TdTint c="green">{num(r.transportAllowance)}</TdTint>
-                    <TdTint c="green">{num(r.overtimeAmount)}</TdTint>
-                    <TdTint c="cyan" strong>{num(r.grossSalary)}</TdTint>
-                    <TdTint c="orange">{num(r.companySS)}</TdTint>
-                    <TdTint c="orange">{num(r.employeeSS)}</TdTint>
-                    <TdTint c="orange">{num(r.advanceDeduction)}</TdTint>
-                    <TdTint c="orange">{num(r.attendanceDeduction)}</TdTint>
-                    <TdTint c="orange" strong>{num(r.totalDeductions)}</TdTint>
-                    <TdTint c="cyan" strong>{num(r.netSalary ?? r.net)}</TdTint>
-                  </tr>
-                ))}
+                ) : rows.map((r: any, i: number) => {
+                  const c = computedRows[i];
+                  return (
+                    <tr key={r.employeeId} className="border-b border-zinc-200 hover:bg-zinc-50">
+                      <Td>{i + 1}</Td>
+                      <Td strong>{r.fullName}</Td>
+                      <TdTint c="blue">{num(c.base)}</TdTint>
+                      <TdTint c="green">{num(c.transport)}</TdTint>
+                      <TdTint c="green">{num(c.overtime)}</TdTint>
+                      <TdTint c="cyan" strong>{num(c.gross)}</TdTint>
+                      <TdTint c="orange">{num(c.compSS)}</TdTint>
+                      <TdTint c="orange">{num(c.empSS)}</TdTint>
+                      <TdTint c="orange">{num(c.advance)}</TdTint>
+                      <TdTint c="orange">{num(c.attendance)}</TdTint>
+                      <TdTint c="orange" strong>{num(c.totalDed)}</TdTint>
+                      <TdTint c="cyan" strong>{num(c.net)}</TdTint>
+                    </tr>
+                  );
+                })}
               </tbody>
               <tfoot>
                 <tr className="bg-cyan-100 border-t-2 border-zinc-900 font-black">
@@ -345,17 +341,132 @@ function PayrollSheetInner() {
       </div>
 
       <style jsx global>{`
-        @page { size: A4 landscape; margin: 8mm; }
-        @media print {
-          html, body { background: white !important; }
-          .no-print { display: none !important; }
-          #sheet { box-shadow: none !important; border: 0 !important; }
-          table { page-break-inside: auto; }
-          thead { display: table-header-group; }
-          tr { page-break-inside: avoid; }
-          @page { @bottom-center { content: "صفحة " counter(page) " / " counter(pages); font-family: sans-serif; font-size: 10px; color: #71717a; } }
+        /* Screen defaults for the 12-column payroll table.
+           On print we override widths so nothing clips on iPhone. */
+        #sheet table th, #sheet table td {
+          border: 1px solid #d4d4d8;
+          padding: 4px 6px;
+          text-align: right;
         }
-        table th, table td { border: 1px solid #d4d4d8; padding: 4px 6px; text-align: right; }
+
+        /* ─── PRINT / SAVE-AS-PDF LAYOUT ───────────────────────────────
+           Goal: full 12-column payroll table ALWAYS fits inside one A4
+           landscape page width — including iPhone Safari's "Save PDF"
+           which uses a stricter renderer than desktop Chrome.
+
+           Techniques:
+           1) @page A4 landscape with tight 6mm margins.
+           2) Root font-size drops so <t/> and <td/> shrink together.
+           3) The .sheet-scale wrapper forces the printed content to be
+              exactly the printable width — Safari respects width:100% at
+              the @page level, so we anchor everything to the page width.
+           4) table-layout: fixed + explicit column widths in percent →
+              deterministic layout, no overflow, no column dropped.
+           5) overflow: visible on wrappers so the printer sees the full
+              table (not the on-screen scroll clip).
+           6) -webkit-print-color-adjust: exact keeps colour tints on paper. */
+        @page {
+          size: A4 landscape;
+          margin: 6mm;
+        }
+
+        @media print {
+          html, body {
+            background: white !important;
+            width: 297mm;         /* A4 landscape width */
+            margin: 0 !important;
+            padding: 0 !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          .no-print { display: none !important; }
+
+          /* Strip on-screen chrome that would consume page width. */
+          #sheet {
+            box-shadow: none !important;
+            border: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+          #sheet > * { padding: 4mm 4mm !important; }
+          #sheet header { padding: 3mm 4mm !important; }
+
+          /* Kill every horizontal scroll wrapper — the printer must see
+             the full table, not the on-screen viewport clip. */
+          .overflow-x-auto,
+          #sheet .overflow-x-auto {
+            overflow: visible !important;
+            padding: 0 !important;
+            margin: 0 !important;
+          }
+
+          /* Shrink base font so 12 columns comfortably fit landscape. */
+          #sheet, #sheet * {
+            font-size: 8pt !important;
+            line-height: 1.15 !important;
+          }
+          #sheet header * { font-size: 9pt !important; }
+
+          /* Deterministic table layout — no overflow, nothing clipped. */
+          #sheet table {
+            width: 100% !important;
+            table-layout: fixed !important;
+            border-collapse: collapse !important;
+            page-break-inside: auto;
+          }
+          #sheet table th,
+          #sheet table td {
+            padding: 2px 3px !important;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            white-space: normal !important;
+            border: 0.5pt solid #444 !important;
+          }
+          /* Column width plan (12 cols total = 100%) */
+          #sheet table th:nth-child(1),
+          #sheet table td:nth-child(1) { width: 4%; }  /* # */
+          #sheet table th:nth-child(2),
+          #sheet table td:nth-child(2) { width: 14%; text-align: right; } /* name */
+          #sheet table th:nth-child(3),
+          #sheet table td:nth-child(3),
+          #sheet table th:nth-child(4),
+          #sheet table td:nth-child(4),
+          #sheet table th:nth-child(5),
+          #sheet table td:nth-child(5) { width: 7%; }  /* base, trans, ot */
+          #sheet table th:nth-child(6),
+          #sheet table td:nth-child(6) { width: 9%; }  /* gross */
+          #sheet table th:nth-child(7),
+          #sheet table td:nth-child(7),
+          #sheet table th:nth-child(8),
+          #sheet table td:nth-child(8) { width: 8%; }  /* comp/emp SS */
+          #sheet table th:nth-child(9),
+          #sheet table td:nth-child(9),
+          #sheet table th:nth-child(10),
+          #sheet table td:nth-child(10) { width: 7%; } /* advance, attend */
+          #sheet table th:nth-child(11),
+          #sheet table td:nth-child(11) { width: 8%; } /* totalDed */
+          #sheet table th:nth-child(12),
+          #sheet table td:nth-child(12) { width: 9%; } /* net */
+
+          thead { display: table-header-group; }
+          tfoot { display: table-footer-group; }
+          tr { page-break-inside: avoid; }
+
+          /* Signatures block stays on last page */
+          #sheet .grid { page-break-inside: avoid; }
+
+          /* Footer page counter */
+          @page {
+            @bottom-center {
+              content: "صفحة " counter(page) " / " counter(pages);
+              font-family: sans-serif;
+              font-size: 8pt;
+              color: #52525b;
+            }
+          }
+        }
       `}</style>
     </div>
   );
