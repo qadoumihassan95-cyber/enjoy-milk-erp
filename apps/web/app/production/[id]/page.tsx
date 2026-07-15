@@ -191,7 +191,7 @@ export default function ProductionDetailPage() {
 
   return (
     <AppShell>
-      <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-4">
+      <div className="max-w-6xl mx-auto p-3 md:p-6 space-y-4 pb-24 md:pb-6">
         {/* ─── Header ─── */}
         <header>
           <button

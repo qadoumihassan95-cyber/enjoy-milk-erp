@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search, Trash2, X, ShoppingCart, Phone, MapPin, Wallet, Receipt, Printer, Pencil, Building2, Truck, Copy, Check } from 'lucide-react';
+import { Plus, Search, Trash2, X, ShoppingCart, Phone, MapPin, Wallet, Receipt, Printer, Pencil, Building2, Truck, Copy, Check, SlidersHorizontal, ChevronLeft } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { Card, Button, Input, Badge, Stat } from '@/components/ui';
 import { useToast } from '@/components/toast';
@@ -33,6 +33,9 @@ export default function OrdersPage() {
   const [showNew, setShowNew] = useState(false);
   const [editingOrder, setEditingOrder] = useState<any>(null);
   const [paymentsOrder, setPaymentsOrder] = useState<any>(null);
+  // Mobile-only: filter bottom sheet
+  const [showFilterSheet, setShowFilterSheet] = useState(false);
+  const activeFilterCount = (filter ? 1 : 0) + (orderType ? 1 : 0);
 
   const { data: orders, refetch } = useQuery({
     queryKey: ['orders', filter, search, orderType],
@@ -75,7 +78,10 @@ export default function OrdersPage() {
 
   return (
     <AppShell>
-      <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6 print:p-2 print:space-y-2">
+      {/* ═══════════════════════════════════════════════
+          DESKTOP (≥ md) — UNCHANGED. Wrapped in hidden md:block.
+      ═══════════════════════════════════════════════ */}
+      <div className="hidden md:block max-w-6xl mx-auto p-4 md:p-6 space-y-6 print:p-2 print:space-y-2">
         <header className="flex items-center justify-between flex-wrap gap-3 print:hidden">
           <div>
             <h1 className="text-2xl md:text-3xl font-black tracking-tight">الطلبيات</h1>
@@ -188,16 +194,6 @@ export default function OrdersPage() {
             ))}
           </div>
         </Card>
-
-        {showNew && (
-          <NewOrderForm
-            onClose={() => setShowNew(false)}
-            onSaved={() => {
-              refetch();
-              qc.invalidateQueries({ queryKey: ['orders-report'] });
-            }}
-          />
-        )}
 
         {/* Orders list */}
         <Card>
@@ -395,23 +391,585 @@ export default function OrdersPage() {
           )}
         </Card>
 
-        {paymentsOrder && (
-          <PaymentsModal
-            order={paymentsOrder}
-            onClose={() => setPaymentsOrder(null)}
-            onChanged={() => safeRefresh()}
+      </div>
+
+      {/* ═══════════════════════════════════════════════
+          MOBILE (< md) — new professional layout.
+          All desktop features preserved: search, both filter
+          dimensions (payment status + order type), all row
+          actions, print, new order, edit, delete, payments.
+      ═══════════════════════════════════════════════ */}
+      <MobileOrders
+        orders={orders}
+        report={report}
+        search={search}
+        onSearch={setSearch}
+        filter={filter}
+        orderType={orderType}
+        activeFilterCount={activeFilterCount}
+        onOpenFilters={() => setShowFilterSheet(true)}
+        onNewOrder={() => setShowNew(true)}
+        onOpenPayments={(o) => setPaymentsOrder(o)}
+        onEdit={(o) => setEditingOrder(o)}
+        onDelete={(id) => remove(id)}
+        onPrint={() => window.print()}
+      />
+
+      {/* Filter bottom sheet (mobile only) */}
+      {showFilterSheet && (
+        <FilterSheet
+          filter={filter}
+          orderType={orderType}
+          onChangeFilter={setFilter}
+          onChangeOrderType={setOrderType}
+          onClose={() => setShowFilterSheet(false)}
+          activeCount={activeFilterCount}
+        />
+      )}
+
+      {/* Shared "New Order" form (both desktop and mobile) */}
+      {showNew && (
+        <div className="max-w-6xl mx-auto p-3 md:p-6">
+          <NewOrderForm
+            onClose={() => setShowNew(false)}
+            onSaved={() => {
+              refetch();
+              qc.invalidateQueries({ queryKey: ['orders-report'] });
+            }}
           />
+        </div>
+      )}
+
+      {/* Shared modals (both desktop and mobile) */}
+      {paymentsOrder && (
+        <PaymentsModal
+          order={paymentsOrder}
+          onClose={() => setPaymentsOrder(null)}
+          onChanged={() => safeRefresh()}
+        />
+      )}
+
+      {editingOrder && (
+        <EditOrderMetaModal
+          order={editingOrder}
+          onClose={() => setEditingOrder(null)}
+          onSaved={() => { setEditingOrder(null); safeRefresh(); }}
+        />
+      )}
+    </AppShell>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   MOBILE ORDERS (< md) — new professional layout.
+   - Sticky header with title + smart count + FAB.
+   - Persistent search bar + filter button (badge counter).
+   - Horizontal KPI ribbon (same 4 metrics as desktop).
+   - Rich order cards preserving every column and every action:
+     view customer, payments log, add payment, edit, print, delete.
+   Print uses the same window.print() flow (desktop print stylesheet
+   remains authoritative — mobile card cluster hides on print).
+═══════════════════════════════════════════════════════════════════ */
+function MobileOrders({
+  orders, report, search, onSearch,
+  filter, orderType, activeFilterCount,
+  onOpenFilters, onNewOrder, onOpenPayments,
+  onEdit, onDelete, onPrint,
+}: {
+  orders: any[] | undefined;
+  report: any;
+  search: string;
+  onSearch: (v: string) => void;
+  filter: string;
+  orderType: string;
+  activeFilterCount: number;
+  onOpenFilters: () => void;
+  onNewOrder: () => void;
+  onOpenPayments: (o: any) => void;
+  onEdit: (o: any) => void;
+  onDelete: (id: string) => void;
+  onPrint: () => void;
+}) {
+  const totalCount = orders?.length ?? 0;
+  const unpaidCount = (orders ?? []).filter((o: any) => Number(o.balance ?? 0) > 0).length;
+
+  return (
+    <div className="md:hidden print:hidden" dir="rtl">
+      {/* Sticky header */}
+      <div className="sticky top-0 z-20 bg-zinc-50/95 backdrop-blur border-b border-zinc-200 px-3 pt-3 pb-2">
+        <div className="flex items-center justify-between mb-2">
+          <div className="min-w-0">
+            <h1 className="text-xl font-black tracking-tight leading-tight">الطلبيات</h1>
+            <p className="text-[11px] text-zinc-500 mt-0.5">
+              {totalCount} طلبية{unpaidCount > 0 ? ` · ${unpaidCount} غير مدفوعة` : ''}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onNewOrder}
+            aria-label="طلبية جديدة"
+            className="w-11 h-11 rounded-full bg-zinc-900 text-white flex items-center justify-center active:scale-95 transition-transform shadow-md"
+          >
+            <Plus className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex-1 relative">
+            <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400 pointer-events-none" />
+            <input
+              value={search}
+              onChange={(e) => onSearch(e.target.value)}
+              placeholder="بحث بالعميل، الهاتف، رقم الشحنة…"
+              className="w-full h-11 pr-9 pl-3 rounded-xl border border-zinc-200 bg-white text-sm placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={onOpenFilters}
+            aria-label={`فلترة${activeFilterCount > 0 ? ` (${activeFilterCount} مفعّلة)` : ''}`}
+            className={cn(
+              'relative h-11 min-w-[44px] px-3 rounded-xl flex items-center justify-center gap-1.5 text-sm font-bold active:scale-95 transition-transform',
+              activeFilterCount > 0
+                ? 'bg-zinc-900 text-white'
+                : 'bg-white border border-zinc-200 text-zinc-700',
+            )}
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            <span>فلترة</span>
+            {activeFilterCount > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-amber-500 text-white text-[10px] font-black flex items-center justify-center px-1">
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      <div className="px-3 pt-3 pb-4 space-y-3">
+        {/* KPI ribbon — horizontal snap-scroll */}
+        <div
+          className="flex gap-2 overflow-x-auto -mx-3 px-3 pb-1 [&::-webkit-scrollbar]:hidden"
+          style={{ scrollbarWidth: 'none' }}
+          role="region"
+          aria-label="مؤشرات الطلبيات"
+        >
+          <KpiChip label="الإجمالي" value={fmt2(report?.totalAmount ?? 0)} tone="neutral" unit="د.أ" />
+          <KpiChip label="المسدد"   value={fmt2(report?.totalPaid ?? 0)}   tone="good"    unit="د.أ" />
+          <KpiChip label="المتبقي"  value={fmt2(report?.totalBalance ?? 0)} tone={(report?.totalBalance ?? 0) > 0 ? 'warn' : 'neutral'} unit="د.أ" />
+          <KpiChip label="طلبيات"   value={String(report?.ordersCount ?? totalCount)} tone="neutral" />
+        </div>
+
+        {/* Active filter chips (quick-remove) */}
+        {activeFilterCount > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {orderType && (
+              <ActiveChip label={orderType === 'INTERNAL' ? 'داخلية' : 'خارجية'} />
+            )}
+            {filter && (
+              <ActiveChip
+                label={
+                  filter === 'PAID'    ? 'مدفوع كامل' :
+                  filter === 'PARTIAL' ? 'مدفوع جزئي' :
+                                         'غير مدفوع'
+                }
+              />
+            )}
+          </div>
         )}
 
-        {editingOrder && (
-          <EditOrderMetaModal
-            order={editingOrder}
-            onClose={() => setEditingOrder(null)}
-            onSaved={() => { setEditingOrder(null); safeRefresh(); }}
-          />
+        {/* Cards / empty state */}
+        {!orders || orders.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-zinc-200 py-14 text-center">
+            <ShoppingCart className="h-10 w-10 mx-auto text-zinc-300 mb-3" />
+            <p className="text-sm text-zinc-500">لا توجد طلبيات مطابقة</p>
+          </div>
+        ) : (
+          orders.map((o: any) => (
+            <MobileOrderCard
+              key={`m-${o.id}`}
+              o={o}
+              onOpenPayments={onOpenPayments}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onPrint={onPrint}
+            />
+          ))
         )}
       </div>
-    </AppShell>
+    </div>
+  );
+}
+
+function fmt2(n: number | string) {
+  const v = Number(n) || 0;
+  return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function KpiChip({
+  label, value, tone = 'neutral', unit,
+}: {
+  label: string;
+  value: string;
+  tone?: 'neutral' | 'good' | 'warn';
+  unit?: string;
+}) {
+  const valueClass =
+    tone === 'good' ? 'text-emerald-700' :
+    tone === 'warn' ? 'text-amber-700' :
+    'text-zinc-900';
+  return (
+    <div className="flex-shrink-0 bg-white border border-zinc-200 rounded-xl px-3 py-2 min-w-[112px]">
+      <div className="text-[10px] text-zinc-500">{label}</div>
+      <div className={cn('font-black text-base mt-0.5 leading-none', valueClass)} data-numeric>
+        {value}
+        {unit && <span className="text-[10px] font-bold text-zinc-400 mr-1">{unit}</span>}
+      </div>
+    </div>
+  );
+}
+
+function ActiveChip({ label }: { label: string }) {
+  return (
+    <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-zinc-900 text-white flex items-center gap-1">
+      {label}
+    </span>
+  );
+}
+
+function MobileOrderCard({
+  o, onOpenPayments, onEdit, onDelete, onPrint,
+}: {
+  o: any;
+  onOpenPayments: (o: any) => void;
+  onEdit: (o: any) => void;
+  onDelete: (id: string) => void;
+  onPrint: () => void;
+}) {
+  const isExternal = o.orderType === 'EXTERNAL';
+  const total = Number(o.total ?? 0);
+  const paid = Number(o.paid ?? 0);
+  const balance = Number(o.balance ?? 0);
+  const hasBalance = balance > 0;
+
+  // Ton fields — surface only when meaningful (external or ton lines).
+  const lines = o.lines ?? [];
+  const tonsQty = lines
+    .filter((l: any) => String(l.unit || '').toUpperCase() === 'TON')
+    .reduce((s: number, l: any) => s + Number(l.quantity || 0), 0);
+  const showTonBlock = isExternal || tonsQty > 0;
+
+  return (
+    <div
+      className="bg-white rounded-2xl border border-zinc-200 p-3.5"
+      style={{ boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}
+    >
+      {/* Header row */}
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-[11px] text-zinc-500">{o.number}</span>
+        <div className="flex gap-1.5">
+          <TypePill isExternal={isExternal} />
+          <StatusPill status={o.status} />
+        </div>
+      </div>
+
+      {/* Customer */}
+      <div className="mt-2">
+        {o.customerId ? (
+          <a
+            href={`/customers/${o.customerId}`}
+            className="text-[15px] font-bold text-zinc-900 underline-offset-2 hover:underline"
+          >
+            {o.customerName || '—'}
+          </a>
+        ) : (
+          <span className="text-[15px] font-bold text-zinc-900">{o.customerName || '—'}</span>
+        )}
+      </div>
+
+      {/* Meta rows — every desktop field, condensed */}
+      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-600">
+        {o.customerPhone && (
+          <span className="inline-flex items-center gap-1">
+            <Phone className="h-3 w-3 text-zinc-400" /> {o.customerPhone}
+          </span>
+        )}
+        {o.region && (
+          <span className="inline-flex items-center gap-1">
+            <MapPin className="h-3 w-3 text-zinc-400" /> {o.region}
+          </span>
+        )}
+        <span className="inline-flex items-center gap-1">
+          <Receipt className="h-3 w-3 text-zinc-400" /> {formatDate(o.orderDate)}
+        </span>
+        {isExternal && o.deliveryLocation && (
+          <span className="inline-flex items-center gap-1">
+            <Building2 className="h-3 w-3 text-zinc-400" /> {o.deliveryLocation}
+          </span>
+        )}
+        {isExternal && o.shipmentTrackingNumber && (
+          <span className="inline-flex items-center gap-1 font-mono">
+            <Truck className="h-3 w-3 text-zinc-400" /> {o.shipmentTrackingNumber}
+          </span>
+        )}
+        {isExternal && o.expectedShippingDate && (
+          <span className="inline-flex items-center gap-1">
+            شحن: {formatDate(o.expectedShippingDate)}
+          </span>
+        )}
+        {isExternal && o.expectedArrivalDate && (
+          <span className="inline-flex items-center gap-1">
+            وصول: {formatDate(o.expectedArrivalDate)}
+          </span>
+        )}
+      </div>
+
+      {/* Ton block — only when relevant */}
+      {showTonBlock && (
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-sky-700 bg-sky-50/50 border border-sky-100 rounded-lg px-2 py-1.5">
+          {tonsQty > 0 && <span data-numeric>الطن: <b>{fmt2(tonsQty)}</b></span>}
+          {o.tonPrice != null && <span data-numeric>سعر الطن: <b>{fmt2(o.tonPrice)}</b></span>}
+          {Number(o.productsTotal ?? 0) > 0 && (
+            <span data-numeric>إجمالي البضاعة: <b>{fmt2(o.productsTotal)}</b></span>
+          )}
+          {Number(o.shippingCost ?? 0) > 0 && (
+            <span data-numeric>أجور الشحن: <b>{fmt2(o.shippingCost)}</b></span>
+          )}
+        </div>
+      )}
+
+      {/* Money block */}
+      <div className="mt-3 pt-3 border-t border-dashed border-zinc-200 grid grid-cols-3 gap-2">
+        <MoneyBlock label="الإجمالي" value={fmt2(total)} bold />
+        <MoneyBlock label="المسدد" value={fmt2(paid)} tone="good" />
+        <MoneyBlock label="المتبقي" value={fmt2(balance)} tone={hasBalance ? 'warn' : 'neutral'} />
+      </div>
+
+      {/* Actions — every desktop action preserved */}
+      <div className="mt-3 flex gap-1.5">
+        {hasBalance && (
+          <button
+            type="button"
+            onClick={() => onOpenPayments(o)}
+            className="flex-1 min-h-[38px] rounded-xl bg-emerald-50 text-emerald-800 text-xs font-bold flex items-center justify-center gap-1.5 active:bg-emerald-100"
+          >
+            <Wallet className="h-3.5 w-3.5" /> دفعة
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => onOpenPayments(o)}
+          className={cn(
+            'min-h-[38px] rounded-xl bg-zinc-100 text-zinc-800 text-xs font-bold flex items-center justify-center gap-1.5 active:bg-zinc-200',
+            hasBalance ? 'flex-1' : 'flex-[2]',
+          )}
+        >
+          <Receipt className="h-3.5 w-3.5" /> دفعات
+        </button>
+        <button
+          type="button"
+          onClick={() => onEdit(o)}
+          className="flex-1 min-h-[38px] rounded-xl bg-blue-50 text-blue-800 text-xs font-bold flex items-center justify-center gap-1.5 active:bg-blue-100"
+        >
+          <Pencil className="h-3.5 w-3.5" /> تعديل
+        </button>
+        <button
+          type="button"
+          onClick={onPrint}
+          aria-label="طباعة"
+          className="min-h-[38px] w-11 rounded-xl bg-zinc-50 text-zinc-600 flex items-center justify-center active:bg-zinc-100"
+        >
+          <Printer className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => onDelete(o.id)}
+          aria-label="حذف"
+          className="min-h-[38px] w-11 rounded-xl bg-white text-red-600 border border-red-100 flex items-center justify-center active:bg-red-50"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TypePill({ isExternal }: { isExternal: boolean }) {
+  return (
+    <span
+      className={cn(
+        'text-[10px] px-2 py-0.5 rounded-md font-bold',
+        isExternal ? 'bg-blue-50 text-blue-800' : 'bg-zinc-100 text-zinc-700',
+      )}
+    >
+      {isExternal ? 'خارجية' : 'داخلية'}
+    </span>
+  );
+}
+
+function StatusPill({ status }: { status: string }) {
+  const map: Record<string, { bg: string; fg: string; label: string }> = {
+    PAID:    { bg: 'bg-emerald-100', fg: 'text-emerald-800', label: 'مدفوع' },
+    PARTIAL: { bg: 'bg-amber-100',   fg: 'text-amber-800',   label: 'جزئي' },
+    UNPAID:  { bg: 'bg-red-100',     fg: 'text-red-800',     label: 'غير مدفوع' },
+  };
+  const s = map[status] ?? map.UNPAID;
+  return (
+    <span className={cn('text-[10px] px-2 py-0.5 rounded-md font-bold', s.bg, s.fg)}>
+      {s.label}
+    </span>
+  );
+}
+
+function MoneyBlock({
+  label, value, tone = 'neutral', bold,
+}: {
+  label: string;
+  value: string;
+  tone?: 'neutral' | 'good' | 'warn';
+  bold?: boolean;
+}) {
+  const cls =
+    tone === 'good' ? 'text-emerald-700' :
+    tone === 'warn' ? 'text-amber-700' :
+    'text-zinc-900';
+  return (
+    <div>
+      <div className="text-[10px] text-zinc-500">{label}</div>
+      <div className={cn('mt-0.5 leading-none', cls, bold ? 'text-[15px] font-black' : 'text-[13px] font-bold')} data-numeric>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Mobile filter bottom sheet ───────────────────────── */
+function FilterSheet({
+  filter, orderType, onChangeFilter, onChangeOrderType, onClose, activeCount,
+}: {
+  filter: string;
+  orderType: string;
+  onChangeFilter: (v: string) => void;
+  onChangeOrderType: (v: string) => void;
+  onClose: () => void;
+  activeCount: number;
+}) {
+  // Local draft — apply on "Apply", cancel on backdrop close.
+  const [localFilter, setLocalFilter] = useState(filter);
+  const [localType, setLocalType] = useState(orderType);
+  const draftCount = (localFilter ? 1 : 0) + (localType ? 1 : 0);
+
+  return (
+    <div
+      className="md:hidden fixed inset-0 z-50 flex items-end"
+      role="dialog"
+      aria-modal="true"
+      aria-label="فلترة الطلبيات"
+      dir="rtl"
+    >
+      <div
+        className="absolute inset-0 bg-zinc-900/40 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div
+        className="relative w-full max-h-[85vh] bg-white rounded-t-2xl flex flex-col shadow-2xl"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+      >
+        <div className="pt-2 pb-1 flex justify-center">
+          <div className="h-1 w-10 rounded-full bg-zinc-300" />
+        </div>
+        <div className="px-4 py-2.5 flex items-center justify-between border-b border-zinc-100">
+          <div>
+            <div className="text-sm font-bold text-zinc-900">فلترة الطلبيات</div>
+            <div className="text-[10px] text-zinc-500 mt-0.5">
+              {activeCount > 0 ? `${activeCount} فلاتر مفعّلة حالياً` : 'لا يوجد فلاتر مفعّلة'}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="إغلاق"
+            className="w-9 h-9 rounded-full flex items-center justify-center hover:bg-zinc-100 active:bg-zinc-200"
+          >
+            <X className="h-5 w-5 text-zinc-700" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {/* Order type */}
+          <div className="px-4 pt-4">
+            <div className="text-[11px] text-zinc-500 font-bold mb-2">نوع الطلبية</div>
+            <div className="grid grid-cols-3 gap-2">
+              <FilterOpt label="الكل" active={localType === ''} onClick={() => setLocalType('')} />
+              <FilterOpt label="داخلية" icon={<Building2 className="h-3.5 w-3.5" />} active={localType === 'INTERNAL'} onClick={() => setLocalType('INTERNAL')} />
+              <FilterOpt label="خارجية" icon={<Truck className="h-3.5 w-3.5" />} active={localType === 'EXTERNAL'} onClick={() => setLocalType('EXTERNAL')} />
+            </div>
+          </div>
+
+          {/* Payment status */}
+          <div className="px-4 pt-5 pb-4">
+            <div className="text-[11px] text-zinc-500 font-bold mb-2">حالة الدفع</div>
+            <div className="grid grid-cols-2 gap-2">
+              <FilterOpt label="الكل" active={localFilter === ''} onClick={() => setLocalFilter('')} />
+              <FilterOpt label="غير مدفوع" tone="danger" active={localFilter === 'UNPAID'} onClick={() => setLocalFilter('UNPAID')} />
+              <FilterOpt label="مدفوع جزئي" tone="warn" active={localFilter === 'PARTIAL'} onClick={() => setLocalFilter('PARTIAL')} />
+              <FilterOpt label="مدفوع كامل" tone="good" active={localFilter === 'PAID'} onClick={() => setLocalFilter('PAID')} />
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t border-zinc-100 p-3 flex gap-2">
+          <button
+            type="button"
+            onClick={() => { setLocalFilter(''); setLocalType(''); }}
+            className="flex-1 min-h-[44px] rounded-xl bg-zinc-100 text-zinc-800 text-sm font-bold active:bg-zinc-200"
+          >
+            إعادة
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onChangeFilter(localFilter);
+              onChangeOrderType(localType);
+              onClose();
+            }}
+            className="flex-[2] min-h-[44px] rounded-xl bg-zinc-900 text-white text-sm font-bold active:opacity-90 flex items-center justify-center gap-1"
+          >
+            <Check className="h-4 w-4" />
+            {draftCount === 0 ? 'إظهار الكل' : `تطبيق ${draftCount} فلاتر`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FilterOpt({
+  label, active, onClick, tone, icon,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  tone?: 'good' | 'warn' | 'danger';
+  icon?: React.ReactNode;
+}) {
+  const activeCls =
+    !active ? 'bg-zinc-100 text-zinc-800' :
+    tone === 'good'   ? 'bg-emerald-600 text-white' :
+    tone === 'warn'   ? 'bg-amber-500 text-white' :
+    tone === 'danger' ? 'bg-red-600 text-white' :
+    'bg-zinc-900 text-white';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'min-h-[44px] rounded-xl text-sm font-bold flex items-center justify-center gap-1.5 transition-colors',
+        activeCls,
+      )}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 

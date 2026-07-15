@@ -55,7 +55,7 @@ export default function NewItemPage() {
 
   return (
     <AppShell>
-      <div className="max-w-3xl mx-auto p-4 md:p-6">
+      <div className="max-w-3xl mx-auto p-3 md:p-6 pb-24 md:pb-6">
         <header className="mb-6">
           <button
             onClick={() => router.back()}

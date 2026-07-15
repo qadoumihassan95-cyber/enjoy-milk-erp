@@ -230,7 +230,7 @@ export default function PayrollPage() {
 
   return (
     <AppShell>
-      <div className="max-w-[297mm] mx-auto p-4 md:p-6 space-y-4 print:p-0">
+      <div className="max-w-[297mm] mx-auto p-3 md:p-6 space-y-4 pb-24 md:pb-4 print:p-0 print:pb-0">
         {/* شريط الأدوات — يختفي عند الطباعة */}
         <header className="flex items-center justify-between flex-wrap gap-3 print:hidden">
           <div className="flex items-center gap-3">

@@ -87,7 +87,8 @@ export default function DailyProductionListPage() {
 
   return (
     <AppShell>
-      <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6">
+      {/* DESKTOP (≥md) — unchanged */}
+      <div className="hidden md:block max-w-6xl mx-auto p-4 md:p-6 space-y-6">
         <header className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <button
@@ -280,6 +281,136 @@ export default function DailyProductionListPage() {
             </div>
           )}
         </Card>
+      </div>
+
+      {/* MOBILE (<md) — sticky header + search/filter + card list */}
+      <div className="md:hidden print:hidden" dir="rtl">
+        <div className="sticky top-0 z-20 bg-zinc-50/95 backdrop-blur border-b border-zinc-200 px-3 pt-3 pb-2">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <button
+                onClick={() => router.push('/dashboard')}
+                className="w-9 h-9 rounded-lg flex items-center justify-center text-zinc-500 active:bg-zinc-100"
+                aria-label="رجوع"
+              ><ChevronLeft className="h-5 w-5" /></button>
+              <div className="w-9 h-9 rounded-xl bg-zinc-900 text-white flex items-center justify-center shrink-0">
+                <Factory className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-lg font-black leading-tight">أيام الإنتاج</h1>
+                <p className="text-[10px] text-zinc-500">{filtered.length} من {records?.length ?? 0}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowNew(true)}
+              aria-label="يوم إنتاج جديد"
+              className="w-10 h-10 rounded-full bg-zinc-900 text-white flex items-center justify-center shadow-md active:scale-95"
+            ><Plus className="h-4 w-4" /></button>
+          </div>
+          <div className="relative">
+            <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400 pointer-events-none" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="بحث: تاريخ، شيفت، مشغّل…"
+              className="w-full h-10 pr-9 pl-3 rounded-xl border border-zinc-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
+            />
+          </div>
+          <div className="flex gap-1.5 mt-2 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none' }}>
+            {[
+              { v: 'all', l: 'الكل' },
+              { v: 'DRAFT', l: 'مسودة' },
+              { v: 'POSTED', l: 'مُرحَّل' },
+              { v: 'CANCELLED', l: 'ملغي' },
+            ].map((s) => (
+              <button
+                key={s.v}
+                onClick={() => setStatusFilter(s.v as any)}
+                className={cn(
+                  'px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap min-h-[32px]',
+                  statusFilter === s.v ? 'bg-zinc-900 text-white' : 'bg-white border border-zinc-200 text-zinc-700',
+                )}
+              >
+                {s.l}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="px-3 pt-3 pb-6 space-y-2">
+          {!records || records.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-zinc-200 py-14 text-center">
+              <Calendar className="h-10 w-10 mx-auto text-zinc-300 mb-3" />
+              <p className="text-sm text-zinc-500">لا توجد سجلات إنتاج</p>
+              <p className="text-[11px] text-zinc-400 mt-1">ابدأ بإنشاء يوم إنتاج جديد</p>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-zinc-200 py-14 text-center">
+              <Search className="h-10 w-10 mx-auto text-zinc-300 mb-3" />
+              <p className="text-sm text-zinc-500">لا توجد نتائج مطابقة</p>
+              <button onClick={() => { setSearch(''); setStatusFilter('all'); }} className="text-[11px] text-zinc-700 underline mt-2">مسح الفلاتر</button>
+            </div>
+          ) : (
+            filtered.map((r: any) => {
+              const { cartons, waste, runs, wastePct } = computeTotals(r);
+              const dayNo = dayNumberMap.get(r.id) ?? '-';
+              const wasteColor = wastePct > 5 ? 'text-red-600' : wastePct > 2 ? 'text-amber-600' : 'text-zinc-500';
+              return (
+                <div
+                  key={`m-${r.id}`}
+                  className="bg-white rounded-2xl border border-zinc-200 p-3 active:bg-zinc-50"
+                  style={{ boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/production/${r.id}`)}
+                    className="w-full text-right"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-700">#{dayNo}</span>
+                        <span className="text-sm font-bold text-zinc-900">{formatDate(r.productionDate)}</span>
+                      </div>
+                      {r.status === 'POSTED' ? <Badge variant="success" dot>مُرحَّل</Badge>
+                        : r.status === 'CANCELLED' ? <Badge variant="danger" dot>ملغي</Badge>
+                        : <Badge variant="warning" dot>مسودة</Badge>}
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-dashed border-zinc-200">
+                      <div>
+                        <div className="text-[9px] text-zinc-500">تشغيلات</div>
+                        <div className="text-[13px] font-bold mt-0.5" data-numeric>{runs}</div>
+                      </div>
+                      <div>
+                        <div className="text-[9px] text-zinc-500">الإنتاج</div>
+                        <div className="text-[13px] font-black text-emerald-700 mt-0.5" data-numeric>{cartons.toLocaleString('en-US')}</div>
+                      </div>
+                      <div>
+                        <div className="text-[9px] text-zinc-500">الهدر</div>
+                        <div className={cn('text-[13px] font-bold mt-0.5', wasteColor)} data-numeric>{wastePct.toFixed(1)}%</div>
+                      </div>
+                    </div>
+                    {r.operatorName && (
+                      <div className="text-[10px] text-zinc-500 mt-2">المشغّل: <b className="text-zinc-800">{r.operatorName}</b></div>
+                    )}
+                  </button>
+                  <div className="mt-2.5 flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/production/${r.id}`)}
+                      className="flex-1 min-h-[36px] rounded-lg bg-zinc-100 text-zinc-800 text-xs font-bold flex items-center justify-center gap-1.5 active:bg-zinc-200"
+                    >عرض التفاصيل ›</button>
+                    <button
+                      type="button"
+                      onClick={() => window.open(`/production/${r.id}/print`, '_blank', 'noopener')}
+                      aria-label="طباعة"
+                      className="min-h-[36px] w-11 rounded-lg bg-white border border-zinc-200 text-zinc-600 flex items-center justify-center active:bg-zinc-50"
+                    ><Printer className="h-4 w-4" /></button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
       </div>
     </AppShell>
   );
