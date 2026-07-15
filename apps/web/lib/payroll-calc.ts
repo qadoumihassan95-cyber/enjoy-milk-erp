@@ -1,23 +1,33 @@
 /**
  * Single source of truth for payroll numbers rendered anywhere in the web app.
  *
- * Both `/payroll` (the interactive editor) and `/payroll/sheet` (the official
- * printable statement) MUST derive their numbers from this file — the two
- * pages historically diverged because each recomputed the SS/gross/net locally
- * with slightly different fallbacks, producing different totals for the same
- * month.
+ * Used by:
+ *   - /payroll                (interactive editor — desktop & mobile)
+ *   - /payroll/sheet          (official printable statement)
+ *   - PDF (window.print from /payroll/sheet)
+ *   - Excel export (both pages)
  *
- * Rules:
- *   1) When a row has NO unsaved edits AND the backend provided the pre-
- *      computed values (`grossSalary`, `employeeSS`, `companySS`, `netSalary`,
- *      `totalDeductions`) — those are the authoritative numbers and we return
- *      them verbatim. The backend is always the source of truth for saved data.
- *   2) When a row has unsaved edits (dirty overrides), we recompute using the
- *      SAME formula the backend uses, driven by the same settings the backend
- *      is configured with (rates + basis). This way "live" numbers on the
- *      editor match exactly what the backend will store once the user saves.
+ * Both pages MUST derive their numbers from this file. Every rendered value
+ * is recomputed here from the raw component fields — we never trust the
+ * backend's derived fields (grossSalary, employeeSS, companySS, netSalary,
+ * totalDeductions) because they may be stale relative to the current company
+ * policy on what enters the SS base. The raw fields (baseSalary, transport,
+ * overtime, advance, attendance) ARE trusted from backend, and dirty
+ * overrides from the interactive editor take precedence.
  *
- * NEVER inline the payroll formula anywhere else. Always import from here.
+ * Company policy (locked here — do not diverge in any UI file):
+ *   Gross Salary            = Basic + Transportation + Overtime
+ *   SS Base                 = Basic Salary ONLY  (NOT gross, NOT basic+transport)
+ *   Employee SS (7.5%)      = Basic × 0.075
+ *   Company  SS (14.25%)    = Basic × 0.1425
+ *   Total Deductions        = Employee SS + Employee Advance + Attendance Deduction
+ *   Net Salary              = Gross − Total Deductions
+ *   Total Company Cost      = Gross + Company SS
+ *
+ * The `settings.socialSecurityBasis` parameter is accepted for backward
+ * compatibility but is intentionally ignored — the SS base is fixed to
+ * Basic Salary per company policy. Rates are read from settings if provided
+ * (allowing the government to raise them later without a code change).
  */
 
 export type SSBasis = 'GROSS' | 'BASIC_PLUS_TRANSPORT' | 'BASIC';
@@ -25,7 +35,7 @@ export type SSBasis = 'GROSS' | 'BASIC_PLUS_TRANSPORT' | 'BASIC';
 export interface PayrollSettings {
   employeeSSRate?: number;
   companySSRate?: number;
-  socialSecurityBasis?: SSBasis | string;
+  socialSecurityBasis?: SSBasis | string; // accepted, ignored
 }
 
 export interface PayrollRowInput {
@@ -34,7 +44,8 @@ export interface PayrollRowInput {
   overtimeAmount?: number | string | null;
   advanceDeduction?: number | string | null;
   attendanceDeduction?: number | string | null;
-  /* Backend pre-computed values (authoritative when present + not dirty). */
+  /* Backend-derived fields — accepted in the type for compat, but ignored
+     by this calculator. All rendered numbers are recomputed from raw fields. */
   grossSalary?: number | string | null;
   employeeSS?: number | string | null;
   companySS?: number | string | null;
@@ -43,7 +54,6 @@ export interface PayrollRowInput {
   net?: number | string | null;
 }
 
-/** Field overrides coming from the interactive editor (unsaved). */
 export interface PayrollDirty {
   baseSalary?: number | string | null;
   transportOverride?: number | string | null;
@@ -68,7 +78,6 @@ export interface PayrollComputed {
 
 const DEFAULT_EMP_SS_RATE = 0.075;
 const DEFAULT_COMP_SS_RATE = 0.1425;
-const DEFAULT_BASIS: SSBasis = 'BASIC_PLUS_TRANSPORT';
 
 function toNum(v: unknown): number {
   if (v == null || v === '') return 0;
@@ -76,11 +85,16 @@ function toNum(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Round to JOD precision (3 decimals). Eliminates IEEE754 drift like
+ *  400 × 0.1425 = 56.99999999999999 so displayed and stored values agree. */
+function r3(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
 function hasValue(v: unknown): boolean {
   return v != null && v !== '';
 }
 
-/** True if any dirty override is present (empty string counts as "not set"). */
 export function isRowDirty(dirty: PayrollDirty | undefined | null): boolean {
   if (!dirty) return false;
   return (
@@ -93,65 +107,50 @@ export function isRowDirty(dirty: PayrollDirty | undefined | null): boolean {
 }
 
 /**
- * Compute the effective (rendered) values for one payroll row. Returns the
- * exact numbers the UI should display AND the numbers the Excel/PDF exporters
- * should use — no other rounding or transformation should happen downstream.
+ * Compute the effective values for one payroll row. Same rules everywhere:
+ *   - Gross = Basic + Transport + Overtime
+ *   - SS Base = Basic Salary ONLY
+ *   - Employee SS = Basic × rate  (default 7.5%)
+ *   - Company  SS = Basic × rate  (default 14.25%)
+ *   - Net Ded = Employee SS + Advance + Attendance
+ *   - Net = Gross − Net Ded
+ *   - Total Company Cost = Gross + Company SS
+ *
+ * Backend-derived fields (grossSalary, employeeSS, …) are IGNORED. Dirty
+ * overrides from the interactive editor win over backend raw fields.
  */
 export function computePayrollRow(
   row: PayrollRowInput,
-  settings: PayrollSettings | undefined | null,
+  settings?: PayrollSettings | null,
   dirty?: PayrollDirty,
 ): PayrollComputed {
-  // Effective raw components (dirty overrides win when present).
   const base       = hasValue(dirty?.baseSalary)         ? toNum(dirty!.baseSalary)         : toNum(row.baseSalary);
   const transport  = hasValue(dirty?.transportOverride)  ? toNum(dirty!.transportOverride)  : toNum(row.transportAllowance);
   const overtime   = hasValue(dirty?.overtimeAmount)     ? toNum(dirty!.overtimeAmount)     : toNum(row.overtimeAmount);
   const advance    = hasValue(dirty?.advanceDeduction)   ? toNum(dirty!.advanceDeduction)   : toNum(row.advanceDeduction);
   const attendance = hasValue(dirty?.attendanceOverride) ? toNum(dirty!.attendanceOverride) : toNum(row.attendanceDeduction);
 
-  const rowIsDirty = isRowDirty(dirty);
-  const backendHasValues = row.grossSalary != null || row.netSalary != null || row.net != null;
-
-  // Path A — clean row + backend has pre-computed values → trust backend.
-  if (!rowIsDirty && backendHasValues) {
-    const gross    = toNum(row.grossSalary);
-    const empSS    = toNum(row.employeeSS);
-    const compSS   = toNum(row.companySS);
-    const totalDed = toNum(row.totalDeductions);
-    const net      = toNum(row.netSalary ?? row.net);
-    return {
-      base, transport, overtime, advance, attendance,
-      gross, empSS, compSS, totalDed, net,
-      totalCompanyCost: gross + compSS,
-    };
-  }
-
-  // Path B — recompute using the same formula the backend uses.
   const empSSRate  = toNum(settings?.employeeSSRate)  || DEFAULT_EMP_SS_RATE;
   const compSSRate = toNum(settings?.companySSRate)   || DEFAULT_COMP_SS_RATE;
-  const basis      = (settings?.socialSecurityBasis || DEFAULT_BASIS) as SSBasis;
 
-  const gross = base + overtime + transport;
-  const ssBase =
-    basis === 'GROSS'                 ? gross :
-    basis === 'BASIC_PLUS_TRANSPORT'  ? base + transport :
-    /* BASIC */                          base;
-  const empSS    = ssBase * empSSRate;
-  const compSS   = ssBase * compSSRate;
-  const totalDed = empSS + advance + attendance;
-  const net      = gross - totalDed;
+  const gross     = r3(base + transport + overtime);
+  const ssBase    = base; // ← company policy: SS on Basic only
+  const empSS     = r3(ssBase * empSSRate);
+  const compSS    = r3(ssBase * compSSRate);
+  const totalDed  = r3(empSS + advance + attendance);
+  const net       = r3(gross - totalDed);
 
   return {
-    base, transport, overtime, advance, attendance,
+    base: r3(base),
+    transport: r3(transport),
+    overtime: r3(overtime),
+    advance: r3(advance),
+    attendance: r3(attendance),
     gross, empSS, compSS, totalDed, net,
-    totalCompanyCost: gross + compSS,
+    totalCompanyCost: r3(gross + compSS),
   };
 }
 
-/**
- * Aggregate a list of computed rows into totals. All figures shown at the
- * bottom of the payroll table (and in KPIs/Excel/PDF) MUST go through this.
- */
 export function computePayrollTotals(rows: PayrollComputed[]) {
   const acc = {
     baseSalary: 0, transport: 0, overtime: 0,

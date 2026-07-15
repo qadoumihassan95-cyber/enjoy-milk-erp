@@ -215,7 +215,8 @@ export default function PayrollPage() {
 
   return (
     <AppShell>
-      <div className="max-w-[297mm] mx-auto p-3 md:p-6 space-y-4 pb-24 md:pb-4 print:p-0 print:pb-0">
+      {/* DESKTOP (≥ md) — UNCHANGED. Wrapped in hidden md:block. */}
+      <div className="hidden md:block max-w-[297mm] mx-auto p-3 md:p-6 space-y-4 pb-24 md:pb-4 print:p-0 print:pb-0">
         {/* شريط الأدوات — يختفي عند الطباعة */}
         <header className="flex items-center justify-between flex-wrap gap-3 print:hidden">
           <div className="flex items-center gap-3">
@@ -386,6 +387,33 @@ export default function PayrollPage() {
         </div>
       </div>
 
+      {/* ═══════════════════════════════════════════════
+          MOBILE (< md) — full parity with desktop:
+          edit every row (base/transport/overtime/advance/attendance),
+          audit reason, save-per-row, save-all, mark paid/unpaid via
+          existing endpoints, print PDF, export Excel, filter, search.
+          Uses the shared DetailModal (which auto-adapts to viewport).
+      ═══════════════════════════════════════════════ */}
+      <MobilePayroll
+        month={month} onMonth={setMonth}
+        rows={rows}
+        departments={departments}
+        department={department} onDepartment={setDepartment}
+        employee={employee} onEmployee={setEmployee}
+        paidFilter={paidFilter} onPaidFilter={setPaidFilter}
+        totals={totals}
+        effective={effective}
+        dirtyCount={dirtyCount}
+        dirty={dirty}
+        onRefresh={() => refetch()}
+        isFetching={isFetching}
+        onExcel={exportExcel}
+        xlsBusy={xlsBusy}
+        onOpenEdit={(r: any) => setEditingRow(r)}
+        onSaveAll={() => saveAll.mutate()}
+        saveAllBusy={saveAll.isPending}
+      />
+
       {editingRow && (
         <DetailModal
           row={editingRow}
@@ -458,6 +486,329 @@ function Kpi({ label, value, tint }: { label: string; value: any; tint?: 'blue' 
   );
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   MOBILE PAYROLL (< md) — full-parity mobile experience.
+   Sticky mobile header (title + month picker + primary actions),
+   filter sheet, KPI ribbon, employee cards showing live-computed
+   numbers, edit button on every card that opens the shared
+   DetailModal — same audit reason field, same save flow, same
+   backend endpoints as desktop.
+═══════════════════════════════════════════════════════════════════ */
+function MobilePayroll({
+  month, onMonth, rows, departments, department, onDepartment,
+  employee, onEmployee, paidFilter, onPaidFilter, totals, effective,
+  dirtyCount, dirty, onRefresh, isFetching, onExcel, xlsBusy,
+  onOpenEdit, onSaveAll, saveAllBusy,
+}: any) {
+  const [showFilter, setShowFilter] = useState(false);
+  const [showActions, setShowActions] = useState(false);
+  const activeFilterCount = (department ? 1 : 0) + (employee ? 1 : 0) + (paidFilter !== 'ALL' ? 1 : 0);
+
+  const openPrint = () =>
+    window.open(`/payroll/sheet?month=${month}`, '_blank', 'noopener');
+
+  return (
+    <div className="md:hidden print:hidden" dir="rtl">
+      {/* Sticky header */}
+      <div className="sticky top-0 z-20 bg-zinc-50/95 backdrop-blur border-b border-zinc-200 px-3 pt-3 pb-2">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-zinc-900 text-white flex items-center justify-center shrink-0">
+              <Banknote className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-lg font-black tracking-tight leading-tight">الرواتب</h1>
+              <p className="text-[10px] text-zinc-500">
+                {totals.count} موظف{dirtyCount > 0 ? ` · ${dirtyCount} تعديل` : ''}
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              onClick={() => setShowActions(true)}
+              aria-label="إجراءات"
+              className="w-10 h-10 rounded-full bg-white border border-zinc-200 text-zinc-700 flex items-center justify-center active:scale-95"
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={onSaveAll}
+              disabled={dirtyCount === 0 || saveAllBusy}
+              aria-label="حفظ الكل"
+              className="min-w-[44px] h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center px-3 gap-1 font-bold text-xs disabled:opacity-50 shadow-md"
+            >
+              <Save className="h-4 w-4" />
+              {dirtyCount > 0 && <span>{dirtyCount}</span>}
+            </button>
+          </div>
+        </div>
+
+        {/* Month picker + filter */}
+        <div className="flex items-center gap-2">
+          <input
+            type="month"
+            value={month}
+            onChange={(e) => onMonth(e.target.value)}
+            className="flex-1 h-10 px-3 rounded-xl border border-zinc-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
+          />
+          <button
+            type="button"
+            onClick={() => setShowFilter(true)}
+            aria-label={`فلترة${activeFilterCount ? ` (${activeFilterCount})` : ''}`}
+            className={`relative h-10 min-w-[44px] px-3 rounded-xl flex items-center justify-center gap-1.5 text-sm font-bold active:scale-95 ${
+              activeFilterCount ? 'bg-zinc-900 text-white' : 'bg-white border border-zinc-200 text-zinc-700'
+            }`}
+          >
+            <Filter className="h-4 w-4" />
+            {activeFilterCount > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-amber-500 text-white text-[10px] font-black flex items-center justify-center px-1">
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      <div className="px-3 pt-3 pb-24 space-y-3">
+        {/* KPI ribbon */}
+        <div
+          className="flex gap-2 overflow-x-auto -mx-3 px-3 pb-1 [&::-webkit-scrollbar]:hidden"
+          style={{ scrollbarWidth: 'none' }}
+        >
+          <MPKpi label="عدد الموظفين" value={String(totals.count)} />
+          <MPKpi label="إجمالي الرواتب" value={fmt(totals.gross)} unit="د.أ" tone="neutral" />
+          <MPKpi label="صافي الرواتب"   value={fmt(totals.net)}   unit="د.أ" tone="good" />
+          <MPKpi label="ضمان الشركة"    value={fmt(totals.compSS)} unit="د.أ" tone="warn" />
+          <MPKpi label="تكلفة الشركة"    value={fmt(totals.totalCompanyCost)} unit="د.أ" tone="neutral" />
+        </div>
+
+        {/* Cards — one per employee */}
+        {rows.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-zinc-200 py-14 text-center">
+            <Banknote className="h-10 w-10 mx-auto text-zinc-300 mb-3" />
+            <p className="text-sm text-zinc-500">لا توجد بيانات لهذا الشهر</p>
+          </div>
+        ) : (
+          rows.map((r: any) => {
+            const e = effective(r);
+            const isDirty = !!dirty[r.employeeId];
+            return (
+              <div
+                key={`m-${r.employeeId}`}
+                className={`bg-white rounded-2xl border p-3 ${
+                  isDirty ? 'border-amber-400 ring-1 ring-amber-200' : 'border-zinc-200'
+                }`}
+                style={{ boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[14px] font-bold text-zinc-900 leading-tight truncate">{r.fullName}</div>
+                    <div className="text-[10px] text-zinc-500 mt-0.5">
+                      {r.department || '—'}{r.position ? ` · ${r.position}` : ''}
+                    </div>
+                  </div>
+                  <div className="text-left shrink-0 pl-2">
+                    {r.paid ? (
+                      <Badge variant="success" dot>مصروف</Badge>
+                    ) : isDirty ? (
+                      <Badge variant="warning" dot>تعديل</Badge>
+                    ) : (
+                      <Badge variant="default" dot>مسودة</Badge>
+                    )}
+                  </div>
+                </div>
+
+                {/* Money block — same numbers everywhere (shared calc) */}
+                <div className="mt-3 pt-3 border-t border-dashed border-zinc-200 grid grid-cols-3 gap-2">
+                  <div>
+                    <div className="text-[10px] text-zinc-500">أساسي</div>
+                    <div className="text-[13px] font-bold text-zinc-900 mt-0.5" data-numeric>{fmt(e.base)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-zinc-500">إجمالي</div>
+                    <div className="text-[13px] font-bold text-cyan-700 mt-0.5" data-numeric>{fmt(e.gross)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-zinc-500">صافي</div>
+                    <div className="text-[15px] font-black text-emerald-700 mt-0.5" data-numeric>{fmt(e.net)}</div>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-zinc-600">
+                  <span>ضمان موظف: <b>{fmt(e.empSS)}</b></span>
+                  <span>ضمان شركة: <b>{fmt(e.compSS)}</b></span>
+                  {Number(e.advance) > 0 && <span>سلفة: <b>{fmt(e.advance)}</b></span>}
+                  {Number(e.attendance) > 0 && <span>خصم دوام: <b>{fmt(e.attendance)}</b></span>}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onOpenEdit(r)}
+                  disabled={r.paid}
+                  className="mt-3 w-full min-h-[40px] rounded-xl bg-blue-50 text-blue-800 text-sm font-bold flex items-center justify-center gap-1.5 active:bg-blue-100 disabled:opacity-40"
+                >
+                  <Pencil className="h-4 w-4" />
+                  {r.paid ? 'مصروف — للعرض فقط' : 'تعديل الراتب + سبب التعديل'}
+                </button>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Actions sheet */}
+      {showActions && (
+        <MPBottomSheet title="إجراءات الرواتب" onClose={() => setShowActions(false)}>
+          <MPSheetRow
+            icon={<RefreshCw className="h-4 w-4" />}
+            title="إعادة حساب"
+            subtitle="سحب أحدث القيم من الخادم"
+            onClick={() => { setShowActions(false); onRefresh(); }}
+            disabled={isFetching}
+          />
+          <MPSheetRow
+            icon={<FileSpreadsheet className="h-4 w-4" />}
+            iconTone="pro"
+            title={xlsBusy ? 'جارٍ تحضير Excel…' : 'تصدير Excel'}
+            subtitle="ملف .xlsx بنفس أرقام الشاشة"
+            onClick={() => { setShowActions(false); onExcel(); }}
+            disabled={xlsBusy}
+          />
+          <MPSheetRow
+            icon={<Printer className="h-4 w-4" />}
+            iconTone="info"
+            title="طباعة / PDF"
+            subtitle="كشف رسمي A4 عرضي"
+            onClick={() => { setShowActions(false); openPrint(); }}
+          />
+        </MPBottomSheet>
+      )}
+
+      {/* Filter sheet */}
+      {showFilter && (
+        <MPBottomSheet title="فلترة الرواتب" onClose={() => setShowFilter(false)}>
+          <div className="px-4 pt-3">
+            <div className="text-[11px] text-zinc-500 font-bold mb-2">القسم</div>
+            <div className="grid grid-cols-2 gap-2">
+              <MPPill label="كل الأقسام" active={!department} onClick={() => onDepartment('')} />
+              {departments.map((d: string) => (
+                <MPPill key={d} label={d} active={department === d} onClick={() => onDepartment(d)} />
+              ))}
+            </div>
+          </div>
+          <div className="px-4 pt-4">
+            <div className="text-[11px] text-zinc-500 font-bold mb-2">حالة الصرف</div>
+            <div className="grid grid-cols-3 gap-2">
+              <MPPill label="الكل" active={paidFilter === 'ALL'} onClick={() => onPaidFilter('ALL')} />
+              <MPPill label="مصروف" active={paidFilter === 'PAID'} onClick={() => onPaidFilter('PAID')} tone="good" />
+              <MPPill label="غير مصروف" active={paidFilter === 'UNPAID'} onClick={() => onPaidFilter('UNPAID')} tone="warn" />
+            </div>
+          </div>
+          <div className="px-4 pt-4 pb-3">
+            <div className="text-[11px] text-zinc-500 font-bold mb-2">بحث بالاسم</div>
+            <input
+              value={employee}
+              onChange={(e) => onEmployee(e.target.value)}
+              placeholder="اكتب جزءاً من الاسم…"
+              className="w-full h-11 px-3 rounded-xl border border-zinc-200 text-sm"
+            />
+          </div>
+          <div className="border-t border-zinc-100 p-3 flex gap-2">
+            <button
+              type="button"
+              onClick={() => { onDepartment(''); onEmployee(''); onPaidFilter('ALL'); }}
+              className="flex-1 min-h-[44px] rounded-xl bg-zinc-100 text-zinc-800 text-sm font-bold active:bg-zinc-200"
+            >
+              إعادة
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowFilter(false)}
+              className="flex-[2] min-h-[44px] rounded-xl bg-zinc-900 text-white text-sm font-bold"
+            >
+              تطبيق
+            </button>
+          </div>
+        </MPBottomSheet>
+      )}
+    </div>
+  );
+}
+
+function MPKpi({ label, value, unit, tone = 'neutral' }: { label: string; value: string; unit?: string; tone?: 'neutral' | 'good' | 'warn' }) {
+  const cls = tone === 'good' ? 'text-emerald-700' : tone === 'warn' ? 'text-amber-700' : 'text-zinc-900';
+  return (
+    <div className="flex-shrink-0 bg-white border border-zinc-200 rounded-xl px-3 py-2 min-w-[112px]">
+      <div className="text-[10px] text-zinc-500">{label}</div>
+      <div className={`font-black text-sm mt-0.5 leading-none ${cls}`} data-numeric>
+        {value}{unit && <span className="text-[10px] font-bold text-zinc-400 mr-1">{unit}</span>}
+      </div>
+    </div>
+  );
+}
+
+function MPPill({ label, active, onClick, tone }: { label: string; active: boolean; onClick: () => void; tone?: 'good' | 'warn' }) {
+  const cls = !active ? 'bg-zinc-100 text-zinc-800'
+    : tone === 'good' ? 'bg-emerald-600 text-white'
+    : tone === 'warn' ? 'bg-amber-500 text-white'
+    : 'bg-zinc-900 text-white';
+  return (
+    <button type="button" onClick={onClick} className={`min-h-[44px] rounded-xl text-sm font-bold px-2 ${cls}`}>
+      {label}
+    </button>
+  );
+}
+
+function MPBottomSheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+  return (
+    <div className="md:hidden fixed inset-0 z-50 flex items-end" role="dialog" aria-modal="true" aria-label={title} dir="rtl">
+      <div className="absolute inset-0 bg-zinc-900/40 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className="relative w-full max-h-[85vh] bg-white rounded-t-2xl flex flex-col shadow-2xl"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+      >
+        <div className="pt-2 pb-1 flex justify-center"><div className="h-1 w-10 rounded-full bg-zinc-300" /></div>
+        <div className="px-4 py-2.5 flex items-center justify-between border-b border-zinc-100">
+          <div className="text-sm font-bold">{title}</div>
+          <button onClick={onClose} aria-label="إغلاق" className="w-9 h-9 rounded-full hover:bg-zinc-100 active:bg-zinc-200 flex items-center justify-center">
+            <X className="h-5 w-5 text-zinc-700" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function MPSheetRow({ icon, title, subtitle, onClick, disabled, iconTone }: any) {
+  const toneCls =
+    iconTone === 'good' ? 'bg-emerald-50 text-emerald-700' :
+    iconTone === 'info' ? 'bg-blue-50 text-blue-700' :
+    iconTone === 'pro'  ? 'bg-violet-50 text-violet-700' :
+    'bg-zinc-100 text-zinc-700';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="w-full flex items-center gap-3 px-3 py-3 mx-2 my-0.5 rounded-xl active:bg-zinc-50 min-h-[52px] disabled:opacity-50"
+    >
+      <span className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${toneCls}`}>{icon}</span>
+      <div className="flex-1 min-w-0 text-right">
+        <div className="text-sm font-bold text-zinc-900">{title}</div>
+        {subtitle && <div className="text-[10px] text-zinc-500 mt-0.5">{subtitle}</div>}
+      </div>
+      <span className="text-zinc-300 text-lg">‹</span>
+    </button>
+  );
+}
+
 /* ═══════════════════════════════════════════
    Detail Modal — تعديل موسّع لصف واحد
 ═══════════════════════════════════════════ */
@@ -472,19 +823,34 @@ function DetailModal({
 }) {
   const [reason, setReason] = useState('');
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose} dir="rtl">
-      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="sticky top-0 bg-white flex items-center justify-between p-5 border-b border-zinc-100 z-10">
-          <div>
-            <h3 className="font-bold text-lg">تعديل راتب: {row.fullName}</h3>
-            <p className="text-xs text-zinc-500">{row.department || '—'} — {row.position || '—'}</p>
+    <div
+      className="fixed inset-0 z-50 bg-black/40 flex items-end md:items-center md:justify-center md:p-4"
+      onClick={onClose}
+      dir="rtl"
+    >
+      <div
+        className="bg-white rounded-t-2xl md:rounded-2xl w-full max-w-2xl h-[95vh] md:h-auto md:max-h-[92vh] flex flex-col shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+        style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+      >
+        {/* Grabber (mobile) */}
+        <div className="md:hidden pt-2 pb-1 flex justify-center">
+          <div className="h-1 w-10 rounded-full bg-zinc-300" />
+        </div>
+
+        <div className="flex items-center justify-between px-4 py-3 md:p-5 border-b border-zinc-100 shrink-0">
+          <div className="min-w-0">
+            <h3 className="font-bold text-base md:text-lg truncate">تعديل راتب: {row.fullName}</h3>
+            <p className="text-xs text-zinc-500 truncate">{row.department || '—'} — {row.position || '—'}</p>
           </div>
-          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-900">
+          <button onClick={onClose} aria-label="إغلاق" className="w-10 h-10 rounded-full flex items-center justify-center text-zinc-500 hover:bg-zinc-100 shrink-0">
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="p-5 space-y-4">
-          <div className="grid md:grid-cols-2 gap-3">
+
+        <div className="flex-1 overflow-y-auto px-4 py-4 md:p-5 space-y-4">
+          {/* One-column on mobile, 2-col on md+ */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Field label="الراتب الأساسي" value={effective.base} onChange={(v) => onChange('baseSalary', v)} />
             <Field label="بدل مواصلات" value={effective.transport} onChange={(v) => onChange('transportOverride', v)} />
             <Field label="عمل إضافي (المبلغ)" value={effective.overtime} onChange={(v) => onChange('overtimeAmount', v)} />
@@ -492,8 +858,8 @@ function DetailModal({
             <Field label="خصم الدوام" value={effective.attendance} onChange={(v) => onChange('attendanceOverride', v)} />
           </div>
 
-          {/* المحسوبة (Read-only) */}
-          <div className="grid md:grid-cols-3 gap-3 bg-zinc-50 border border-zinc-100 rounded-lg p-3">
+          {/* Live-computed (Read-only) — updates instantly as you type */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-3 bg-zinc-50 border border-zinc-100 rounded-lg p-3">
             <RO label="إجمالي الراتب" value={effective.gross} tint="cyan" />
             <RO label="ضمان الموظف 7.5%" value={effective.empSS} tint="orange" />
             <RO label="ضمان الشركة 14.25%" value={effective.compSS} tint="orange" />
@@ -504,15 +870,21 @@ function DetailModal({
 
           <div>
             <label className="text-xs font-bold text-zinc-700 block mb-1">سبب التعديل (Audit)</label>
-            <input value={reason} onChange={(e) => { setReason(e.target.value); onChange('overrideReason', e.target.value); }}
+            <input
+              value={reason}
+              onChange={(e) => { setReason(e.target.value); onChange('overrideReason', e.target.value); }}
               placeholder="مطلوب عند التعديل اليدوي"
-              className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" />
+              className="w-full h-11 md:h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+            />
           </div>
+        </div>
 
-          <div className="flex justify-end gap-3">
-            <Button variant="ghost" onClick={onClose}>إلغاء</Button>
-            <Button onClick={onSave}><Save className="h-4 w-4" /> حفظ التعديلات</Button>
-          </div>
+        {/* Sticky footer — always visible even when keyboard is up */}
+        <div className="border-t border-zinc-100 p-3 md:p-4 flex gap-2 shrink-0 bg-white">
+          <Button variant="ghost" onClick={onClose} className="flex-1 md:flex-initial min-h-[44px]">إلغاء</Button>
+          <Button onClick={onSave} className="flex-[2] md:flex-initial min-h-[44px]">
+            <Save className="h-4 w-4" /> حفظ التعديلات
+          </Button>
         </div>
       </div>
     </div>
@@ -524,10 +896,15 @@ function Field({ label, value, onChange }: { label: string; value: number; onCha
     <div>
       <label className="text-xs font-bold text-zinc-700 block mb-1">{label}</label>
       <input
+        // inputMode="decimal" triggers the numeric keyboard on iOS/Android
+        // even though the visual keyboard uses a comma or dot per locale.
         type="number" step="0.001" min={0}
+        inputMode="decimal"
+        pattern="[0-9]*[.,]?[0-9]*"
         defaultValue={value.toFixed(3)}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+        onBlur={(e) => { if (Number(e.target.value) < 0) e.target.value = '0'; }}
+        className="w-full h-11 md:h-10 px-3 rounded-lg border border-zinc-200 text-sm font-mono"
       />
     </div>
   );
