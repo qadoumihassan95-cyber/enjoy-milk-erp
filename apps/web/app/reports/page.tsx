@@ -264,25 +264,67 @@ function InventoryReport() {
     return { itemsCount: filtered.length, totalQty: qty, totalValue: value };
   }, [filtered]);
 
-  const exportExcel = () => {
-    const rows: any[][] = [];
-    rows.push([`تقرير المخزون — ${FACTORY_NAME}`]);
-    rows.push([`تاريخ التوليد: ${new Date().toLocaleString('ar-JO')}`]);
-    rows.push([`الفلاتر: ${search ? `بحث=${search}` : ''} ${typeFilter ? `النوع=${typeFilter}` : ''}`]);
-    rows.push([]);
-    rows.push(['الاسم', 'SKU', 'التصنيف', 'الوحدة', 'الكمية الحالية', 'سعر الوحدة', 'قيمة المخزون', 'الحد الأدنى', 'الحالة']);
-    filtered.forEach((it: any) => {
-      const q = Number(it.totalStock ?? 0);
-      const c = Number(it.costPrice ?? it.avgCost ?? 0);
-      rows.push([
-        it.name, it.sku ?? '—', it.type ?? '—', it.unit ?? '—',
-        q, c || '—', (q * c).toFixed(2), it.minStock ?? '—',
-        it.isLow ? 'منخفض' : q === 0 ? 'نافد' : 'متوفر',
-      ]);
+  const exportExcel = async () => {
+    const { exportXlsx } = await import('@/lib/xlsx-export');
+    await exportXlsx({
+      filename: `inventory-report-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      reportTitle: 'تقرير المخزون',
+      reportTitleEn: 'Inventory Report',
+      branch: 'المصنع الرئيسي',
+      currency: 'JOD',
+      rtl: true,
+      filters: [
+        { label: 'بحث', value: search || '—' },
+        { label: 'التصنيف', value: typeFilter || 'الكل' },
+      ],
+      kpis: [
+        { label: 'عدد الأصناف', value: totals.itemsCount, format: 'integer' },
+        { label: 'إجمالي الكمية', value: totals.totalQty, format: 'decimal2' },
+        { label: 'قيمة المخزون', value: totals.totalValue, format: 'jod', tint: 'cyan' },
+      ],
+      details: {
+        sheetName: 'المخزون · Inventory',
+        columns: [
+          { key: 'name',    header: 'الاسم', width: 30, strong: true },
+          { key: 'sku',     header: 'SKU', width: 14 },
+          { key: 'type',    header: 'التصنيف', width: 16, tint: 'gray' },
+          { key: 'unit',    header: 'الوحدة', width: 10, align: 'center' },
+          { key: 'qty',     header: 'الكمية الحالية', format: 'decimal2', tint: 'blue' },
+          { key: 'cost',    header: 'سعر الوحدة', format: 'jod' },
+          { key: 'value',   header: 'قيمة المخزون', format: 'jod', tint: 'cyan', strong: true },
+          { key: 'minStk',  header: 'الحد الأدنى', format: 'decimal2' },
+          { key: 'status',  header: 'الحالة', tint: 'orange' },
+        ],
+        rows: filtered.map((it: any) => {
+          const q = Number(it.totalStock ?? 0);
+          const c = Number(it.costPrice ?? it.avgCost ?? 0);
+          return {
+            name: it.name,
+            sku: it.sku ?? '—',
+            type: it.type ?? '—',
+            unit: it.unit ?? '—',
+            qty: q,
+            cost: c || 0,
+            value: q * c,
+            minStk: Number(it.minStock ?? 0),
+            status: q === 0 ? 'نافد' : it.isLow ? 'منخفض' : 'متوفر',
+          };
+        }),
+        totals: {
+          name: 'الإجماليات · TOTALS',
+          sku: null, type: null, unit: null,
+          qty: totals.totalQty,
+          cost: null,
+          value: totals.totalValue,
+          minStk: null,
+          status: null,
+        },
+        conditions: [
+          { columnKey: 'status', when: 'contains', value: 'نافد', bg: 'FFFEE2E2', fg: 'FF991B1B' },
+          { columnKey: 'status', when: 'contains', value: 'منخفض', bg: 'FFFFEDD5', fg: 'FF9A3412' },
+        ],
+      },
     });
-    rows.push([]);
-    rows.push(['الإجماليات', '', '', '', totals.totalQty, '', totals.totalValue.toFixed(2)]);
-    exportToCsv(`inventory-report-${new Date().toISOString().slice(0, 10)}.csv`, rows);
   };
 
   return (
@@ -407,34 +449,88 @@ function OrdersReport() {
     return { ordersCount: filtered.length, total, paid, balance };
   }, [filtered]);
 
-  const exportExcel = () => {
-    const rows: any[][] = [];
-    rows.push([`تقرير الطلبيات — ${FACTORY_NAME}`]);
-    rows.push([`من ${from} إلى ${to} · تاريخ: ${new Date().toLocaleString('ar-JO')}`]);
-    rows.push([`الحالة: ${status || 'الكل'} · النوع: ${orderType || 'الكل'}`]);
-    rows.push([]);
-    rows.push(['رقم الطلب', 'النوع', 'العميل', 'الهاتف', 'المنطقة', 'رقم العقد', 'موقع التسليم', 'رقم الشحنة', 'تاريخ الشحن', 'تاريخ الوصول', 'الكمية بالطن', 'سعر الطن', 'إجمالي البضاعة', 'أجور الشحن', 'الإجمالي النهائي', 'المسدد', 'المتبقي', 'الحالة']);
-    filtered.forEach((o: any) => {
-      const lines = o.lines ?? [];
-      const tonsQty = lines.filter((l: any) => String(l.unit || '').toUpperCase() === 'TON').reduce((s: number, l: any) => s + Number(l.quantity || 0), 0);
-      const productsTotal = Number(o.productsTotal ?? 0) || lines.reduce((s: number, l: any) => s + Number(l.lineTotal || 0), 0);
-      const shipping = Number(o.shippingCost ?? 0);
-      rows.push([
-        o.number, o.orderType === 'EXTERNAL' ? 'خارجية' : 'داخلية',
-        o.customerName, o.customerPhone ?? '—', o.region ?? '—',
-        o.contractNumber ?? '—', o.deliveryLocation ?? '—', o.shipmentTrackingNumber ?? '—',
-        o.expectedShippingDate ? formatDate(o.expectedShippingDate) : '—',
-        o.expectedArrivalDate ? formatDate(o.expectedArrivalDate) : '—',
-        tonsQty > 0 ? tonsQty.toFixed(2) : '—',
-        o.tonPrice != null ? Number(o.tonPrice).toFixed(2) : '—',
-        productsTotal.toFixed(2), shipping.toFixed(2),
-        Number(o.total).toFixed(2), Number(o.paid).toFixed(2), Number(o.balance).toFixed(2),
-        o.status,
-      ]);
+  const exportExcel = async () => {
+    const { exportXlsx } = await import('@/lib/xlsx-export');
+    await exportXlsx({
+      filename: `orders-report-${from}_${to}.xlsx`,
+      reportTitle: 'تقرير الطلبيات',
+      reportTitleEn: 'Orders Report',
+      branch: 'المصنع الرئيسي',
+      currency: 'JOD',
+      rtl: true,
+      filters: [
+        { label: 'من', value: from },
+        { label: 'إلى', value: to },
+        { label: 'الحالة', value: status || 'الكل' },
+        { label: 'النوع', value: orderType || 'الكل' },
+      ],
+      kpis: [
+        { label: 'عدد الطلبيات', value: totals.ordersCount, format: 'integer' },
+        { label: 'الإجمالي', value: totals.total, format: 'jod', tint: 'cyan' },
+        { label: 'المدفوع', value: totals.paid, format: 'jod', tint: 'green' },
+        { label: 'المتبقي', value: totals.balance, format: 'jod', tint: 'orange' },
+      ],
+      details: {
+        sheetName: 'الطلبيات · Orders',
+        columns: [
+          { key: 'number',    header: 'رقم الطلب', width: 14, strong: true },
+          { key: 'type',      header: 'النوع', width: 10, align: 'center', tint: 'gray' },
+          { key: 'customer',  header: 'العميل', width: 24 },
+          { key: 'phone',     header: 'الهاتف', width: 14 },
+          { key: 'region',    header: 'المنطقة', width: 14 },
+          { key: 'contract',  header: 'رقم العقد', width: 14 },
+          { key: 'delivery',  header: 'موقع التسليم', width: 18 },
+          { key: 'tracking',  header: 'رقم الشحنة', width: 14 },
+          { key: 'shipDate',  header: 'تاريخ الشحن', format: 'date' },
+          { key: 'arrivalDate', header: 'تاريخ الوصول', format: 'date' },
+          { key: 'tons',      header: 'الكمية بالطن', format: 'decimal2', tint: 'blue' },
+          { key: 'tonPrice',  header: 'سعر الطن', format: 'jod', tint: 'blue' },
+          { key: 'goods',     header: 'إجمالي البضاعة', format: 'jod', tint: 'blue' },
+          { key: 'shipping',  header: 'أجور الشحن', format: 'jod', tint: 'blue' },
+          { key: 'total',     header: 'الإجمالي النهائي', format: 'jod', tint: 'cyan', strong: true },
+          { key: 'paid',      header: 'المسدد', format: 'jod', tint: 'green' },
+          { key: 'balance',   header: 'المتبقي', format: 'jod', tint: 'orange' },
+          { key: 'status',    header: 'الحالة', width: 12 },
+        ],
+        rows: filtered.map((o: any) => {
+          const lines = o.lines ?? [];
+          const tonsQty = lines.filter((l: any) => String(l.unit || '').toUpperCase() === 'TON').reduce((s: number, l: any) => s + Number(l.quantity || 0), 0);
+          const productsTotal = Number(o.productsTotal ?? 0) || lines.reduce((s: number, l: any) => s + Number(l.lineTotal || 0), 0);
+          return {
+            number: o.number,
+            type: o.orderType === 'EXTERNAL' ? 'خارجية' : 'داخلية',
+            customer: o.customerName,
+            phone: o.customerPhone ?? '',
+            region: o.region ?? '',
+            contract: o.contractNumber ?? '',
+            delivery: o.deliveryLocation ?? '',
+            tracking: o.shipmentTrackingNumber ?? '',
+            shipDate: o.expectedShippingDate ? new Date(o.expectedShippingDate) : null,
+            arrivalDate: o.expectedArrivalDate ? new Date(o.expectedArrivalDate) : null,
+            tons: tonsQty > 0 ? tonsQty : null,
+            tonPrice: o.tonPrice != null ? Number(o.tonPrice) : null,
+            goods: productsTotal,
+            shipping: Number(o.shippingCost ?? 0),
+            total: Number(o.total),
+            paid: Number(o.paid),
+            balance: Number(o.balance),
+            status: o.status,
+          };
+        }),
+        totals: {
+          number: 'الإجماليات · TOTALS',
+          type: null, customer: null, phone: null, region: null, contract: null,
+          delivery: null, tracking: null, shipDate: null, arrivalDate: null,
+          tons: null, tonPrice: null, goods: null, shipping: null,
+          total: totals.total, paid: totals.paid, balance: totals.balance,
+          status: null,
+        },
+        conditions: [
+          { columnKey: 'balance', when: 'gt', value: 0, bg: 'FFFFEDD5', fg: 'FF9A3412' },
+          { columnKey: 'status', when: 'contains', value: 'CANCELLED', bg: 'FFFEE2E2', fg: 'FF991B1B' },
+        ],
+      },
     });
-    rows.push([]);
-    rows.push(['الإجماليات', '', '', '', '', '', '', '', '', '', '', '', '', '', totals.total.toFixed(2), totals.paid.toFixed(2), totals.balance.toFixed(2), '']);
-    exportToCsv(`orders-report-${from}_${to}.csv`, rows);
   };
 
   return (
@@ -604,30 +700,63 @@ function SalesReport() {
     };
   }, [filtered]);
 
-  const exportExcel = () => {
-    const rows: any[][] = [];
-    rows.push([`تقرير المبيعات والتحصيلات — ${FACTORY_NAME}`]);
-    rows.push([`من ${from} إلى ${to} · ${new Date().toLocaleString('ar-JO')}`]);
-    rows.push([]);
-    rows.push(['المؤشر', 'القيمة']);
-    rows.push(['إجمالي المبيعات', kpis.sales.toFixed(2)]);
-    rows.push(['إجمالي المحصّل', kpis.collected.toFixed(2)]);
-    rows.push(['المستحق', kpis.outstanding.toFixed(2)]);
-    rows.push(['نسبة التحصيل %', kpis.collectionPct.toFixed(1)]);
-    rows.push(['عدد الطلبيات', kpis.ordersCount]);
-    rows.push(['متوسط قيمة الطلب', kpis.avgOrder.toFixed(2)]);
-    rows.push(['مدفوعة كاملاً', kpis.paid]);
-    rows.push(['مدفوعة جزئياً', kpis.partial]);
-    rows.push(['غير مدفوعة', kpis.unpaid]);
-    rows.push([]);
-    rows.push(['رقم الطلب', 'التاريخ', 'العميل', 'النوع', 'الإجمالي', 'المدفوع', 'المتبقي', 'الحالة']);
-    filtered.forEach((o: any) => rows.push([
-      o.number, formatDate(o.orderDate), o.customerName,
-      o.orderType === 'EXTERNAL' ? 'خارجية' : 'داخلية',
-      Number(o.total).toFixed(2), Number(o.paid).toFixed(2), Number(o.balance).toFixed(2),
-      o.status,
-    ]));
-    exportToCsv(`sales-collections-${from}_${to}.csv`, rows);
+  const exportExcel = async () => {
+    const { exportXlsx } = await import('@/lib/xlsx-export');
+    await exportXlsx({
+      filename: `sales-collections-${from}_${to}.xlsx`,
+      reportTitle: 'تقرير المبيعات والتحصيلات',
+      reportTitleEn: 'Sales & Collections Report',
+      branch: 'المصنع الرئيسي',
+      currency: 'JOD',
+      rtl: true,
+      filters: [
+        { label: 'من', value: from }, { label: 'إلى', value: to },
+        { label: 'العميل', value: customerId || 'الكل' },
+        { label: 'النوع', value: orderType || 'الكل' },
+        { label: 'الحالة', value: status || 'الكل' },
+      ],
+      kpis: [
+        { label: 'إجمالي المبيعات', value: kpis.sales, format: 'jod', tint: 'cyan' },
+        { label: 'إجمالي المحصّل', value: kpis.collected, format: 'jod', tint: 'green' },
+        { label: 'المستحق', value: kpis.outstanding, format: 'jod', tint: 'orange' },
+        { label: 'نسبة التحصيل %', value: kpis.collectionPct / 100, format: 'percent', tint: kpis.collectionPct > 80 ? 'green' : 'orange' },
+        { label: 'عدد الطلبيات', value: kpis.ordersCount, format: 'integer' },
+        { label: 'متوسط قيمة الطلب', value: kpis.avgOrder, format: 'jod' },
+        { label: 'مدفوعة كاملاً', value: kpis.paid, format: 'integer', tint: 'green' },
+        { label: 'مدفوعة جزئياً', value: kpis.partial, format: 'integer', tint: 'yellow' },
+        { label: 'غير مدفوعة', value: kpis.unpaid, format: 'integer', tint: 'orange' },
+      ],
+      details: {
+        sheetName: 'المبيعات · Sales',
+        columns: [
+          { key: 'number',   header: 'رقم الطلب', width: 14, strong: true },
+          { key: 'date',     header: 'التاريخ', format: 'date' },
+          { key: 'customer', header: 'العميل', width: 24 },
+          { key: 'type',     header: 'النوع', width: 10, align: 'center' },
+          { key: 'total',    header: 'الإجمالي', format: 'jod', tint: 'cyan' },
+          { key: 'paid',     header: 'المدفوع', format: 'jod', tint: 'green' },
+          { key: 'balance',  header: 'المتبقي', format: 'jod', tint: 'orange' },
+          { key: 'status',   header: 'الحالة', width: 12 },
+        ],
+        rows: filtered.map((o: any) => ({
+          number: o.number,
+          date: o.orderDate ? new Date(o.orderDate) : null,
+          customer: o.customerName,
+          type: o.orderType === 'EXTERNAL' ? 'خارجية' : 'داخلية',
+          total: Number(o.total),
+          paid: Number(o.paid),
+          balance: Number(o.balance),
+          status: o.status,
+        })),
+        totals: {
+          number: 'الإجماليات · TOTALS', date: null, customer: null, type: null,
+          total: kpis.sales, paid: kpis.collected, balance: kpis.outstanding, status: null,
+        },
+        conditions: [
+          { columnKey: 'balance', when: 'gt', value: 0, bg: 'FFFFEDD5', fg: 'FF9A3412' },
+        ],
+      },
+    });
   };
 
   return (
@@ -814,18 +943,80 @@ function CostWasteReport() {
     return { produced, milk, pack, waste, cost, wastePct: (produced + waste) > 0 ? (waste / (produced + waste)) * 100 : 0, perUnit: produced > 0 ? cost / produced : 0 };
   }, [rows]);
 
-  const exportExcel = () => {
-    const csv: any[][] = [];
-    csv.push([`تقرير تكلفة الإنتاج والهدر — ${FACTORY_NAME}`]);
-    csv.push([`من ${from} إلى ${to} · ${new Date().toLocaleString('ar-JO')}`]);
-    csv.push([]);
-    csv.push(['التاريخ', 'الشيفت', 'المشغّل', 'المنتج', 'الكمية المُنتَجة', 'حليب خام (كغ)', 'تغليف مستهلَك', 'الهدر', 'نسبة الهدر %', 'التكلفة الكلية', 'التكلفة/وحدة', 'الحالة']);
-    rows.forEach((r: any) => csv.push([
-      formatDate(r.date), r.shift || '—', r.operator || '—', r.product,
-      r.producedQty, r.milkKg.toFixed(2), r.packaging.toFixed(2), r.waste,
-      r.wastePct.toFixed(2), r.totalCost.toFixed(2), r.perUnit.toFixed(2), r.status,
-    ]));
-    exportToCsv(`cost-waste-${from}_${to}.csv`, csv);
+  const exportExcel = async () => {
+    const { exportXlsx } = await import('@/lib/xlsx-export');
+    // Aggregate KPIs
+    const totalProduced = rows.reduce((s: number, r: any) => s + Number(r.producedQty || 0), 0);
+    const totalMilk = rows.reduce((s: number, r: any) => s + Number(r.milkKg || 0), 0);
+    const totalPackaging = rows.reduce((s: number, r: any) => s + Number(r.packaging || 0), 0);
+    const totalWaste = rows.reduce((s: number, r: any) => s + Number(r.waste || 0), 0);
+    const totalCost = rows.reduce((s: number, r: any) => s + Number(r.totalCost || 0), 0);
+    const avgPerUnit = totalProduced > 0 ? totalCost / totalProduced : 0;
+    const wastePct = totalProduced > 0 ? (totalWaste / totalProduced) * 100 : 0;
+    await exportXlsx({
+      filename: `cost-waste-${from}_${to}.xlsx`,
+      reportTitle: 'تقرير تكلفة الإنتاج والهدر',
+      reportTitleEn: 'Production Cost & Waste Report',
+      branch: 'المصنع الرئيسي',
+      currency: 'JOD',
+      rtl: true,
+      filters: [
+        { label: 'من', value: from }, { label: 'إلى', value: to },
+        { label: 'الشيفت', value: shift || 'الكل' },
+        { label: 'المشغّل', value: operator || 'الكل' },
+      ],
+      kpis: [
+        { label: 'إجمالي الكميات المُنتَجة', value: totalProduced, format: 'decimal2', tint: 'cyan' },
+        { label: 'إجمالي الحليب الخام (كغ)', value: totalMilk, format: 'decimal2', tint: 'blue' },
+        { label: 'إجمالي التغليف المستهلَك', value: totalPackaging, format: 'decimal2' },
+        { label: 'إجمالي الهدر', value: totalWaste, format: 'decimal2', tint: 'orange' },
+        { label: 'نسبة الهدر الكلية %', value: wastePct / 100, format: 'percent', tint: wastePct > 5 ? 'orange' : 'green' },
+        { label: 'إجمالي التكلفة', value: totalCost, format: 'jod', tint: 'cyan' },
+        { label: 'متوسط تكلفة الوحدة', value: avgPerUnit, format: 'jod' },
+        { label: 'عدد سجلات الإنتاج', value: rows.length, format: 'integer' },
+      ],
+      details: {
+        sheetName: 'التفاصيل · Details',
+        columns: [
+          { key: 'date',       header: 'التاريخ', format: 'date' },
+          { key: 'shift',      header: 'الشيفت', width: 10, align: 'center' },
+          { key: 'operator',   header: 'المشغّل', width: 16 },
+          { key: 'product',    header: 'المنتج', width: 24, strong: true },
+          { key: 'producedQty',header: 'الكمية المُنتَجة', format: 'decimal2', tint: 'cyan' },
+          { key: 'milkKg',     header: 'حليب خام (كغ)', format: 'decimal2', tint: 'blue' },
+          { key: 'packaging',  header: 'تغليف مستهلَك', format: 'decimal2' },
+          { key: 'waste',      header: 'الهدر', format: 'decimal2', tint: 'orange' },
+          { key: 'wastePct',   header: 'نسبة الهدر %', format: 'decimal2' },
+          { key: 'totalCost',  header: 'التكلفة الكلية', format: 'jod', tint: 'cyan' },
+          { key: 'perUnit',    header: 'التكلفة/وحدة', format: 'jod' },
+          { key: 'status',     header: 'الحالة', width: 12 },
+        ],
+        rows: rows.map((r: any) => ({
+          date: r.date ? new Date(r.date) : null,
+          shift: r.shift || '—',
+          operator: r.operator || '—',
+          product: r.product,
+          producedQty: Number(r.producedQty || 0),
+          milkKg: Number(r.milkKg || 0),
+          packaging: Number(r.packaging || 0),
+          waste: Number(r.waste || 0),
+          wastePct: Number(r.wastePct || 0),
+          totalCost: Number(r.totalCost || 0),
+          perUnit: Number(r.perUnit || 0),
+          status: r.status,
+        })),
+        totals: {
+          date: 'الإجماليات · TOTALS', shift: null, operator: null, product: null,
+          producedQty: totalProduced, milkKg: totalMilk, packaging: totalPackaging, waste: totalWaste,
+          wastePct: wastePct, totalCost: totalCost, perUnit: avgPerUnit, status: null,
+        },
+        conditions: [
+          { columnKey: 'wastePct', when: 'gt', value: 5, bg: 'FFFEE2E2', fg: 'FF991B1B' },
+          { columnKey: 'wastePct', when: 'gt', value: 10, bg: 'FFFECACA', fg: 'FF7F1D1D' },
+        ],
+        footnote: 'الأصناف ذات نسبة هدر > 5% تحتاج مراجعة. الأصناف ذات نسبة هدر > 10% تستدعي إجراء فوري.',
+      },
+    });
   };
 
   return (
@@ -954,24 +1145,59 @@ function MovementReport() {
     return { count: list.length, received, out, byType };
   }, [movements]);
 
-  const exportExcel = () => {
-    const csv: any[][] = [];
-    csv.push([`تقرير حركة المخزون — ${FACTORY_NAME} (المخزن الرئيسي)`]);
-    csv.push([`من ${from} إلى ${to} · ${new Date().toLocaleString('ar-JO')}`]);
-    csv.push([]);
-    csv.push(['التاريخ', 'الصنف', 'SKU', 'نوع الحركة', 'الكمية', 'الوحدة', 'المرجع', 'الملاحظات', 'المستخدم']);
-    (movements ?? []).forEach((m: any) => csv.push([
-      new Date(m.createdAt ?? m.date).toLocaleString('ar-JO'),
-      m.item?.name ?? m.itemName ?? '—',
-      m.item?.sku ?? '—',
-      m.type ?? m.reasonCode ?? '—',
-      Number(m.quantity ?? 0),
-      m.item?.unit ?? '—',
-      m.refType && m.refId ? `${m.refType}:${m.refId.slice(-6)}` : '—',
-      m.notes ?? '—',
-      m.performedBy?.username ?? m.performedById ?? '—',
-    ]));
-    exportToCsv(`movement-${from}_${to}.csv`, csv);
+  const exportExcel = async () => {
+    const { exportXlsx } = await import('@/lib/xlsx-export');
+    const list = movements ?? [];
+    const IN_TYPES = ['IN', 'RECEIPT', 'ADD', 'TRANSFER_IN', 'CORRECTION'];
+    await exportXlsx({
+      filename: `movement-${from}_${to}.xlsx`,
+      reportTitle: 'تقرير حركة المخزون (المخزن الرئيسي)',
+      reportTitleEn: 'Inventory Movement Report',
+      branch: 'المصنع الرئيسي',
+      currency: 'JOD',
+      rtl: true,
+      filters: [
+        { label: 'من', value: from }, { label: 'إلى', value: to },
+        { label: 'الصنف', value: itemId ? ((items ?? []).find((i: any) => i.id === itemId)?.name || itemId) : 'الكل' },
+        { label: 'نوع الحركة', value: type || 'الكل' },
+      ],
+      kpis: [
+        { label: 'عدد الحركات', value: summary.count, format: 'integer', tint: 'cyan' },
+        { label: 'إجمالي المُستلَم', value: summary.received, format: 'decimal2', tint: 'green' },
+        { label: 'إجمالي الصادر', value: summary.out, format: 'decimal2', tint: 'orange' },
+        { label: 'صافي الحركة', value: summary.received - summary.out, format: 'decimal2', tint: (summary.received - summary.out) >= 0 ? 'green' : 'orange' },
+      ],
+      details: {
+        sheetName: 'الحركات · Movements',
+        columns: [
+          { key: 'date',       header: 'التاريخ', format: 'date' },
+          { key: 'itemName',   header: 'الصنف', width: 24, strong: true },
+          { key: 'sku',        header: 'SKU', width: 14 },
+          { key: 'type',       header: 'نوع الحركة', width: 14, align: 'center' },
+          { key: 'quantity',   header: 'الكمية', format: 'decimal2' },
+          { key: 'unit',       header: 'الوحدة', width: 10, align: 'center' },
+          { key: 'ref',        header: 'المرجع', width: 18 },
+          { key: 'notes',      header: 'الملاحظات', width: 28 },
+          { key: 'user',       header: 'المستخدم', width: 16 },
+        ],
+        rows: list.map((m: any) => ({
+          date: m.createdAt || m.date ? new Date(m.createdAt ?? m.date) : null,
+          itemName: m.item?.name ?? m.itemName ?? '—',
+          sku: m.item?.sku ?? '—',
+          type: m.type ?? m.reasonCode ?? '—',
+          quantity: Number(m.quantity ?? 0),
+          unit: m.item?.unit ?? '—',
+          ref: m.refType && m.refId ? `${m.refType}:${String(m.refId).slice(-6)}` : '—',
+          notes: m.notes ?? '—',
+          user: m.performedBy?.username ?? m.performedById ?? '—',
+        })),
+        conditions: [
+          ...IN_TYPES.map((t) => ({ columnKey: 'type' as const, when: 'eq' as const, value: t, bg: 'FFDCFCE7', fg: 'FF166534' })),
+          { columnKey: 'type', when: 'eq', value: 'DAMAGE', bg: 'FFFEE2E2', fg: 'FF991B1B' },
+        ],
+        footnote: 'الحركات الخضراء = مدخلات · الحمراء = هدر/إتلاف.',
+      },
+    });
   };
 
   return (

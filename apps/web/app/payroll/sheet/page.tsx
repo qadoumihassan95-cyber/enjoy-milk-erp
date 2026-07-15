@@ -99,42 +99,93 @@ function PayrollSheetInner() {
     return Array.from(set).sort();
   }, [data]);
 
-  const exportExcel = () => {
-    const BOM = '﻿';
-    const headers = [
-      'الرقم', 'اسم الموظف', 'الراتب الأساسي', 'بدل مواصلات', 'عمل إضافي',
-      'إجمالي الراتب', 'ضمان الشركة 14.25%', 'ضمان الموظف 7.5%',
-      'سلف الموظفين', 'خصم الدوام', 'صافي الاقتطاعات', 'صافي الراتب',
-    ];
-    const rowsCsv = [headers, ...rows.map((r: any, i: number) => [
-      i + 1, r.fullName,
-      num(r.baseSalary), num(r.transportAllowance), num(r.overtimeAmount),
-      num(r.grossSalary), num(r.companySS), num(r.employeeSS),
-      num(r.advanceDeduction), num(r.attendanceDeduction),
-      num(r.totalDeductions), num(r.netSalary ?? r.net),
-    ])];
-    rowsCsv.push([
-      'الإجماليات', '',
-      num(totals.baseSalary), num(totals.transport), num(totals.overtime),
-      num(totals.gross), num(totals.compSS), num(totals.empSS),
-      num(totals.advance), num(totals.attendance),
-      num(totals.netDed), num(totals.net),
-    ]);
-    rowsCsv.push([]);
-    rowsCsv.push(['إجمالي تكلفة الرواتب على الشركة', '', '', '', '', num(totals.totalCompanyCost)]);
-    const csv = BOM + rowsCsv.map((r) => r.map((v) => {
-      const s = String(v ?? '');
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    }).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `payroll-sheet-${month}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+  const exportExcel = async () => {
+    // Lazy-load the shared enterprise xlsx builder — ExcelJS is only fetched
+    // when the user actually clicks Export, keeping the initial bundle small.
+    const { exportXlsx } = await import('@/lib/xlsx-export');
+    await exportXlsx({
+      filename: `official-payroll-${month}.xlsx`,
+      reportTitle: 'كشف الرواتب الرسمي',
+      reportTitleEn: 'Official Payroll Statement',
+      generatedBy: preparedBy || undefined,
+      branch: 'المصنع الرئيسي',
+      currency: 'JOD',
+      rtl: true,
+      filters: [
+        { label: 'الشهر', value: `${month.slice(5)}/${month.slice(0, 4)}` },
+        { label: 'القسم', value: department || 'كل الأقسام' },
+        { label: 'الموظف', value: employee || 'كل الموظفين' },
+        { label: 'حالة الصرف', value: paidFilter === 'PAID' ? 'مصروف' : paidFilter === 'UNPAID' ? 'غير مصروف' : 'الكل' },
+        { label: 'أساس الضمان', value: String((data as any)?.settings?.socialSecurityBasis ?? 'BASIC') },
+      ],
+      kpis: [
+        { label: 'عدد الموظفين', value: totals.count, format: 'integer' },
+        { label: 'مجموع الرواتب الأساسية', value: totals.baseSalary, format: 'jod', tint: 'blue' },
+        { label: 'مجموع بدل المواصلات', value: totals.transport, format: 'jod', tint: 'green' },
+        { label: 'مجموع العمل الإضافي', value: totals.overtime, format: 'jod', tint: 'green' },
+        { label: 'مجموع إجمالي الرواتب', value: totals.gross, format: 'jod', tint: 'cyan' },
+        { label: 'مجموع ضمان الموظفين 7.5%', value: totals.empSS, format: 'jod', tint: 'orange' },
+        { label: 'مجموع ضمان الشركة 14.25%', value: totals.compSS, format: 'jod', tint: 'orange' },
+        { label: 'مجموع سلف الموظفين', value: totals.advance, format: 'jod', tint: 'orange' },
+        { label: 'مجموع خصم الدوام', value: totals.attendance, format: 'jod', tint: 'orange' },
+        { label: 'مجموع صافي الاقتطاعات', value: totals.netDed, format: 'jod', tint: 'orange' },
+        { label: 'مجموع صافي الرواتب', value: totals.net, format: 'jod', tint: 'cyan' },
+        { label: 'إجمالي تكلفة الرواتب على الشركة', value: totals.totalCompanyCost, format: 'jod', tint: 'cyan' },
+      ],
+      details: {
+        sheetName: 'كشف الرواتب · Payroll',
+        columns: [
+          { key: 'num',       header: 'الرقم', width: 8, align: 'center', format: 'integer' },
+          { key: 'name',      header: 'اسم الموظف', width: 28, strong: true },
+          { key: 'base',      header: 'الراتب الأساسي', format: 'jod', tint: 'blue' },
+          { key: 'transport', header: 'بدل المواصلات', format: 'jod', tint: 'green' },
+          { key: 'overtime',  header: 'عمل إضافي', format: 'jod', tint: 'green' },
+          { key: 'gross',     header: 'إجمالي الراتب', format: 'jod', tint: 'cyan', strong: true },
+          { key: 'compSS',    header: 'ضمان الشركة 14.25%', format: 'jod', tint: 'orange' },
+          { key: 'empSS',     header: 'ضمان الموظف 7.5%', format: 'jod', tint: 'orange' },
+          { key: 'advance',   header: 'سلف الموظفين', format: 'jod', tint: 'orange' },
+          { key: 'attend',    header: 'خصم الدوام', format: 'jod', tint: 'orange' },
+          { key: 'totalDed',  header: 'صافي الاقتطاعات', format: 'jod', tint: 'orange', strong: true },
+          { key: 'net',       header: 'صافي الراتب', format: 'jod', tint: 'cyan', strong: true },
+        ],
+        rows: rows.map((r: any, i: number) => ({
+          num: i + 1,
+          name: r.fullName,
+          base: Number(r.baseSalary || 0),
+          transport: Number(r.transportAllowance || 0),
+          overtime: Number(r.overtimeAmount || 0),
+          gross: Number(r.grossSalary || 0),
+          compSS: Number(r.companySS || 0),
+          empSS: Number(r.employeeSS || 0),
+          advance: Number(r.advanceDeduction || 0),
+          attend: Number(r.attendanceDeduction || 0),
+          totalDed: Number(r.totalDeductions || 0),
+          net: Number(r.netSalary ?? r.net ?? 0),
+        })),
+        totals: {
+          num: null,
+          name: 'الإجماليات · TOTALS',
+          base: totals.baseSalary,
+          transport: totals.transport,
+          overtime: totals.overtime,
+          gross: totals.gross,
+          compSS: totals.compSS,
+          empSS: totals.empSS,
+          advance: totals.advance,
+          attend: totals.attendance,
+          totalDed: totals.netDed,
+          net: totals.net,
+        },
+        conditions: [
+          // خصم دوام أعلى من الطبيعي — تنبيه
+          { columnKey: 'attend', when: 'gt', value: 100, bg: 'FFFEE2E2', fg: 'FF991B1B' },
+          // صافي راتب صفر — علامة حمراء
+          { columnKey: 'net',    when: 'eq', value: 0,   bg: 'FFFEE2E2', fg: 'FF991B1B' },
+        ],
+        footnote: `إجمالي تكلفة الرواتب على الشركة = مجموع إجمالي الرواتب + مجموع ضمان الشركة = ${num(totals.totalCompanyCost)} د.أ`,
+      },
+      signatures: ['توقيع الموظف', 'الدائرة المالية', 'اعتماد الإدارة'],
+    });
   };
 
   return (

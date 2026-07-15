@@ -8,12 +8,16 @@ import {
   Patch,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+// Express Response typed as `any` — avoids adding @types/express dep.
+type ExpressResponse = any;
 import { CurrentUser } from '../../core/auth/current-user.decorator';
 import { Roles } from '../../core/auth/roles.decorator';
 import type { AuthenticatedUser } from '../../core/auth/jwt.strategy';
 import { InventoryService } from './inventory.service';
+import { XLSX_CONTENT_TYPE } from '../../lib/xlsx-export';
 
 @ApiTags('inventory')
 @ApiBearerAuth()
@@ -311,6 +315,68 @@ export class InventoryController {
   @Header('Content-Disposition', 'attachment; filename="dead-stock.csv"')
   reportDeadStockCsv(@CurrentUser() user: AuthenticatedUser) {
     return this.service.reportDeadStockCsv(user.tenantId);
+  }
+
+  // ─── XLSX Reports (enterprise-grade workbooks) ───
+  @Get('reports/stock-value.xlsx')
+  async reportStockValueXlsx(
+    @CurrentUser() user: AuthenticatedUser,
+    @Res() res: ExpressResponse,
+  ) {
+    const buf = await this.service.reportStockValueXlsx(user.tenantId);
+    res
+      .type(XLSX_CONTENT_TYPE)
+      .setHeader(
+        'Content-Disposition',
+        `attachment; filename="stock-value-${new Date().toISOString().slice(0, 10)}.xlsx"`,
+      )
+      .send(buf);
+  }
+
+  @Get('reports/movement.xlsx')
+  async reportMovementXlsx(
+    @CurrentUser() user: AuthenticatedUser,
+    @Res() res: ExpressResponse,
+    @Query('days') days?: string,
+  ) {
+    const buf = await this.service.reportMovementXlsx(user.tenantId, days ? +days : 30);
+    res
+      .type(XLSX_CONTENT_TYPE)
+      .setHeader(
+        'Content-Disposition',
+        `attachment; filename="movement-${new Date().toISOString().slice(0, 10)}.xlsx"`,
+      )
+      .send(buf);
+  }
+
+  @Get('reports/low-stock.xlsx')
+  async reportLowStockXlsx(
+    @CurrentUser() user: AuthenticatedUser,
+    @Res() res: ExpressResponse,
+  ) {
+    const buf = await this.service.reportLowStockXlsx(user.tenantId);
+    res
+      .type(XLSX_CONTENT_TYPE)
+      .setHeader(
+        'Content-Disposition',
+        `attachment; filename="low-stock-${new Date().toISOString().slice(0, 10)}.xlsx"`,
+      )
+      .send(buf);
+  }
+
+  @Get('reports/dead-stock.xlsx')
+  async reportDeadStockXlsx(
+    @CurrentUser() user: AuthenticatedUser,
+    @Res() res: ExpressResponse,
+  ) {
+    const buf = await this.service.reportDeadStockXlsx(user.tenantId);
+    res
+      .type(XLSX_CONTENT_TYPE)
+      .setHeader(
+        'Content-Disposition',
+        `attachment; filename="dead-stock-${new Date().toISOString().slice(0, 10)}.xlsx"`,
+      )
+      .send(buf);
   }
 
   // ─── Bulk + Import ─────────────────────────────

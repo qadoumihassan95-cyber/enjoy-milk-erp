@@ -1606,4 +1606,212 @@ export class InventoryService {
       { key: 'type', label: 'النوع' },
     ]);
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ─── XLSX Reports (enterprise workbook builder) ─────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════
+
+  async reportStockValueXlsx(tenantId: string): Promise<Buffer> {
+    const { buildWorkbookBuffer } = await import('../../lib/xlsx-export');
+    const items = await this.prisma.item.findMany({
+      where: { tenantId, active: true },
+      include: { stockLevels: true },
+      orderBy: { name: 'asc' },
+    });
+    const rows = items.map((it: any) => {
+      const qty = it.stockLevels.reduce((s: number, sl: any) => s + Number(sl.quantity), 0);
+      const cost = Number(it.avgCost ?? it.costPrice ?? 0);
+      const value = qty * cost;
+      return {
+        sku: it.sku,
+        name: it.name,
+        type: it.type,
+        unit: it.unit,
+        quantity: qty,
+        avgCost: cost,
+        value: Math.round(value * 1000) / 1000,
+      };
+    });
+    const totalValue = rows.reduce((s: number, r: any) => s + Number(r.value), 0);
+    const totalQty = rows.reduce((s: number, r: any) => s + Number(r.quantity), 0);
+    return buildWorkbookBuffer({
+      filename: 'stock-value.xlsx',
+      reportTitle: 'تقرير قيمة المخزون',
+      reportTitleEn: 'Stock Value Report',
+      branch: 'المصنع الرئيسي',
+      currency: 'JOD',
+      rtl: true,
+      kpis: [
+        { label: 'عدد الأصناف', value: rows.length, format: 'integer', tint: 'cyan' },
+        { label: 'إجمالي الكميات', value: totalQty, format: 'decimal2', tint: 'blue' },
+        { label: 'إجمالي قيمة المخزون', value: totalValue, format: 'jod', tint: 'green' },
+      ],
+      details: {
+        sheetName: 'قيمة المخزون · Stock Value',
+        columns: [
+          { key: 'sku', header: 'SKU', width: 14, strong: true },
+          { key: 'name', header: 'الاسم', width: 30, strong: true },
+          { key: 'type', header: 'النوع', width: 12, align: 'center' },
+          { key: 'unit', header: 'الوحدة', width: 10, align: 'center' },
+          { key: 'quantity', header: 'الكمية', format: 'decimal2', tint: 'blue' },
+          { key: 'avgCost', header: 'متوسط التكلفة', format: 'jod' },
+          { key: 'value', header: 'القيمة', format: 'jod', tint: 'green' },
+        ],
+        rows,
+        totals: {
+          sku: 'الإجماليات · TOTALS',
+          name: null,
+          type: null,
+          unit: null,
+          quantity: totalQty,
+          avgCost: null,
+          value: totalValue,
+        },
+      },
+    });
+  }
+
+  async reportMovementXlsx(tenantId: string, days = 30): Promise<Buffer> {
+    const { buildWorkbookBuffer } = await import('../../lib/xlsx-export');
+    const from = new Date(Date.now() - days * 86400000);
+    const movements = await this.prisma.stockMovement.findMany({
+      where: { tenantId, performedAt: { gte: from } },
+      include: { item: true, fromWarehouse: true, toWarehouse: true },
+      orderBy: { performedAt: 'desc' },
+    });
+    const IN_TYPES = ['IN', 'RECEIPT', 'ADD', 'TRANSFER_IN', 'CORRECTION'];
+    let received = 0;
+    let out = 0;
+    for (const m of movements as any[]) {
+      const q = Number(m.quantity ?? 0);
+      if (IN_TYPES.includes(m.type)) received += q;
+      else out += q;
+    }
+    const rows = movements.map((m: any) => ({
+      date: m.performedAt ? new Date(m.performedAt) : null,
+      type: m.type,
+      item: m.item?.name ?? '—',
+      sku: m.item?.sku ?? '—',
+      quantity: Number(m.quantity ?? 0),
+      from: m.fromWarehouse?.name ?? '',
+      to: m.toWarehouse?.name ?? '',
+      reason: m.reasonCode ?? '',
+      notes: m.notes ?? '',
+    }));
+    return buildWorkbookBuffer({
+      filename: 'movement.xlsx',
+      reportTitle: `تقرير حركة المخزون — آخر ${days} يوم`,
+      reportTitleEn: `Stock Movement — Last ${days} days`,
+      branch: 'المصنع الرئيسي',
+      currency: 'JOD',
+      rtl: true,
+      filters: [
+        { label: 'من تاريخ', value: from.toISOString().slice(0, 10) },
+        { label: 'إلى تاريخ', value: new Date().toISOString().slice(0, 10) },
+        { label: 'المدة (أيام)', value: String(days) },
+      ],
+      kpis: [
+        { label: 'عدد الحركات', value: movements.length, format: 'integer', tint: 'cyan' },
+        { label: 'إجمالي المُستلَم', value: received, format: 'decimal2', tint: 'green' },
+        { label: 'إجمالي الصادر', value: out, format: 'decimal2', tint: 'orange' },
+        { label: 'صافي الحركة', value: received - out, format: 'decimal2', tint: (received - out) >= 0 ? 'green' : 'orange' },
+      ],
+      details: {
+        sheetName: 'الحركات · Movements',
+        columns: [
+          { key: 'date', header: 'التاريخ', format: 'datetime', width: 18 },
+          { key: 'type', header: 'النوع', width: 14, align: 'center' },
+          { key: 'item', header: 'المادة', width: 26, strong: true },
+          { key: 'sku', header: 'SKU', width: 14 },
+          { key: 'quantity', header: 'الكمية', format: 'decimal2' },
+          { key: 'from', header: 'من', width: 18 },
+          { key: 'to', header: 'إلى', width: 18 },
+          { key: 'reason', header: 'السبب', width: 14 },
+          { key: 'notes', header: 'ملاحظات', width: 28 },
+        ],
+        rows,
+        conditions: [
+          ...IN_TYPES.map((t) => ({ columnKey: 'type' as const, when: 'eq' as const, value: t, bg: 'FFDCFCE7', fg: 'FF166534' })),
+          { columnKey: 'type', when: 'eq', value: 'DAMAGE', bg: 'FFFEE2E2', fg: 'FF991B1B' },
+        ],
+      },
+    });
+  }
+
+  async reportLowStockXlsx(tenantId: string): Promise<Buffer> {
+    const { buildWorkbookBuffer } = await import('../../lib/xlsx-export');
+    const dash: any = await this.getDashboard(tenantId);
+    const rows = (dash.lowStockItems ?? []).map((it: any) => ({
+      sku: it.sku,
+      name: it.name,
+      type: it.type,
+      stock: Number(it.stock ?? 0),
+      minStock: it.minStock == null ? null : Number(it.minStock),
+      reorderPoint: it.reorderPoint == null ? null : Number(it.reorderPoint),
+      safetyStock: it.safetyStock == null ? null : Number(it.safetyStock),
+      status: it.status,
+    }));
+    const outOfStock = rows.filter((r: any) => Number(r.stock) <= 0).length;
+    return buildWorkbookBuffer({
+      filename: 'low-stock.xlsx',
+      reportTitle: 'تقرير الأصناف منخفضة المخزون',
+      reportTitleEn: 'Low Stock Alert Report',
+      branch: 'المصنع الرئيسي',
+      currency: 'JOD',
+      rtl: true,
+      kpis: [
+        { label: 'عدد الأصناف المُنبَّه عليها', value: rows.length, format: 'integer', tint: 'orange' },
+        { label: 'أصناف نافدة (0)', value: outOfStock, format: 'integer', tint: rows.length > 0 ? 'orange' : 'green' },
+      ],
+      details: {
+        sheetName: 'الأصناف المنخفضة · Low Stock',
+        columns: [
+          { key: 'sku', header: 'SKU', width: 14, strong: true },
+          { key: 'name', header: 'الاسم', width: 30, strong: true },
+          { key: 'type', header: 'النوع', width: 12, align: 'center' },
+          { key: 'stock', header: 'الكمية الحالية', format: 'decimal2', tint: 'orange' },
+          { key: 'minStock', header: 'الحد الأدنى', format: 'decimal2' },
+          { key: 'reorderPoint', header: 'نقطة إعادة الطلب', format: 'decimal2' },
+          { key: 'safetyStock', header: 'مخزون الأمان', format: 'decimal2' },
+          { key: 'status', header: 'الحالة', width: 14, align: 'center' },
+        ],
+        rows,
+        conditions: [
+          { columnKey: 'stock', when: 'lte', value: 0, bg: 'FFFEE2E2', fg: 'FF991B1B' },
+        ],
+        footnote: 'الأصناف النافدة (كمية = 0) مطلَبة للتوريد فوراً.',
+      },
+    });
+  }
+
+  async reportDeadStockXlsx(tenantId: string): Promise<Buffer> {
+    const { buildWorkbookBuffer } = await import('../../lib/xlsx-export');
+    const dash: any = await this.getDashboard(tenantId);
+    const rows = (dash.deadStock ?? []).map((it: any) => ({
+      sku: it.sku,
+      name: it.name,
+      type: it.type,
+    }));
+    return buildWorkbookBuffer({
+      filename: 'dead-stock.xlsx',
+      reportTitle: 'تقرير المخزون الراكد',
+      reportTitleEn: 'Dead Stock Report',
+      branch: 'المصنع الرئيسي',
+      currency: 'JOD',
+      rtl: true,
+      kpis: [
+        { label: 'عدد الأصناف الراكدة', value: rows.length, format: 'integer', tint: 'orange' },
+      ],
+      details: {
+        sheetName: 'المخزون الراكد · Dead Stock',
+        columns: [
+          { key: 'sku', header: 'SKU', width: 14, strong: true },
+          { key: 'name', header: 'الاسم', width: 32, strong: true },
+          { key: 'type', header: 'النوع', width: 14, align: 'center' },
+        ],
+        rows,
+        footnote: 'الأصناف الراكدة لم يتم استهلاكها منذ فترة طويلة — تُقترح مراجعة التسعير أو التصفية.',
+      },
+    });
+  }
 }

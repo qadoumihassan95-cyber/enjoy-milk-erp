@@ -192,14 +192,14 @@ export default function InventoryDashboardPage() {
                 <div className="absolute left-0 mt-1 w-56 rounded-lg border border-zinc-200 bg-white shadow-lg z-20 py-1"
                   onMouseLeave={() => setShowExport(false)}>
                   {[
-                    { path: '/inventory/reports/stock-value.csv', file: 'stock-value.csv', label: 'قيمة المخزون' },
-                    { path: '/inventory/reports/movement.csv', file: 'movement.csv', label: 'حركة المخزون (30 يوم)' },
-                    { path: '/inventory/reports/low-stock.csv', file: 'low-stock.csv', label: 'مواد منخفضة' },
-                    { path: '/inventory/reports/dead-stock.csv', file: 'dead-stock.csv', label: 'مواد راكدة' },
+                    { path: '/inventory/reports/stock-value.xlsx', file: 'stock-value.xlsx', label: 'قيمة المخزون' },
+                    { path: '/inventory/reports/movement.xlsx',   file: 'movement.xlsx',    label: 'حركة المخزون (30 يوم)' },
+                    { path: '/inventory/reports/low-stock.xlsx',  file: 'low-stock.xlsx',   label: 'مواد منخفضة' },
+                    { path: '/inventory/reports/dead-stock.xlsx', file: 'dead-stock.xlsx',  label: 'مواد راكدة' },
                   ].map((e) => (
                     <button key={e.path} onClick={() => { downloadCsv(e.path, e.file); setShowExport(false); }}
                       className="w-full text-right px-3 py-2 text-sm hover:bg-zinc-50">
-                      {e.label} <span className="text-[10px] text-zinc-400">CSV</span>
+                      {e.label} <span className="text-[10px] text-zinc-400">Excel</span>
                     </button>
                   ))}
                 </div>

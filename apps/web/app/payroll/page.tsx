@@ -157,47 +157,75 @@ export default function PayrollPage() {
 
   const dirtyCount = Object.keys(dirty).length;
 
-  // ─── Excel export (نفس المخرَج المستخدم في /payroll/sheet) ─
-  const exportExcel = () => {
-    const BOM = '﻿';
-    const headers = [
-      'الرقم', 'اسم الموظف', 'الراتب الأساسي', 'بدل مواصلات', 'عمل إضافي',
-      'إجمالي الراتب', 'ضمان الشركة 14.25%', 'ضمان الموظف 7.5%',
-      'سلف الموظفين', 'خصم الدوام', 'صافي الاقتطاعات', 'صافي الراتب',
-    ];
-    const csvRows: any[][] = [headers];
-    rows.forEach((r: any, i: number) => {
-      const e = effective(r);
-      csvRows.push([
-        i + 1, r.fullName,
-        e.base.toFixed(3), e.transport.toFixed(3), e.overtime.toFixed(3),
-        e.gross.toFixed(3), e.compSS.toFixed(3), e.empSS.toFixed(3),
-        e.advance.toFixed(3), e.attendance.toFixed(3),
-        e.totalDed.toFixed(3), e.net.toFixed(3),
-      ]);
+  // ─── Excel export (shared enterprise builder — lazy-loaded ExcelJS) ─
+  const exportExcel = async () => {
+    const { exportXlsx } = await import('@/lib/xlsx-export');
+    await exportXlsx({
+      filename: `payroll-${month}.xlsx`,
+      reportTitle: 'كشف الرواتب — الواجهة التفاعلية',
+      reportTitleEn: 'Payroll (Interactive View)',
+      branch: 'المصنع الرئيسي',
+      currency: 'JOD',
+      rtl: true,
+      filters: [
+        { label: 'الشهر', value: `${month.slice(5)}/${month.slice(0, 4)}` },
+        { label: 'القسم', value: department || 'كل الأقسام' },
+        { label: 'الموظف', value: employee || 'كل الموظفين' },
+        { label: 'حالة الصرف', value: paidFilter === 'PAID' ? 'مصروف' : paidFilter === 'UNPAID' ? 'غير مصروف' : 'الكل' },
+      ],
+      kpis: [
+        { label: 'عدد الموظفين', value: totals.count, format: 'integer' },
+        { label: 'مجموع الرواتب الأساسية', value: totals.baseSalary, format: 'jod', tint: 'blue' },
+        { label: 'مجموع بدل المواصلات', value: totals.transport, format: 'jod', tint: 'green' },
+        { label: 'مجموع العمل الإضافي', value: totals.overtime, format: 'jod', tint: 'green' },
+        { label: 'مجموع إجمالي الرواتب', value: totals.gross, format: 'jod', tint: 'cyan' },
+        { label: 'مجموع ضمان الموظفين 7.5%', value: totals.empSS, format: 'jod', tint: 'orange' },
+        { label: 'مجموع ضمان الشركة 14.25%', value: totals.compSS, format: 'jod', tint: 'orange' },
+        { label: 'مجموع سلف الموظفين', value: totals.advance, format: 'jod', tint: 'orange' },
+        { label: 'مجموع خصم الدوام', value: totals.attendance, format: 'jod', tint: 'orange' },
+        { label: 'مجموع صافي الاقتطاعات', value: totals.netDed, format: 'jod', tint: 'orange' },
+        { label: 'مجموع صافي الرواتب', value: totals.net, format: 'jod', tint: 'cyan' },
+        { label: 'إجمالي تكلفة الرواتب على الشركة', value: totals.totalCompanyCost, format: 'jod', tint: 'cyan' },
+      ],
+      details: {
+        sheetName: 'كشف الرواتب · Payroll',
+        columns: [
+          { key: 'num',       header: 'الرقم', width: 8, align: 'center', format: 'integer' },
+          { key: 'name',      header: 'اسم الموظف', width: 28, strong: true },
+          { key: 'base',      header: 'الراتب الأساسي', format: 'jod', tint: 'blue' },
+          { key: 'transport', header: 'بدل المواصلات', format: 'jod', tint: 'green' },
+          { key: 'overtime',  header: 'عمل إضافي', format: 'jod', tint: 'green' },
+          { key: 'gross',     header: 'إجمالي الراتب', format: 'jod', tint: 'cyan', strong: true },
+          { key: 'compSS',    header: 'ضمان الشركة 14.25%', format: 'jod', tint: 'orange' },
+          { key: 'empSS',     header: 'ضمان الموظف 7.5%', format: 'jod', tint: 'orange' },
+          { key: 'advance',   header: 'سلف الموظفين', format: 'jod', tint: 'orange' },
+          { key: 'attend',    header: 'خصم الدوام', format: 'jod', tint: 'orange' },
+          { key: 'totalDed',  header: 'صافي الاقتطاعات', format: 'jod', tint: 'orange', strong: true },
+          { key: 'net',       header: 'صافي الراتب', format: 'jod', tint: 'cyan', strong: true },
+        ],
+        rows: rows.map((r: any, i: number) => {
+          const e = effective(r);
+          return {
+            num: i + 1, name: r.fullName,
+            base: e.base, transport: e.transport, overtime: e.overtime,
+            gross: e.gross, compSS: e.compSS, empSS: e.empSS,
+            advance: e.advance, attend: e.attendance,
+            totalDed: e.totalDed, net: e.net,
+          };
+        }),
+        totals: {
+          num: null, name: 'الإجماليات · TOTALS',
+          base: totals.baseSalary, transport: totals.transport, overtime: totals.overtime,
+          gross: totals.gross, compSS: totals.compSS, empSS: totals.empSS,
+          advance: totals.advance, attend: totals.attendance,
+          totalDed: totals.netDed, net: totals.net,
+        },
+        conditions: [
+          { columnKey: 'attend', when: 'gt', value: 20, bg: 'FFFEE2E2', fg: 'FF991B1B' },
+        ],
+        footnote: `إجمالي تكلفة الرواتب على الشركة = ${totals.totalCompanyCost.toFixed(3)} د.أ`,
+      },
     });
-    csvRows.push([
-      'الإجماليات', '',
-      totals.baseSalary.toFixed(3), totals.transport.toFixed(3), totals.overtime.toFixed(3),
-      totals.gross.toFixed(3), totals.compSS.toFixed(3), totals.empSS.toFixed(3),
-      totals.advance.toFixed(3), totals.attendance.toFixed(3),
-      totals.netDed.toFixed(3), totals.net.toFixed(3),
-    ]);
-    csvRows.push([]);
-    csvRows.push(['إجمالي تكلفة الرواتب على الشركة', totals.totalCompanyCost.toFixed(3)]);
-    const csv = BOM + csvRows.map((r) => r.map((v) => {
-      const s = String(v ?? '');
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    }).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `payroll-${month}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
   };
 
   return (
