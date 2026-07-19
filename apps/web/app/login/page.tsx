@@ -1,14 +1,25 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Lock, Mail, AlertCircle } from 'lucide-react';
 import { Button, Input, Card } from '@/components/ui';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
 
 export default function LoginPage() {
+  // useSearchParams must be inside Suspense per Next 14 App Router.
+  return (
+    <Suspense fallback={null}>
+      <LoginInner />
+    </Suspense>
+  );
+}
+
+function LoginInner() {
   const router = useRouter();
+  const search = useSearchParams();
+  const returnTo = search?.get('returnTo');
   const { setUser, setTokens } = useAuthStore();
 
   const [email, setEmail] = useState('');
@@ -24,7 +35,12 @@ export default function LoginPage() {
       const res = await api.post('/auth/login', { email, password });
       setUser(res.data.user);
       setTokens(res.data.accessToken, res.data.refreshToken);
-      router.push('/dashboard');
+      // Bounce back to where the session expired, when safe.
+      const safeReturn =
+        returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//')
+          ? returnTo
+          : '/dashboard';
+      router.push(safeReturn);
     } catch (err: any) {
       // Network error (API down, CORS, etc)
       if (err?.code === 'ERR_NETWORK' || !err?.response) {

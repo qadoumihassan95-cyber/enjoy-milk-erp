@@ -352,7 +352,11 @@ export class EmployeesService {
       byEmp.set(r.employeeId, e);
     }
 
-    const adjByEmp = new Map(adjustments.map((a) => [a.employeeId, a]));
+    // Explicit tuple typing — otherwise TS 5.x infers `(string | Adj)[]` which
+    // fails the `new Map<[K,V]>` overload on strict builds (Render's).
+    const adjByEmp = new Map<string, any>(
+      adjustments.map((a: any) => [a.employeeId, a] as [string, any]),
+    );
     // خريطة السلف الفعّالة لكل موظف مع رصيد متبقٍ
     const advancesByEmp = new Map<string, any[]>();
     for (const a of activeAdvances) {
@@ -361,7 +365,9 @@ export class EmployeesService {
       advancesByEmp.set(a.employeeId, list);
     }
     // خريطة السلف المخصومة هذا الشهر (لتفادي الخصم المكرر)
-    const installmentByAdvance = new Map(installments.map((i) => [i.advanceId, i]));
+    const installmentByAdvance = new Map<string, any>(
+      installments.map((i: any) => [i.advanceId, i] as [string, any]),
+    );
 
     const rows = employees.map((emp) => {
       const base = Number(emp.baseSalary ?? 0);
