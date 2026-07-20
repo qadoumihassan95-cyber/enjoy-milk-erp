@@ -120,7 +120,11 @@ export default function DailyProductionListPage() {
           <NewProductionDayForm
             onClose={() => setShowNew(false)}
             onCreated={(id) => {
+              // Also invalidate the Dashboard so الإنتاج اليوم reflects
+              // the new draft immediately (per single-source-of-truth).
               qc.invalidateQueries({ queryKey: ['daily-production'] });
+              qc.invalidateQueries({ queryKey: ['dashboard'] });
+              qc.invalidateQueries({ queryKey: ['dashboard', 'executive'] });
               router.push(`/production/${id}`);
             }}
           />

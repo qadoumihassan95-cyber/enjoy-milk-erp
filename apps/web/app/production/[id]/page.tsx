@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowRight,
   CheckCircle2,
@@ -31,7 +31,21 @@ export default function ProductionDetailPage() {
   const router = useRouter();
   const params = useParams();
   const toast = useToast();
+  const qc = useQueryClient();
   const id = params.id as string;
+
+  /** Invalidate every query that depends on today's production. Called after
+   *  save-all, post, and cancel so the Dashboard "الإنتاج اليوم" card,
+   *  the /production list, and any daily-summary widgets pick up the new
+   *  totals within the same click. Without this, the Dashboard keeps
+   *  showing the STALE value even after a successful save. */
+  const invalidateProductionDependents = () => {
+    qc.invalidateQueries({ queryKey: ['dashboard'] });
+    qc.invalidateQueries({ queryKey: ['dashboard', 'executive'] });
+    qc.invalidateQueries({ queryKey: ['daily-production'] });
+    qc.invalidateQueries({ queryKey: ['daily-production', id] });
+    qc.invalidateQueries({ queryKey: ['production-summary'] });
+  };
 
   const { data, refetch } = useQuery({
     queryKey: ['daily-production', id],
@@ -117,6 +131,7 @@ export default function ProductionDetailPage() {
       return;
     }
     await safeRefetch();
+    invalidateProductionDependents();
     setSaving(false);
     toast.success('تم حفظ ورقة الإنتاج');
   };
@@ -130,6 +145,7 @@ export default function ProductionDetailPage() {
       return;
     }
     await safeRefetch();
+    invalidateProductionDependents();
     toast.success('تم الترحيل للمخزون');
   };
 
@@ -142,6 +158,7 @@ export default function ProductionDetailPage() {
       return;
     }
     await safeRefetch();
+    invalidateProductionDependents();
     toast.success('تم إلغاء الترحيل وإرجاع الكميات');
   };
 

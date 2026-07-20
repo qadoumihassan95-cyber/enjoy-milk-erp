@@ -450,6 +450,91 @@ export class DailyProductionService {
   }
 
   // ─── Daily Report ─────────────────────────────────
+  /**
+   * SHARED "today's production" aggregator — single source of truth used by:
+   *   - Dashboard executive card (الإنتاج اليوم)
+   *   - Production Days page KPIs
+   *   - Daily production summary
+   *   - Reports & printing
+   *   - Financial control center
+   *
+   * Contract:
+   *   totalProduction  = Σ produced[].cartonsTotal for every DailyProduction
+   *                      record whose productionDate falls between local
+   *                      start-of-day and local end-of-day (Jordan timezone,
+   *                      configurable via TZ_OFFSET_MIN env var). Numeric
+   *                      strings are coerced to Number and null/undefined
+   *                      values are treated as 0.
+   *   productionDayCount = number of DailyProduction rows for today
+   *   machineRunCount    = number of DailyProduction rows that had at least
+   *                        one produced item
+   *   wastePercentage    = totalWaste / (totalProduction + totalWaste)
+   *   productionDate     = the local-date this bucket represents (YYYY-MM-DD)
+   *
+   * Status handling: BOTH `DRAFT` and `POSTED` records count. If a quantity
+   * has been entered on the production day it represents real produce; the
+   * "Draft" flag only means it hasn't been posted to inventory yet. The
+   * user's Production Days page and the Dashboard must NOT diverge on this.
+   *
+   * Timezone: dates stored in `productionDate` are naïve day-buckets
+   * (already normalised to local start-of-day by create()/update()). To
+   * find "today" we compute the current local-day in Jordan (+03:00 by
+   * default, override with TZ_OFFSET_MIN) and match records at that day.
+   */
+  async getTodayProductionSummary(tenantId: string, now: Date = new Date()) {
+    // Jordan (Asia/Amman) is UTC+3 year-round (no DST since 2022-10-28).
+    const OFFSET_MIN = Number(process.env.TZ_OFFSET_MIN ?? 180);
+    const localMs = now.getTime() + OFFSET_MIN * 60_000;
+    const local = new Date(localMs);
+    // Local start-of-day expressed back in UTC:
+    const startUTC = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate())
+      - OFFSET_MIN * 60_000);
+    const endUTC = new Date(startUTC.getTime() + 86_400_000);
+
+    const records = await this.prisma.dailyProduction.findMany({
+      where: { tenantId, productionDate: { gte: startUTC, lt: endUTC } },
+      include: { produced: true, wastages: true },
+    });
+
+    let totalProduction = 0;
+    let totalWaste = 0;
+    let machineRunCount = 0;
+    for (const r of records) {
+      const producedSum = (r.produced || []).reduce(
+        (s: number, p: any) => s + Number(p?.cartonsTotal || 0),
+        0,
+      );
+      totalProduction += producedSum;
+      if (producedSum > 0) machineRunCount += 1;
+      totalWaste += (r.wastages || []).reduce(
+        (s: number, w: any) => s + Number(w?.quantity || 0),
+        0,
+      );
+    }
+    const denom = totalProduction + totalWaste;
+    const wastePercentage = denom > 0 ? totalWaste / denom : 0;
+
+    // The date field the Dashboard shows the user, formatted as YYYY-MM-DD
+    // in local time (never raw UTC).
+    const localY = local.getUTCFullYear();
+    const localM = String(local.getUTCMonth() + 1).padStart(2, '0');
+    const localD = String(local.getUTCDate()).padStart(2, '0');
+
+    return {
+      productionDate: `${localY}-${localM}-${localD}`,
+      totalProduction,
+      productionDayCount: records.length,
+      machineRunCount,
+      totalWaste,
+      wastePercentage,
+      // Legacy field name kept so the Dashboard's existing
+      // `data.production.totalOutput` binding continues to work — new
+      // callers should read `totalProduction` instead.
+      totalOutput: totalProduction,
+      wastePct: wastePercentage,
+    };
+  }
+
   async dailyReport(tenantId: string, date: Date) {
     const start = new Date(date);
     start.setHours(0, 0, 0, 0);
