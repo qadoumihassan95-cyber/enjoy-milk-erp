@@ -71,6 +71,23 @@ export class EmployeesService {
   }
 
   // ─── Attendance ──────────────────────────────────
+  /**
+   * حضور — Present-only check-in.
+   *
+   * Contract (do NOT change without updating regression tests below):
+   *   • Always stores status = 'PRESENT'.
+   *   • Never sets status = 'LATE', never increments lateMin, never
+   *     creates a late record, never applies a late deduction.
+   *   • Late-marking is the SOLE responsibility of markAttendance()
+   *     called with status: 'LATE' (the "تأخير" button).
+   *
+   * History: an earlier revision auto-flipped this record to LATE
+   * whenever check-in time was > 08:05. That silently marked employees
+   * late without the user asking for it — the customer bug this fix
+   * addresses. If shift-based auto-tagging is desired again in the
+   * future, do it as a SEPARATE opt-in field (e.g. arrivedAfterShift)
+   * so `status` stays authoritative for user-driven attendance.
+   */
   async checkIn(tenantId: string, employeeId: string) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -79,13 +96,15 @@ export class EmployeesService {
       where: { employeeId, date: today },
     });
 
+    // First tap → check-in; second tap while still checked in → check-out.
     if (existing && existing.checkIn && !existing.checkOut) {
-      // Check out
       const checkOut = new Date();
-      const overtimeMin = 0;
       return this.prisma.attendanceRecord.update({
         where: { id: existing.id },
-        data: { checkOut, overtimeMin },
+        data: {
+          checkOut,
+          // Preserve status — do NOT flip PRESENT ↔ LATE here either.
+        },
       });
     }
 
@@ -93,19 +112,14 @@ export class EmployeesService {
       throw new BadRequestException('تم تسجيل الحضور والانصراف اليوم');
     }
 
-    const checkIn = new Date();
-    const shiftStart = new Date(today);
-    shiftStart.setHours(8, 0, 0, 0);
-    const lateMin = Math.max(0, Math.floor((checkIn.getTime() - shiftStart.getTime()) / 60000) - 5);
-
     return this.prisma.attendanceRecord.create({
       data: {
         tenantId,
         employeeId,
         date: today,
-        checkIn,
-        lateMin,
-        status: lateMin > 0 ? 'LATE' : 'PRESENT',
+        checkIn: new Date(),
+        lateMin: 0,          // ← never late-by-clock; user must click "تأخير" explicitly
+        status: 'PRESENT',   // ← always PRESENT on this endpoint
       },
     });
   }
