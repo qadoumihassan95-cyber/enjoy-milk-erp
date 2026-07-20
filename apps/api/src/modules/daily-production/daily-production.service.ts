@@ -481,50 +481,66 @@ export class DailyProductionService {
    * find "today" we compute the current local-day in Jordan (+03:00 by
    * default, override with TZ_OFFSET_MIN) and match records at that day.
    */
-  async getTodayProductionSummary(tenantId: string, now: Date = new Date()) {
-    // Jordan (Asia/Amman) is UTC+3 year-round (no DST since 2022-10-28).
+  /**
+   * SINGLE SOURCE OF TRUTH for "Today's Production" across the system.
+   *
+   *   Dashboard  → this method
+   *   /production/summary  → getDailySummary()   ← the ORIGINAL rule
+   *   Reports    → this method (via /dashboard/executive) or getDailySummary
+   *   PDF/Print  → same numbers guaranteed
+   *
+   * IMPLEMENTATION NOTE
+   * -------------------
+   * Rather than re-implement the aggregation and risk divergence from
+   * the summary page (which is what happened in commit 960c394 —
+   * a UTC vs Jordan-offset window mismatch could exclude records that
+   * /production/summary would include), this method delegates to
+   * `getDailySummary()` and simply reshapes the return value. The
+   * numbers on the Dashboard are therefore identical to what the
+   * user sees on /production/summary by construction — divergence
+   * is impossible.
+   *
+   * Timezone handling for the DEFAULT date:
+   *   Jordan (Asia/Amman) is UTC+3 year-round (no DST since 2022-10-28).
+   *   If the caller does not supply a date, we pick "today in Jordan"
+   *   by shifting current UTC by +180 minutes and taking the calendar
+   *   date. `getDailySummary` then internally uses server-local
+   *   midnight as its window edges — on Render (UTC) that is the
+   *   same window used when the user manually opens /production/summary
+   *   for today, so the totals match exactly.
+   */
+  async getTodayProductionSummary(
+    tenantId: string,
+    now: Date = new Date(),
+  ) {
+    // Compute "today in Jordan" as YYYY-MM-DD (defensive against
+    // server timezone). We only use this to build the string that
+    // getDailySummary parses back into a Date, keeping the window
+    // logic in ONE place.
     const OFFSET_MIN = Number(process.env.TZ_OFFSET_MIN ?? 180);
     const localMs = now.getTime() + OFFSET_MIN * 60_000;
     const local = new Date(localMs);
-    // Local start-of-day expressed back in UTC:
-    const startUTC = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate())
-      - OFFSET_MIN * 60_000);
-    const endUTC = new Date(startUTC.getTime() + 86_400_000);
+    const y = local.getUTCFullYear();
+    const m = String(local.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(local.getUTCDate()).padStart(2, '0');
+    const isoDate = `${y}-${m}-${d}`;
 
-    const records = await this.prisma.dailyProduction.findMany({
-      where: { tenantId, productionDate: { gte: startUTC, lt: endUTC } },
-      include: { produced: true, wastages: true },
-    });
+    // Delegate — same query, same rule, same numbers as /production/summary.
+    const summary = await this.getDailySummary(tenantId, { date: isoDate });
 
-    let totalProduction = 0;
-    let totalWaste = 0;
-    let machineRunCount = 0;
-    for (const r of records) {
-      const producedSum = (r.produced || []).reduce(
-        (s: number, p: any) => s + Number(p?.cartonsTotal || 0),
-        0,
-      );
-      totalProduction += producedSum;
-      if (producedSum > 0) machineRunCount += 1;
-      totalWaste += (r.wastages || []).reduce(
-        (s: number, w: any) => s + Number(w?.quantity || 0),
-        0,
-      );
-    }
-    const denom = totalProduction + totalWaste;
-    const wastePercentage = denom > 0 ? totalWaste / denom : 0;
-
-    // The date field the Dashboard shows the user, formatted as YYYY-MM-DD
-    // in local time (never raw UTC).
-    const localY = local.getUTCFullYear();
-    const localM = String(local.getUTCMonth() + 1).padStart(2, '0');
-    const localD = String(local.getUTCDate()).padStart(2, '0');
+    const totalProduction = Number(summary?.totals?.cartons ?? 0);
+    const totalWaste = Number(summary?.totals?.waste ?? 0);
+    // wasteRate from summary is a PERCENT (e.g., 3.5 for 3.5%). The
+    // Dashboard binds `wastePct` and multiplies by 100 to display, so
+    // we return the FRACTION (0.035) to preserve that display contract.
+    const wasteRatePercent = Number(summary?.totals?.wasteRate ?? 0);
+    const wastePercentage = wasteRatePercent / 100;
 
     return {
-      productionDate: `${localY}-${localM}-${localD}`,
+      productionDate: isoDate,
       totalProduction,
-      productionDayCount: records.length,
-      machineRunCount,
+      productionDayCount: Number(summary?.recordsCount ?? 0),
+      machineRunCount: Number(summary?.recordsCount ?? 0),
       totalWaste,
       wastePercentage,
       // Legacy field name kept so the Dashboard's existing
@@ -532,6 +548,10 @@ export class DailyProductionService {
       // callers should read `totalProduction` instead.
       totalOutput: totalProduction,
       wastePct: wastePercentage,
+      // Extra pass-through for future FE cards.
+      byItem: summary?.byItem ?? {},
+      totalPallets: Number(summary?.totals?.pallets ?? 0),
+      rawMilkKg: Number(summary?.totals?.rawMilkKg ?? 0),
     };
   }
 

@@ -33,10 +33,11 @@ import { formatNumber } from '@/lib/utils';
  *   - Quick tiles      → Orders, Customers (both linked in the sidebar)
  */
 export default function DashboardPage() {
-  const { data, isLoading, dataUpdatedAt, refetch, isFetching } = useQuery({
+  const { data, isLoading, isError, dataUpdatedAt, refetch, isFetching } = useQuery({
     queryKey: ['dashboard', 'executive'],
     queryFn: () => api.get('/dashboard/executive').then((r) => r.data),
     refetchInterval: 60_000,
+    retry: 1,
   });
 
   const p = data?.production ?? {};
@@ -46,6 +47,17 @@ export default function DashboardPage() {
   const ord = data?.orders ?? {};
   const cust = data?.customers ?? {};
   const wastePct = ((p.wastePct ?? 0) * 100);
+
+  // Production KPI display value — NEVER show a silent 0 on an error.
+  // Contract:
+  //   loading                → "—"
+  //   error (or missing data)→ "تعذر التحميل"
+  //   real 0                 → "0"      (production truly is zero)
+  //   real value             → formatted number
+  const productionDisplay: string =
+    isLoading ? '—'
+    : (isError || !data) ? 'تعذر التحميل'
+    : formatNumber(Number(p.totalOutput ?? 0));
 
   return (
     <AppShell>
@@ -76,10 +88,14 @@ export default function DashboardPage() {
             href="/production"
             icon={<Factory className="h-4 w-4" />}
             label="الإنتاج اليوم"
-            value={isLoading ? '—' : formatNumber(p.totalOutput ?? 0)}
-            unit="حبة"
-            hint="اضغط لعرض جدول الأيام"
-            accent="zinc"
+            value={productionDisplay}
+            unit={isError || !data ? '' : 'حبة'}
+            hint={
+              isError || !data
+                ? 'تعذر تحميل إنتاج اليوم — اضغط للمحاولة'
+                : 'اضغط لعرض جدول الأيام'
+            }
+            accent={isError ? 'zinc' : 'zinc'}
           />
           {/* نسبة الهدر */}
           <div
@@ -187,6 +203,8 @@ export default function DashboardPage() {
         p={p} inv={inv} lic={lic} hr={hr} ord={ord} cust={cust}
         wastePct={wastePct}
         isLoading={isLoading}
+        isError={isError || (!isLoading && !data)}
+        productionDisplay={productionDisplay}
         isFetching={isFetching}
         lastUpdate={dataUpdatedAt}
         onRefresh={() => refetch()}
@@ -202,11 +220,14 @@ export default function DashboardPage() {
 ═══════════════════════════════════════════════════════════ */
 function MobileDashboard({
   p, inv, lic, hr, ord, cust,
-  wastePct, isLoading, isFetching, lastUpdate, onRefresh,
+  wastePct, isLoading, isError, productionDisplay,
+  isFetching, lastUpdate, onRefresh,
 }: {
   p: any; inv: any; lic: any; hr: any; ord: any; cust: any;
   wastePct: number;
   isLoading: boolean;
+  isError: boolean;
+  productionDisplay: string;
   isFetching: boolean;
   lastUpdate: number;
   onRefresh: () => void;
@@ -274,12 +295,14 @@ function MobileDashboard({
             </div>
             <div>
               <div className="flex items-baseline gap-1" data-numeric>
-                <span className="text-2xl font-black leading-none">
-                  {isLoading ? '—' : formatNumber(p.totalOutput ?? 0)}
+                <span className={`font-black leading-none ${isError ? 'text-sm text-amber-300' : 'text-2xl'}`}>
+                  {productionDisplay}
                 </span>
-                <span className="text-[10px] text-zinc-400">حبة</span>
+                {!isError && <span className="text-[10px] text-zinc-400">حبة</span>}
               </div>
-              <div className="text-[10px] text-zinc-400 mt-1">اضغط لعرض جدول الأيام ›</div>
+              <div className="text-[10px] text-zinc-400 mt-1">
+                {isError ? 'اضغط للمحاولة مرة أخرى ›' : 'اضغط لعرض جدول الأيام ›'}
+              </div>
             </div>
           </Link>
 
