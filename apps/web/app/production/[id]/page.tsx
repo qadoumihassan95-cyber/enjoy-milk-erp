@@ -23,6 +23,7 @@ import { AppShell } from '@/components/app-shell';
 import { Card, Button, Input, Badge } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
+import { splitItemsBySection } from '@/lib/production-sections';
 import { formatDate, cn } from '@/lib/utils';
 
 type Row = Record<string, any>;
@@ -93,17 +94,16 @@ export default function ProductionDetailPage() {
   const cancelled = data?.status === 'CANCELLED';
   const disabled = posted || cancelled;
 
-  // Filter items by category for autocomplete
-  const cartonItems = (items ?? []).filter((i: any) =>
-    i.sku?.startsWith('CTN') || i.name?.includes('كرتون'),
-  );
-  const aluminumItems = (items ?? []).filter((i: any) =>
-    i.sku?.startsWith('ALU') || i.name?.includes('ألمنيوم'),
-  );
-  const milkItems = (items ?? []).filter((i: any) =>
-    i.sku?.startsWith('RAW-MILK') || i.name?.includes('حليب خام'),
-  );
-  const productItems = (items ?? []).filter((i: any) => i.type === 'POWDER_RETAIL');
+  // Categorize items by SCHEMA fields (type / unit / category), NOT
+  // hardcoded SKU prefixes or Arabic name substrings. See
+  // apps/web/lib/production-sections.ts for the full decision table.
+  // Any inventory item created via /inventory now automatically shows
+  // up in the correct production dropdown as long as its type/unit is
+  // set (POWDER_BULK → raw milk, PACKAGING+CTN → carton, PACKAGING+ROLL
+  // → aluminum, POWDER_RETAIL → finished). Legacy items still work via
+  // a name/SKU keyword fallback.
+  const { raw_milk: milkItems, carton: cartonItems, aluminum: aluminumItems, finished: productItems } =
+    splitItemsBySection(items ?? []);
 
   // إعادة جلب «أفضل جهد» — لا تؤثر على رسالة نجاح/فشل العملية
   const safeRefetch = async () => {
