@@ -106,6 +106,28 @@ describe('classifyError — the whole point of this file', () => {
     expect(c.retriable).toBe(true);
   });
 
+  it('SAVE bug regression — a 401 during save is server-class, NOT auto-signout', () => {
+    // The user's reported bug: click Save → forced to /login even when
+    // the refresh token was still valid. The interceptor now only signs
+    // the user out if the REFRESH ENDPOINT itself returned expired.
+    // A first-time 401 on a save endpoint must be treated as server-class
+    // so refresh can be attempted; sessionRefreshFailed only turns it into
+    // 'session-expired' when refresh actually returned 401/403.
+    const err = {
+      response: { status: 401 },
+      config: { url: '/inventory/items', method: 'post' },
+    };
+    const c = classifyError(err);
+    expect(c.kind).toBe('server');       // interceptor will refresh
+    expect(c.retriable).toBe(true);
+    // Refresh had a hiccup — DO NOT sign out.
+    const cAfterHiccup = classifyError(err, { sessionRefreshFailed: false });
+    expect(cAfterHiccup.kind).toBe('server');
+    // Refresh really rejected — sign out.
+    const cAfterExpired = classifyError(err, { sessionRefreshFailed: true });
+    expect(cAfterExpired.kind).toBe('session-expired');
+  });
+
   it('every retriable kind has an Arabic message (for toasts)', () => {
     const kinds = ['server', 'network', 'timeout', 'offline', 'rate-limit', 'unknown'] as const;
     for (const kind of kinds) {

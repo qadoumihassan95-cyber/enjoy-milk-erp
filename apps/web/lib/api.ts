@@ -69,61 +69,121 @@ function endSessionAndRedirect() {
   if (sessionEndedFired) return;
   sessionEndedFired = true;
   if (typeof window === 'undefined') return;
+  // Avoid redirect loops — if already on /login, do nothing.
   try {
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
+    if (window.location.pathname === '/login') return;
   } catch { /* ignore */ }
+  // NAVIGATE FIRST, then clear storage. If we cleared first, React
+  // components between the clear and the navigation might dereference
+  // now-null auth state and throw during render — that was the exact
+  // path that used to trigger the global-error 'حدث خطأ غير متوقع'
+  // screen even for a routine session expiry.
   try {
     const returnTo = encodeURIComponent(
       window.location.pathname + window.location.search,
     );
-    // Avoid redirect loops — if already on /login, do nothing.
-    if (window.location.pathname === '/login') return;
     window.location.href = `/login?returnTo=${returnTo}`;
   } catch {
-    window.location.href = '/login';
+    try { window.location.href = '/login'; } catch { /* ignore */ }
   }
+  // Clear on the next tick — by then the browser has committed the
+  // navigation and no more renders will happen against stale state.
+  setTimeout(() => {
+    try {
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('refreshToken');
+    } catch { /* ignore */ }
+  }, 0);
 }
 
 // ── Single-flight refresh ──────────────────────────────────────────────
 /**
+ * Refresh result — DISCRIMINATED UNION so the interceptor can react
+ * correctly to each failure mode. Prior version returned `string | null`
+ * where null conflated three very different situations:
+ *
+ *   - Refresh token truly rejected (401)               → sign out
+ *   - Refresh endpoint 5xx / timeout / network / cold-start → RETRY,
+ *                                                            do NOT
+ *                                                            sign out
+ *   - No refresh token in storage                     → sign out
+ *
+ * The bug the user reported (save → suddenly logged out during normal
+ * use) is this exact conflation: a Render cold-start on /auth/refresh
+ * would return 500 → interceptor treated it as "session expired" →
+ * cleared localStorage and hard-redirected to /login. Session was
+ * actually fine. This union prevents that.
+ */
+type RefreshOutcome =
+  | { kind: 'ok'; token: string }
+  | { kind: 'expired' }       // real 401 from /auth/refresh (or no rt stored)
+  | { kind: 'transient'; retryAfterMs: number };
+
+let refreshPromise: Promise<RefreshOutcome> | null = null;
+
+/**
  * Under a burst of concurrent 401s (e.g., dashboard fans out 5 queries in
  * parallel), we must NOT fire 5 refresh calls. The first request kicks off
  * the refresh; every subsequent 401 awaits the same promise. On success,
- * every original request is retried once with the new token. On failure,
- * every awaiting request rejects with the same SessionEndedError.
+ * every original request is retried once with the new token. On transient
+ * failure, every awaiter treats the outcome as transient (does NOT sign
+ * out). Only a real 'expired' outcome signs out.
  */
-let refreshPromise: Promise<string | null> | null = null;
-
-async function refreshAccessToken(): Promise<string | null> {
-  if (typeof window === 'undefined') return null;
+async function refreshAccessToken(): Promise<RefreshOutcome> {
+  if (typeof window === 'undefined') return { kind: 'expired' };
   if (refreshPromise) return refreshPromise;
 
-  refreshPromise = (async () => {
+  refreshPromise = (async (): Promise<RefreshOutcome> => {
     try {
       const refreshToken = (() => {
         try { return localStorage.getItem('refreshToken'); } catch { return null; }
       })();
-      if (!refreshToken) return null;
+      if (!refreshToken) return { kind: 'expired' };
 
       // Bypass `api` (interceptor) so the refresh call itself can't loop.
-      // Fresh axios instance with its own short timeout.
-      const res = await axios.post(
-        `${API_URL}/api/auth/refresh`,
-        { refreshToken },
-        { timeout: 15_000 },
-      );
+      // Fresh axios instance with a comfortable timeout for Render cold starts.
+      let res: any;
+      try {
+        res = await axios.post(
+          `${API_URL}/api/auth/refresh`,
+          { refreshToken },
+          { timeout: 20_000, validateStatus: () => true },
+        );
+      } catch (netErr: any) {
+        // Network error / abort — treat as transient. Do NOT sign out.
+        return { kind: 'transient', retryAfterMs: 1_500 };
+      }
+
+      const status = res?.status ?? 0;
+
+      // 5xx / 502 / 503 / 504 / 408 / 429 → transient. Do NOT sign out.
+      if (status >= 500 || status === 408 || status === 429) {
+        return { kind: 'transient', retryAfterMs: status === 429 ? 3_000 : 1_500 };
+      }
+
+      // 401 / 403 on refresh = the refresh token really is invalid.
+      if (status === 401 || status === 403) {
+        return { kind: 'expired' };
+      }
+
+      // 200 with a valid access token → success.
       const newAccess = res?.data?.accessToken;
       const newRefresh = res?.data?.refreshToken;
-      if (!newAccess) return null;
-      try {
-        localStorage.setItem('accessToken', newAccess);
-        if (newRefresh) localStorage.setItem('refreshToken', newRefresh);
-      } catch { /* ignore */ }
-      sessionEndedFired = false; // allow another logout later if it happens
-      return newAccess;
+      if (status === 200 && newAccess) {
+        try {
+          localStorage.setItem('accessToken', newAccess);
+          if (newRefresh) localStorage.setItem('refreshToken', newRefresh);
+        } catch { /* ignore */ }
+        sessionEndedFired = false; // allow another sign-out later if it happens
+        return { kind: 'ok', token: newAccess };
+      }
+
+      // Anything else (unexpected status, missing body) → treat as transient
+      // so we do NOT sign the user out defensively. Retry later.
+      return { kind: 'transient', retryAfterMs: 2_000 };
     } catch {
-      return null;
+      // Unexpected sync throw — again, transient.
+      return { kind: 'transient', retryAfterMs: 2_000 };
     } finally {
       // Clear after this tick so late awaiters see the resolved value
       // before we reset. (setTimeout 0 lets awaiters resolve first.)
@@ -170,13 +230,36 @@ api.interceptors.response.use(
       typeof window !== 'undefined'
     ) {
       originalRequest._retry = true;
-      const newToken = await refreshAccessToken();
-      if (newToken) {
+      const outcome = await refreshAccessToken();
+
+      if (outcome.kind === 'ok') {
+        // Retry the original request with the new bearer token.
         originalRequest.headers = originalRequest.headers ?? {};
-        (originalRequest.headers as any).Authorization = `Bearer ${newToken}`;
+        (originalRequest.headers as any).Authorization = `Bearer ${outcome.token}`;
         return api(originalRequest);
       }
-      // Refresh failed — this is the only path that signs the user out.
+
+      if (outcome.kind === 'transient') {
+        // Refresh endpoint had a hiccup (5xx / network / timeout / cold
+        // start). The session is PROBABLY still valid — we just can't
+        // tell right now. Reject with the ORIGINAL 401 carrying a
+        // classified error so the caller can show a message and let
+        // the user retry, but do NOT clear localStorage or redirect.
+        // The next mutation attempt will try refresh again.
+        const c = classifyError(error, { sessionRefreshFailed: false });
+        // Overwrite kind so callers can treat it as a temporary server
+        // problem, not a permanent one.
+        (c as any).kind = 'server';
+        (c as any).message = 'خطأ مؤقت أثناء تحديث الجلسة. الرجاء المحاولة مرة أخرى بعد لحظات.';
+        logApiError(c, { method: originalRequest?.method });
+        (error as any).classified = c;
+        (error as any).transientRefresh = true;
+        return Promise.reject(error);
+      }
+
+      // outcome.kind === 'expired' — the ONLY path that signs the user
+      // out. Real 401/403 from /auth/refresh, or the refresh token was
+      // never stored.
       const c = classifyError(error, { sessionRefreshFailed: true });
       logApiError(c, { method: originalRequest?.method });
       endSessionAndRedirect();
