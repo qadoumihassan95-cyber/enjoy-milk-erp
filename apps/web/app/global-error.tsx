@@ -1,22 +1,20 @@
 'use client';
 
 /**
- * GLOBAL error boundary — catches errors that escape `error.tsx`.
+ * GLOBAL error boundary — LAST-RESORT ONLY.
  *
- * Next.js App Router: `error.tsx` only wraps a page's own render. Errors
- * thrown by the root `layout.tsx` or by any component ABOVE the page tree
- * (Providers, ToastProvider, AuthGuard, react-query, axios interceptors that
- * throw synchronously during render) escape to Next.js's built-in
- * "Application error: a client-side exception has occurred" fallback.
+ * This screen ONLY fires when a React error escapes both `error.tsx` and
+ * the whole Provider tree (i.e., a genuine JS exception during render,
+ * NOT a network failure).
  *
- * By providing `global-error.tsx` at the app root, we override that
- * fallback with a friendly Arabic UI + a "Sign in again" escape hatch,
- * which was the customer's complaint: JWT expired mid-session → axios
- * interceptor's redirect races the component's null-dereference → screen
- * goes white with the default Next.js message.
- *
- * NOTE: global-error MUST include its own <html> and <body> because it
- * replaces the entire document tree when it fires.
+ * The recurring "انقطع الاتصال" screen the user was hitting was actually
+ * this component firing after AuthGuard `bailToLogin()` cascaded into a
+ * component that then threw. AuthGuard no longer bails on transient
+ * failures, so this screen should be rare in practice. When it DOES
+ * fire, we no longer say "انقطع الاتصال" (that's misleading — a real
+ * disconnect is now handled by the reconnect banner in AuthGuard).
+ * We phrase it as a real "خطأ في التطبيق" so the user is not led to
+ * believe they must re-authenticate.
  */
 
 import { useEffect } from 'react';
@@ -33,16 +31,16 @@ export default function GlobalError({
     console.error('[GlobalError]', error);
   }, [error]);
 
+  const goHome = () => {
+    window.location.href = '/dashboard';
+  };
+
   const goLogin = () => {
     try {
       localStorage.removeItem('accessToken');
       localStorage.removeItem('refreshToken');
     } catch { /* no-op */ }
     window.location.href = '/login';
-  };
-
-  const goHome = () => {
-    window.location.href = '/dashboard';
   };
 
   return (
@@ -75,16 +73,16 @@ export default function GlobalError({
             ⚠️
           </div>
           <h1 style={{ fontSize: 20, fontWeight: 900, margin: '0 0 6px' }}>
-            انقطع الاتصال
+            حدث خطأ غير متوقع
           </h1>
           <p style={{ fontSize: 14, color: '#71717a', margin: '0 0 20px', lineHeight: 1.7 }}>
-            انتهت الجلسة أو حدث خطأ مؤقت. لا تقلق — بياناتك محفوظة.
+            حدث خطأ في التطبيق. بياناتك محفوظة على الخادم.
             <br />
-            سجّل الدخول مرة أخرى للمتابعة.
+            حاول إعادة المحاولة، أو الرجوع للصفحة الرئيسية.
           </p>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
             <button
-              onClick={goLogin}
+              onClick={reset}
               style={{
                 fontFamily: 'inherit',
                 padding: '12px 22px',
@@ -92,23 +90,6 @@ export default function GlobalError({
                 border: 'none',
                 background: '#18181b',
                 color: 'white',
-                fontWeight: 700,
-                fontSize: 14,
-                cursor: 'pointer',
-                minHeight: 44,
-              }}
-            >
-              تسجيل الدخول من جديد
-            </button>
-            <button
-              onClick={reset}
-              style={{
-                fontFamily: 'inherit',
-                padding: '12px 22px',
-                borderRadius: 10,
-                border: '1px solid #d4d4d8',
-                background: 'white',
-                color: '#18181b',
                 fontWeight: 700,
                 fontSize: 14,
                 cursor: 'pointer',
@@ -133,6 +114,23 @@ export default function GlobalError({
               }}
             >
               الصفحة الرئيسية
+            </button>
+            <button
+              onClick={goLogin}
+              style={{
+                fontFamily: 'inherit',
+                padding: '12px 22px',
+                borderRadius: 10,
+                border: '1px solid #d4d4d8',
+                background: 'white',
+                color: '#71717a',
+                fontWeight: 700,
+                fontSize: 13,
+                cursor: 'pointer',
+                minHeight: 44,
+              }}
+            >
+              تسجيل الدخول من جديد
             </button>
           </div>
           {error?.digest && (
