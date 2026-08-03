@@ -1329,3 +1329,80 @@ model TenantSetting {
   updatedAt             DateTime @updatedAt
   createdAt             DateTime @default(now())
 }
+
+// ═════════════════════════════════════════════════════════════
+// INVOICES — official printable invoice module
+// ═════════════════════════════════════════════════════════════
+// Mirrors the factory's real invoice format. Persisted so invoices
+// are visible across users, browsers, and devices (not just a local
+// draft). The layout on the FE (`/invoices/new`, `/invoices/[id]`)
+// is what the user prints and exports to PDF.
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  CANCELLED
+}
+
+model Invoice {
+  id              String        @id @default(cuid())
+  tenantId        String
+
+  // Business-visible invoice number. Follows the site's convention
+  // (e.g. `034\2026`). Unique within a tenant.
+  invoiceNumber   String
+
+  invoiceDate     DateTime      // the invoice's calendar date
+  status          InvoiceStatus @default(DRAFT)
+
+  // Denormalized customer snapshot — we capture what was on the
+  // invoice at issue time so later customer edits don't retroactively
+  // change historical invoices.
+  customerId      String?
+  customerName    String
+  customerAddress String?
+  customerCity    String?
+  customerState   String?
+  customerZip     String?
+  customerPhone   String?
+
+  // Money — computed and persisted at save time.
+  currency        String        @default("$")
+  subTotal        Decimal       @db.Decimal(18, 2) @default(0)
+  discount        Decimal       @db.Decimal(18, 2) @default(0)
+  total           Decimal       @db.Decimal(18, 2) @default(0)
+
+  // Payment metadata (matches the printed template).
+  paymentMethod   String?       // 'cash' | 'check' | 'debit'
+  paymentReference String?
+
+  origin          String?       // free-text under description
+  notes           String?
+
+  createdById     String?
+  updatedById     String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  lines           InvoiceLine[]
+
+  @@unique([tenantId, invoiceNumber])
+  @@index([tenantId, invoiceDate])
+  @@index([tenantId, customerName])
+  @@index([tenantId, status])
+}
+
+model InvoiceLine {
+  id           String   @id @default(cuid())
+  invoiceId    String
+  invoice      Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  // Ordering — the visual row order matches what was printed.
+  lineOrder    Int      @default(0)
+
+  qty          Decimal  @db.Decimal(18, 3) @default(0)
+  description  String
+  unitPrice    Decimal  @db.Decimal(18, 4) @default(0)
+  lineTotal    Decimal  @db.Decimal(18, 2) @default(0)
+
+  @@index([invoiceId, lineOrder])
+}

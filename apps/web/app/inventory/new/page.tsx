@@ -136,7 +136,6 @@ export default function NewItemPage() {
                     <optgroup label="عام">
                       <option value="PCS">حبة</option>
                       <option value="CTN">كرتون</option>
-                      <option value="PAL">طبلية</option>
                     </optgroup>
                     <optgroup label="الحليب">
                       <option value="KG">كيلوغرام (كغ)</option>
