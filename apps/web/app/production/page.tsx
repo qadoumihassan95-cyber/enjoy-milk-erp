@@ -87,6 +87,29 @@ export default function DailyProductionListPage() {
 
   return (
     <AppShell>
+      {/*
+        NewProductionDayForm — SHARED across desktop AND mobile.
+        Previously this modal lived INSIDE the `hidden md:block` desktop
+        container, which meant that on mobile viewports the "+" button
+        would flip state but the modal was inside a display:none ancestor
+        and never rendered. Users on phones could not create a new
+        production day at all. Hoisting it to the AppShell root so both
+        breakpoints share the same modal state.
+      */}
+      {showNew && (
+        <NewProductionDayForm
+          onClose={() => setShowNew(false)}
+          onCreated={(id) => {
+            // Also invalidate the Dashboard so الإنتاج اليوم reflects
+            // the new draft immediately (per single-source-of-truth).
+            qc.invalidateQueries({ queryKey: ['daily-production'] });
+            qc.invalidateQueries({ queryKey: ['dashboard'] });
+            qc.invalidateQueries({ queryKey: ['dashboard', 'executive'] });
+            router.push(`/production/${id}`);
+          }}
+        />
+      )}
+
       {/* DESKTOP (≥md) — unchanged */}
       <div className="hidden md:block max-w-6xl mx-auto p-4 md:p-6 space-y-6">
         <header className="flex items-center justify-between flex-wrap gap-3">
@@ -115,20 +138,6 @@ export default function DailyProductionListPage() {
             يوم إنتاج جديد
           </Button>
         </header>
-
-        {showNew && (
-          <NewProductionDayForm
-            onClose={() => setShowNew(false)}
-            onCreated={(id) => {
-              // Also invalidate the Dashboard so الإنتاج اليوم reflects
-              // the new draft immediately (per single-source-of-truth).
-              qc.invalidateQueries({ queryKey: ['daily-production'] });
-              qc.invalidateQueries({ queryKey: ['dashboard'] });
-              qc.invalidateQueries({ queryKey: ['dashboard', 'executive'] });
-              router.push(`/production/${id}`);
-            }}
-          />
-        )}
 
         {/* ─── Search + Filter Bar ───────────────────── */}
         <Card className="p-3 flex items-center gap-3 flex-wrap">

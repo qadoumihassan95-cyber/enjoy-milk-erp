@@ -134,7 +134,7 @@ export class DailyProductionService {
       cartonUsage?: Array<{ itemId?: string; itemName: string; quantity: number; warehouseId?: string }>;
       aluminumUsage?: Array<{ itemId?: string; itemName: string; quantity: number; warehouseId?: string }>;
       milkUsage?: Array<{ itemId?: string; itemName?: string; count?: number; quantity: number; unit?: string; warehouseId?: string }>;
-      produced?: Array<{ itemId?: string; itemName: string; palletsCount?: number; cartonsTotal: number; warehouseId?: string; notes?: string }>;
+      produced?: Array<{ itemId?: string; itemName: string; cartonsTotal: number; warehouseId?: string; notes?: string }>;
       wastages?: Array<{ itemId?: string; itemName: string; quantity: number; unit?: string; warehouseId?: string; reason?: string }>;
     },
   ) {
@@ -214,7 +214,6 @@ export class DailyProductionService {
             dailyProductionId: id,
             itemId: p.itemId ?? null,
             itemName: p.itemName,
-            palletsCount: p.palletsCount ?? 0,
             cartonsTotal: p.cartonsTotal ?? 0,
             machineNumber:
               p.machineNumber === undefined || p.machineNumber === null || p.machineNumber === ''
@@ -355,7 +354,7 @@ export class DailyProductionService {
             reasonCode: 'PROD_OUTPUT',
             refType: 'DailyProduction',
             refId: dp.id,
-            notes: `إنتاج: ${p.itemName} (${p.palletsCount} طبلية)`,
+            notes: `إنتاج: ${p.itemName} (${p.cartonsTotal} كرتون)`,
             performedById: userId,
           },
         });
@@ -550,7 +549,6 @@ export class DailyProductionService {
       wastePct: wastePercentage,
       // Extra pass-through for future FE cards.
       byItem: summary?.byItem ?? {},
-      totalPallets: Number(summary?.totals?.pallets ?? 0),
       rawMilkKg: Number(summary?.totals?.rawMilkKg ?? 0),
     };
   }
@@ -575,7 +573,6 @@ export class DailyProductionService {
     const productionTotals: Record<string, number> = {};
     const wasteTotals: Record<string, number> = {};
     let totalCartons = 0;
-    let totalPallets = 0;
     let totalMilk = 0;
     let totalAluminum = 0;
     let totalCartonUsage = 0;
@@ -585,7 +582,6 @@ export class DailyProductionService {
         productionTotals[p.itemName] =
           (productionTotals[p.itemName] ?? 0) + p.cartonsTotal;
         totalCartons += p.cartonsTotal;
-        totalPallets += p.palletsCount;
       }
       for (const w of r.wastages) {
         wasteTotals[w.itemName] =
@@ -602,7 +598,6 @@ export class DailyProductionService {
       records,
       summary: {
         totalCartons,
-        totalPallets,
         totalMilk,
         totalAluminum,
         totalCartonUsage,
@@ -644,12 +639,11 @@ export class DailyProductionService {
       !opts.itemName || p.itemName?.includes(opts.itemName);
 
     let totalCartons = 0;
-    let totalPallets = 0;
     let totalMilk = 0;
     let totalAluminum = 0;
     let totalCartonUsage = 0;
     let totalWaste = 0;
-    const byItem: Record<string, { totalCartons: number; totalPallets: number }> = {};
+    const byItem: Record<string, { totalCartons: number }> = {};
     const itemsProduced = new Set<string>();
     const notes: string[] = [];
 
@@ -680,12 +674,9 @@ export class DailyProductionService {
         const item = p.itemName || '(بدون اسم)';
         itemsProduced.add(item);
         const c = Number(p.cartonsTotal || 0);
-        const pl = Number(p.palletsCount || 0);
         totalCartons += c;
-        totalPallets += pl;
-        if (!byItem[item]) byItem[item] = { totalCartons: 0, totalPallets: 0 };
+        if (!byItem[item]) byItem[item] = { totalCartons: 0 };
         byItem[item].totalCartons += c;
-        byItem[item].totalPallets += pl;
       }
     }
 
@@ -700,7 +691,6 @@ export class DailyProductionService {
       itemsProduced: Array.from(itemsProduced).sort(),
       totals: {
         cartons: totalCartons,
-        pallets: totalPallets,
         rawMilk: round(totalMilk, 2),
         // ─── جديد: إجمالي الحليب بالكيلو (1 كيس = 25 كغ) ─
         rawMilkKg: round(totalMilkKg, 2),

@@ -174,9 +174,8 @@ export default function DailySummaryPage() {
             </div>
 
             {/* إجماليات */}
-            <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 print-grid">
+            <section className="grid grid-cols-1 lg:grid-cols-3 gap-3 print-grid">
               <Stat label="إجمالي الكراتين المنتجة" value={formatNumber(totals.cartons ?? 0, 0)} state="good" />
-              <Stat label="إجمالي الطبالي" value={formatNumber(totals.pallets ?? 0, 0)} />
               <Stat
                 label="إجمالي الحليب الخام (كغ)"
                 value={formatNumber(totals.rawMilkKg ?? 0, 1)}
@@ -227,7 +226,7 @@ export default function DailySummaryPage() {
                             {formatNumber(info.totalCartons, 0)}
                           </span>
                           <span className="text-zinc-500 text-xs">
-                            {' '}كرتون · {formatNumber(info.totalPallets, 0)} طبلية
+                            {' '}كرتون
                           </span>
                         </div>
                       </div>

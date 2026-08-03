@@ -103,6 +103,43 @@ describe('productionSectionOf — SCHEMA-driven categorisation', () => {
     expect(productionSectionOf(null)).toBeNull();
     expect(productionSectionOf(undefined)).toBeNull();
   });
+
+  // ── REGRESSION TESTS for the "only one aluminum shows" bug ───────
+  it('BUG regression — ألومنيوم (with waw) routes to aluminum, not null', () => {
+    // Users type both spellings. If HINTS only listed ألمنيوم without
+    // the waw, this item silently vanished from the aluminum dropdown.
+    expect(productionSectionOf({ name: 'ألومنيوم فويل', sku: 'INV-100' })).toBe('aluminum');
+    expect(productionSectionOf({ name: 'ألومنيوم 8 مايكرون', sku: 'X' })).toBe('aluminum');
+    expect(productionSectionOf({ name: 'رول ألومنيوم 30سم', sku: 'X' })).toBe('aluminum');
+  });
+
+  it('BUG regression — PACKAGING + KG unit + aluminum keyword → aluminum', () => {
+    // Aluminum foil is commonly stocked by weight (KG). Prior code
+    // treated PACKAGING with unit != CTN/ROLL as ambiguous and left
+    // them out of the dropdown entirely.
+    expect(
+      productionSectionOf({ type: 'PACKAGING', unit: 'KG', name: 'ألمنيوم فويل', sku: 'X' }),
+    ).toBe('aluminum');
+    expect(
+      productionSectionOf({ type: 'PACKAGING', unit: 'G', name: 'ألومنيوم رقائق', sku: 'X' }),
+    ).toBe('aluminum');
+  });
+
+  it('multiple aluminum items with different names ALL end up in aluminum bucket', () => {
+    // The user's core complaint: only one aluminum item was showing.
+    // With expanded hints + KG allowance, every real-world aluminum
+    // item must land in the aluminum bucket.
+    const items = [
+      { id: 'a1', type: 'PACKAGING', unit: 'ROLL', name: 'رول ألمنيوم' },
+      { id: 'a2', type: 'PACKAGING', unit: 'ROLL', name: 'رول ألومنيوم' },
+      { id: 'a3', type: 'PACKAGING', unit: 'KG',   name: 'ألمنيوم فويل 8mic' },
+      { id: 'a4', type: 'PACKAGING', unit: 'KG',   name: 'ألومنيوم 10 مايكرون' },
+      { id: 'a5', name: 'رقائق ألومنيوم', sku: 'ALU-05' }, // legacy fallback
+    ];
+    for (const it of items) {
+      expect(productionSectionOf(it)).toBe('aluminum');
+    }
+  });
 });
 
 describe('splitItemsBySection — the shape the production page consumes', () => {

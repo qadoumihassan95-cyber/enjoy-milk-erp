@@ -946,13 +946,11 @@ export class TelegramService implements OnModuleInit {
     }
 
     let totalCartons = 0;
-    let totalPallets = 0;
     let totalWaste = 0;
     let totalMilk = 0;
     for (const r of records) {
       for (const p of r.produced) {
         totalCartons += Number(p.cartonsTotal);
-        totalPallets += Number(p.palletsCount ?? 0);
       }
       for (const w of r.wastages) totalWaste += Number(w.quantity);
       for (const m of r.milkUsage) totalMilk += Number(m.quantity);
@@ -964,7 +962,6 @@ export class TelegramService implements OnModuleInit {
         `${start.toLocaleDateString('ar-EG')}\n\n` +
         `📋 عدد السجلات: <b>${records.length}</b>\n` +
         `✅ الكراتين المنتجة: <b>${this.fmt(totalCartons)}</b>\n` +
-        `📦 الطبليات: <b>${this.fmt(totalPallets)}</b>\n` +
         `🥛 الحليب الخام: <b>${this.fmt(totalMilk)} لتر</b>\n` +
         `⚠️ التوالف: <b>${this.fmt(totalWaste)}</b>`,
     );

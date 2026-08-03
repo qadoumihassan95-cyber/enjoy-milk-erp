@@ -57,7 +57,16 @@ function n(s: string | null | undefined): string {
 const HINTS = {
   raw_milk: ['حليب خام', 'raw milk', 'حليب مسحوق', 'milk powder', 'powder', 'حليب البودرة'],
   carton: ['كرتون', 'كارتون', 'carton', 'ctn', 'علبة كرتون'],
-  aluminum: ['ألمنيوم', 'الومنيوم', 'aluminium', 'aluminum', 'رول ألمنيوم', 'roll'],
+  // Aluminum: cover BOTH Arabic spellings — with and without the waw
+  // (`ألمنيوم` ك أ+ل+م vs `ألومنيوم` ك أ+ل+و+م). Users type both; if we
+  // list only one, the other spelling of the same material silently
+  // disappears from the aluminum dropdown. Also include foil / رقائق /
+  // شرائح for wider stock naming.
+  aluminum: [
+    'ألمنيوم', 'ألومنيوم', 'الألمنيوم', 'الألومنيوم', 'الومنيوم',
+    'aluminium', 'aluminum', 'foil', 'رقائق',
+    'رول ألمنيوم', 'رول ألومنيوم', 'رول', 'roll',
+  ],
 } as const;
 
 function matchesAny(str: string, hints: readonly string[]): boolean {
@@ -93,11 +102,25 @@ export function productionSectionOf(item: CategorizableItem | null | undefined):
   if (type === 'powder_retail') return 'finished';
   if (type === 'powder_bulk') return 'raw_milk';
 
-  // 4 — packaging is split by unit + keyword
+  // 4 — packaging is split by unit + keyword.
+  //   CTN  → carton
+  //   ROLL → aluminum
+  //   KG / G / other → aluminum foil is commonly stocked in KG; if the
+  //     name or category hints aluminum, route it there. Otherwise fall
+  //     through to the category / name keyword hints below (never leave
+  //     a packaging item silently in `null` just because its unit isn't
+  //     the "expected" one).
   if (type === 'packaging') {
     if (unit === 'ctn') return 'carton';
     if (unit === 'roll') return 'aluminum';
-    // Ambiguous packaging — fall through to category / keyword hints.
+    // Aluminum stocked by weight (very common for foil).
+    if (matchesAny(name, HINTS.aluminum) || matchesAny(category, HINTS.aluminum) || matchesAny(sku, ['alu'])) {
+      return 'aluminum';
+    }
+    if (matchesAny(name, HINTS.carton) || matchesAny(category, HINTS.carton) || matchesAny(sku, ['ctn', 'carton'])) {
+      return 'carton';
+    }
+    // Fall through to explicit category + keyword hints below.
   }
 
   // 5 — explicit category from the inventory form

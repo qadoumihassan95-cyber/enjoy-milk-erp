@@ -66,7 +66,7 @@ export default function DailyAggregatedReport() {
   const allCarton: Record<string, number> = {};
   const allAluminum: Record<string, number> = {};
   const allMilk: Record<string, number> = {};
-  const allProduced: Record<string, { cartons: number; pallets: number }> = {};
+  const allProduced: Record<string, { cartons: number }> = {};
   const allWaste: Record<string, { qty: number; reasons: Set<string> }> = {};
 
   for (const r of records) {
@@ -82,10 +82,9 @@ export default function DailyAggregatedReport() {
     }
     for (const p of r.produced ?? []) {
       if (!allProduced[p.itemName]) {
-        allProduced[p.itemName] = { cartons: 0, pallets: 0 };
+        allProduced[p.itemName] = { cartons: 0 };
       }
       allProduced[p.itemName].cartons += Number(p.cartonsTotal);
-      allProduced[p.itemName].pallets += Number(p.palletsCount ?? 0);
     }
     for (const w of r.wastages ?? []) {
       if (!allWaste[w.itemName]) {
@@ -355,12 +354,6 @@ export default function DailyAggregatedReport() {
           </div>
         </div>
         <div className="stat-card">
-          <div className="lbl">طبليات</div>
-          <div className="val">
-            {(summary.totalPallets ?? 0).toLocaleString('en-US')}
-          </div>
-        </div>
-        <div className="stat-card">
           <div className="lbl">حليب خام (L)</div>
           <div className="val">
             {(summary.totalMilk ?? 0).toLocaleString('en-US')}
@@ -467,15 +460,13 @@ export default function DailyAggregatedReport() {
                   <thead>
                     <tr>
                       <th>المنتج</th>
-                      <th style={{ width: '20%' }}>الطبليات</th>
-                      <th style={{ width: '20%' }}>الكراتين</th>
+                      <th style={{ width: '30%' }}>الكراتين</th>
                     </tr>
                   </thead>
                   <tbody>
                     {Object.entries(allProduced).map(([name, v]) => (
                       <tr key={name}>
                         <td>{name}</td>
-                        <td data-numeric>{v.pallets.toLocaleString('en-US')}</td>
                         <td data-numeric>
                           <strong>{v.cartons.toLocaleString('en-US')}</strong>
                         </td>
@@ -485,9 +476,6 @@ export default function DailyAggregatedReport() {
                   <tfoot>
                     <tr>
                       <td>الإجمالي</td>
-                      <td data-numeric>
-                        {(summary.totalPallets ?? 0).toLocaleString('en-US')}
-                      </td>
                       <td data-numeric>
                         {(summary.totalCartons ?? 0).toLocaleString('en-US')}
                       </td>

@@ -64,12 +64,12 @@ describe('DailyProductionService.getTodayProductionSummary — Dashboard SoT', (
       {
         id: 'day-17', tenantId, productionDate: today, status: 'DRAFT',
         ...emptyExtras,
-        produced: [{ itemName: 'Product 1', cartonsTotal: 200, palletsCount: 0 }],
+        produced: [{ itemName: 'Product 1', cartonsTotal: 200 }],
       },
       {
         id: 'day-16', tenantId, productionDate: today, status: 'DRAFT',
         ...emptyExtras,
-        produced: [{ itemName: 'Product 2', cartonsTotal: 400, palletsCount: 0 }],
+        produced: [{ itemName: 'Product 2', cartonsTotal: 400 }],
       },
     ];
     const svc = makeSvc(makePrismaMock(rows));
@@ -86,9 +86,9 @@ describe('DailyProductionService.getTodayProductionSummary — Dashboard SoT', (
     const today = utcMidnight('2026-07-20');
     const rows = [
       { id: 'a', tenantId, productionDate: today, status: 'DRAFT',
-        ...emptyExtras, produced: [{ itemName: 'x', cartonsTotal: 100, palletsCount: 0 }] },
+        ...emptyExtras, produced: [{ itemName: 'x', cartonsTotal: 100 }] },
       { id: 'b', tenantId, productionDate: today, status: 'POSTED',
-        ...emptyExtras, produced: [{ itemName: 'y', cartonsTotal: 500, palletsCount: 0 }] },
+        ...emptyExtras, produced: [{ itemName: 'y', cartonsTotal: 500 }] },
     ];
     const svc = makeSvc(makePrismaMock(rows));
     const r = await svc.getTodayProductionSummary(tenantId, NOW);
@@ -99,7 +99,7 @@ describe('DailyProductionService.getTodayProductionSummary — Dashboard SoT', (
     const yesterday = utcMidnight('2026-07-19');
     const rows = [
       { id: 'r-y', tenantId, productionDate: yesterday, status: 'POSTED',
-        ...emptyExtras, produced: [{ itemName: 'z', cartonsTotal: 9999, palletsCount: 0 }] },
+        ...emptyExtras, produced: [{ itemName: 'z', cartonsTotal: 9999 }] },
     ];
     const svc = makeSvc(makePrismaMock(rows));
     const r = await svc.getTodayProductionSummary(tenantId, NOW);
@@ -118,9 +118,9 @@ describe('DailyProductionService.getTodayProductionSummary — Dashboard SoT', (
     const nearMidnightJordan = new Date('2026-07-19T22:00:00Z');
     const rows = [
       { id: 'r-near', tenantId, productionDate: utcMidnight('2026-07-20'), status: 'DRAFT',
-        ...emptyExtras, produced: [{ itemName: 'x', cartonsTotal: 42, palletsCount: 0 }] },
+        ...emptyExtras, produced: [{ itemName: 'x', cartonsTotal: 42 }] },
       { id: 'r-yest', tenantId, productionDate: utcMidnight('2026-07-19'), status: 'DRAFT',
-        ...emptyExtras, produced: [{ itemName: 'x', cartonsTotal: 9999, palletsCount: 0 }] },
+        ...emptyExtras, produced: [{ itemName: 'x', cartonsTotal: 9999 }] },
     ];
     const svc = makeSvc(makePrismaMock(rows));
     const r = await svc.getTodayProductionSummary(tenantId, nearMidnightJordan);
@@ -135,10 +135,10 @@ describe('DailyProductionService.getTodayProductionSummary — Dashboard SoT', (
         id: 'r-mixed', tenantId, productionDate: today, status: 'DRAFT',
         ...emptyExtras,
         produced: [
-          { itemName: 'x', cartonsTotal: '100', palletsCount: 0 },
-          { itemName: 'x', cartonsTotal: null as any, palletsCount: 0 },
-          { itemName: 'x', cartonsTotal: undefined as any, palletsCount: 0 },
-          { itemName: 'x', cartonsTotal: 50, palletsCount: 0 },
+          { itemName: 'x', cartonsTotal: '100' },
+          { itemName: 'x', cartonsTotal: null as any },
+          { itemName: 'x', cartonsTotal: undefined as any },
+          { itemName: 'x', cartonsTotal: 50 },
         ],
       },
     ];
@@ -170,7 +170,7 @@ describe('DailyProductionService.getTodayProductionSummary — Dashboard SoT', (
         cartonUsage: [], aluminumUsage: [],
         milkUsage: [{ count: 4, quantity: 0 }],   // 4 bags × 25kg = 100 kg raw
         wastages: [{ quantity: 5 }],              // 5 kg waste
-        produced: [{ itemName: 'x', cartonsTotal: 100, palletsCount: 0 }],
+        produced: [{ itemName: 'x', cartonsTotal: 100 }],
       },
     ];
     const svc = makeSvc(makePrismaMock(rows));
@@ -185,9 +185,9 @@ describe('DailyProductionService.getTodayProductionSummary — Dashboard SoT', (
     const today = utcMidnight('2026-07-20');
     const rows = [
       { id: 'a', tenantId, productionDate: today, status: 'DRAFT',
-        ...emptyExtras, produced: [{ itemName: 'p1', cartonsTotal: 400, palletsCount: 0 }] },
+        ...emptyExtras, produced: [{ itemName: 'p1', cartonsTotal: 400 }] },
       { id: 'b', tenantId, productionDate: today, status: 'DRAFT',
-        ...emptyExtras, produced: [{ itemName: 'p2', cartonsTotal: 200, palletsCount: 0 }] },
+        ...emptyExtras, produced: [{ itemName: 'p2', cartonsTotal: 200 }] },
     ];
     const svc = makeSvc(makePrismaMock(rows));
 

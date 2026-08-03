@@ -1023,7 +1023,9 @@ model ProductionMilkUsage {
   @@index([tenantId, itemId])
 }
 
-// ── (4) المواد المنتجة (الصنف + عدد الطبالي + مجموع الكراتين) ─
+// ── (4) المواد المنتجة (الصنف + مجموع الكراتين) ──────────────
+// palletsCount removed 2026-07-23 — the pallets concept is no longer
+// part of the business workflow. Users enter cartons directly.
 // machineNumber اختياري لكل سطر — يسمح بنفس المنتج على ماكينات مختلفة في نفس اليوم
 model ProductionProducedItem {
   id                String  @id @default(cuid())
@@ -1031,7 +1033,6 @@ model ProductionProducedItem {
   dailyProductionId String
   itemId            String?            // ربط بمنتج من المخزون
   itemName          String             // الصنف
-  palletsCount      Int     @default(0)  // عدد الطبالي
   cartonsTotal      Int     @default(0)  // مجموع الكراتين
   machineNumber     Int?               // رقم ماكينة هذا السطر (يدعم تعدد الماكينات لنفس المنتج)
   warehouseId       String?

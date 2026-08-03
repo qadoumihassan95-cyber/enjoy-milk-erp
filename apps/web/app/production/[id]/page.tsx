@@ -196,10 +196,9 @@ export default function ProductionDetailPage() {
       const key = p.itemName || '(بدون اسم)';
       acc.byItem[key] = (acc.byItem[key] || 0) + Number(p.cartonsTotal || 0);
       acc.totalCartons += Number(p.cartonsTotal || 0);
-      acc.totalPallets += Number(p.palletsCount || 0);
       return acc;
     },
-    { byItem: {}, totalCartons: 0, totalPallets: 0 },
+    { byItem: {}, totalCartons: 0 },
   );
 
   const milkTotal = milkUsage.reduce((s, m) => s + Number(m.quantity || 0), 0);
@@ -495,7 +494,7 @@ export default function ProductionDetailPage() {
             onAdd={() =>
               setProduced([
                 ...produced,
-                { itemName: '', palletsCount: 0, cartonsPerPallet: 0, cartonsTotal: 0 },
+                { itemName: '', cartonsTotal: 0 },
               ])
             }
             disabled={disabled}
@@ -505,15 +504,13 @@ export default function ProductionDetailPage() {
           ) : (
             <div className="space-y-2">
               <div className="grid md:grid-cols-12 gap-2 text-xs font-bold text-zinc-500 uppercase">
-                <div className="md:col-span-5">الصنف</div>
-                <div className="md:col-span-2">عدد الطبالي</div>
-                <div className="md:col-span-2">كراتين/طبلية</div>
-                <div className="md:col-span-2">المجموع <span className="lowercase text-emerald-600 font-normal">(تلقائي)</span></div>
+                <div className="md:col-span-8">الصنف</div>
+                <div className="md:col-span-3">عدد الكراتين</div>
                 <div className="md:col-span-1"></div>
               </div>
               {produced.map((r, i) => (
                 <div key={i} className="grid md:grid-cols-12 gap-2 items-center">
-                  <div className="md:col-span-5">
+                  <div className="md:col-span-8">
                     <ItemSelector
                       items={productItems}
                       value={r}
@@ -526,53 +523,12 @@ export default function ProductionDetailPage() {
                       placeholder="اختر منتج"
                     />
                   </div>
-                  <div className="md:col-span-2">
-                    <Input
-                      type="number"
-                      placeholder="الطبالي"
-                      value={r.palletsCount}
-                      onChange={(e) => {
-                        const v = [...produced];
-                        const pallets = +e.target.value;
-                        const perPallet = +(v[i].cartonsPerPallet ?? 0);
-                        v[i] = {
-                          ...v[i],
-                          palletsCount: pallets,
-                          // إعادة الحساب التلقائي عند وجود قيمة كراتين/طبلية
-                          cartonsTotal:
-                            perPallet > 0 ? pallets * perPallet : v[i].cartonsTotal,
-                        };
-                        setProduced(v);
-                      }}
-                      disabled={disabled}
-                    />
-                  </div>
-                  <div className="md:col-span-2">
-                    <Input
-                      type="number"
-                      placeholder="كراتين/طبلية"
-                      value={r.cartonsPerPallet ?? ''}
-                      onChange={(e) => {
-                        const v = [...produced];
-                        const perPallet = +e.target.value;
-                        const pallets = +(v[i].palletsCount ?? 0);
-                        v[i] = {
-                          ...v[i],
-                          cartonsPerPallet: perPallet,
-                          cartonsTotal: pallets > 0 ? pallets * perPallet : v[i].cartonsTotal,
-                        };
-                        setProduced(v);
-                      }}
-                      disabled={disabled}
-                    />
-                  </div>
-                  <div className="md:col-span-2">
+                  <div className="md:col-span-3">
                     <Input
                       type="number"
                       placeholder="الكراتين"
                       value={r.cartonsTotal}
                       onChange={(e) => {
-                        // يسمح بالتعديل اليدوي إذا أراد المستخدم تجاوز الحساب
                         const v = [...produced];
                         v[i] = { ...v[i], cartonsTotal: +e.target.value };
                         setProduced(v);
@@ -586,9 +542,6 @@ export default function ProductionDetailPage() {
                   </div>
                 </div>
               ))}
-              <p className="text-[11px] text-zinc-400 mt-1">
-                💡 أدخل عدد الطبالي + كراتين/طبلية → المجموع يحسب تلقائياً (قابل للتعديل اليدوي)
-              </p>
             </div>
           )}
         </Card>
@@ -697,14 +650,10 @@ export default function ProductionDetailPage() {
               <div className="text-[10px] text-zinc-400">قطعة</div>
             </div>
           </div>
-          <div className="grid md:grid-cols-2 gap-4 mt-4">
+          <div className="mt-4">
             <div className="bg-white border border-zinc-200 rounded-lg p-3">
               <div className="text-xs text-zinc-500">إجمالي الكراتين المنتجة</div>
               <div className="text-2xl font-black mt-1" data-numeric>{producedTotals.totalCartons.toLocaleString('en-US')}</div>
-            </div>
-            <div className="bg-white border border-zinc-200 rounded-lg p-3">
-              <div className="text-xs text-zinc-500">إجمالي الطبالي</div>
-              <div className="text-2xl font-black mt-1" data-numeric>{producedTotals.totalPallets.toLocaleString('en-US')}</div>
             </div>
           </div>
           {Object.keys(producedTotals.byItem).length > 0 && (

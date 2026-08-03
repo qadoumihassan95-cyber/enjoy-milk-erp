@@ -84,10 +84,6 @@ export default function ProductionPrintPage() {
     (s: number, r: any) => s + Number(r.cartonsTotal || 0),
     0,
   );
-  const producedTotalPallets = (data.produced ?? []).reduce(
-    (s: number, r: any) => s + Number(r.palletsCount || 0),
-    0,
-  );
   const wasteTotal = (data.wastages ?? []).reduce(
     (s: number, r: any) => s + Number(r.quantity || 0),
     0,
@@ -515,8 +511,7 @@ export default function ProductionPrintPage() {
                 <tr>
                   <th style={{ width: '5%' }}>#</th>
                   <th>المنتج</th>
-                  <th style={{ width: '15%' }}>الطبليات</th>
-                  <th style={{ width: '15%' }}>إجمالي الكراتين</th>
+                  <th style={{ width: '20%' }}>إجمالي الكراتين</th>
                   <th>ملاحظات</th>
                 </tr>
               </thead>
@@ -525,7 +520,6 @@ export default function ProductionPrintPage() {
                   <tr key={p.id ?? i}>
                     <td data-numeric>{i + 1}</td>
                     <td>{p.itemName}</td>
-                    <td data-numeric>{p.palletsCount ?? 0}</td>
                     <td data-numeric>
                       <strong>{Number(p.cartonsTotal).toLocaleString('en-US')}</strong>
                     </td>
@@ -536,7 +530,6 @@ export default function ProductionPrintPage() {
               <tfoot>
                 <tr>
                   <td colSpan={2}>الإجمالي</td>
-                  <td data-numeric>{producedTotalPallets.toLocaleString('en-US')}</td>
                   <td data-numeric>{producedTotalCartons.toLocaleString('en-US')}</td>
                   <td>—</td>
                 </tr>
