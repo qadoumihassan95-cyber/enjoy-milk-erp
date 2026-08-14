@@ -23,6 +23,7 @@ import { MachinesModule } from './modules/machines/machines.module';
 import { TelegramModule } from './modules/telegram/telegram.module';
 import { FifoModule } from './modules/fifo/fifo.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
+import { AiModule } from './ai/ai.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { InvoicesModule } from './modules/invoices/invoices.module';
     TelegramModule,
     FifoModule,
     InvoicesModule,
+    AiModule,
   ],
   providers: [
     // الترتيب مهم: المصادقة أولاً (تملأ req.user)، ثم فحص الأدوار

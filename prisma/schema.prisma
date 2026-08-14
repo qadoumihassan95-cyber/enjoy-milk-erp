@@ -1391,6 +1391,38 @@ model Invoice {
   @@index([tenantId, status])
 }
 
+// ═════════════════════════════════════════════════════════════
+// AI request audit log
+// ═════════════════════════════════════════════════════════════
+// One row per completed (or failed) AI request. Feeds future
+// usage / cost dashboards. NEVER stores prompt/response text or
+// the API key — only counts, timings, and correlation ids.
+model AiRequestLog {
+  id               String   @id @default(cuid())
+  tenantId         String
+  userId           String
+  conversationId   String
+  requestId        String   @unique
+  workspace        String?
+  tier             String   // 'small' | 'medium' | 'premium'
+  provider         String
+  model            String
+  promptTokens     Int      @default(0)
+  completionTokens Int      @default(0)
+  totalTokens      Int      @default(0)
+  costUsd          Decimal  @db.Decimal(12, 6) @default(0)
+  latencyMs        Int      @default(0)
+  success          Boolean  @default(true)
+  retryCount       Int      @default(0)
+  errorMessage     String?
+  startedAt        DateTime
+  finishedAt       DateTime @default(now())
+
+  @@index([tenantId, startedAt])
+  @@index([tenantId, userId, startedAt])
+  @@index([tenantId, provider, model])
+}
+
 model InvoiceLine {
   id           String   @id @default(cuid())
   invoiceId    String

@@ -17,6 +17,7 @@ import {
   History,
   Banknote,
   Send,
+  Sparkles,
   MoreHorizontal,
   X,
   ChevronLeft,
@@ -26,6 +27,7 @@ import { useAuthStore } from '@/stores/auth';
 
 const NAV = [
   { href: '/dashboard', label: 'اليوم', icon: LayoutDashboard },
+  { href: '/ai', label: 'الذكاء الاصطناعي', icon: Sparkles },
   { href: '/production', label: 'الإنتاج اليومي', icon: Repeat },
   { href: '/production/summary', label: 'ملخص إنتاج اليوم', icon: Repeat },
   { href: '/orders', label: 'الطلبيات', icon: ShoppingBag },
