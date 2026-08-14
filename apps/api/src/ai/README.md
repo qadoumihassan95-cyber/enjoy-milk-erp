@@ -1,200 +1,265 @@
-# AI Infrastructure (Phase 1)
+# AI Infrastructure — Phase 1 Hardened
 
-Provider-agnostic AI layer for Enjoy Milk ERP. FE talks only to `/api/ai/*`.
-Backend talks to OpenRouter today (add more providers later without
-touching the ERP).
+Provider-agnostic AI platform for the ERP. FE talks only to `/api/ai/*`.
+Backend runs a multi-layer pipeline that classifies, budget-checks,
+health-picks, caches, executes, and audits every request.
 
-## Architecture
+## AI Request Lifecycle
 
 ```
-User → ERP Frontend → ERP Backend (NestJS) → AiService → AiProvider → OpenRouter → Model
+┌──────────┐    HTTPS + JWT    ┌──────────────┐
+│   User   │ ─────────────────▶│  Controller  │
+└──────────┘                    └──────┬───────┘
+                                       ▼
+                          ┌────────────────────────┐
+                          │ 1. Classifier          │  RequestKind + suggested tier
+                          └────────────────────────┘
+                                       │
+                                       ▼
+                          ┌────────────────────────┐
+                          │ 2. PromptManager       │  system + module + role prompt
+                          │    + ContextBuilder    │  identity / tenant / branch / locale
+                          └────────────────────────┘
+                                       │
+                                       ▼
+                          ┌────────────────────────┐
+                          │ 3. PolicyRegistry      │  max prompt / model allow/deny / streaming
+                          └────────────────────────┘
+                                       │
+                                       ▼
+                          ┌────────────────────────┐
+                          │ 4. BudgetManager       │  soft → downgrade tier
+                          │                        │  hard → reject
+                          └────────────────────────┘
+                                       │
+                                       ▼
+                          ┌────────────────────────┐
+                          │ 5. ResponseCache       │  opt-in, safe policies only
+                          │    (hit → done)        │
+                          └────────────────────────┘
+                                       │
+                                       ▼
+                          ┌────────────────────────┐
+                          │ 6. RateLimiter         │  per-user RPM / TPM / concurrency
+                          └────────────────────────┘
+                                       │
+                                       ▼
+                          ┌────────────────────────┐
+                          │ 7. HealthMonitor.pick  │  skip quarantined models
+                          └────────────────────────┘
+                                       │
+                                       ▼
+                          ┌────────────────────────┐
+                          │ 8. AiProvider          │  OpenRouterProvider today;
+                          │    (fallback in tier)  │  more providers behind the
+                          │                        │  same interface later
+                          └──────────┬─────────────┘
+                                     │
+                            ┌────────┴─────────┐
+                            ▼                  ▼
+                    ┌───────────────┐  ┌───────────────┐
+                    │ Non-streaming │  │ SSE streaming │
+                    └───────────────┘  └───────────────┘
+                                     │
+                                     ▼
+                          ┌────────────────────────┐
+                          │ 9. AiRequestLog        │  tokens / cost / latency
+                          │    HealthMonitor       │  updates health stats
+                          │    BudgetManager       │  records USD spend
+                          └────────────────────────┘
 ```
 
-Every layer has one job:
-
-| Layer | File | Responsibility |
-|---|---|---|
-| Controller | `ai.controller.ts` | Auth, DTO validation, HTTP mapping, SSE framing |
-| Service | `ai.service.ts` | Routing, fallback, rate limiting, audit logging |
-| Provider interface | `types/ai.types.ts` | The abstract contract every provider implements |
-| OpenRouter provider | `providers/openrouter.provider.ts` | Adapts OpenRouter's OpenAI-compatible API to the interface |
-| Router | `utils/router.ts` | Picks tier from the user message; returns ordered model list |
-| Rate limiter | `utils/rate-limiter.ts` | Per-user RPM / TPM / concurrency guards |
-| Config | `config/ai.config.ts` | Env → typed AiConfig, tier lists, price table |
-| DTO | `dto/chat.dto.ts` | Chat request/response shapes |
-
-## Folder structure
+## Folder structure (Phase 1 hardened)
 
 ```
 apps/api/src/ai/
-├── ai.module.ts           # Nest module (imported by AppModule)
-├── ai.controller.ts       # POST /ai/chat, POST /ai/chat/stream, GET /ai/status
-├── ai.service.ts          # orchestrator
-├── ai.spec.ts             # regression tests (routing, provider, rate limits)
-├── README.md              # this file
+├── ai.module.ts
+├── ai.controller.ts               ← /api/ai/status, /chat, /chat/stream (unchanged)
+├── ai.service.ts                  ← orchestrator wired to every layer below
+├── ai.spec.ts                     ← original provider/routing tests
+├── hardening.spec.ts              ← NEW: classifier/budget/health/cache/policies/tools/mcp
+├── README.md                      ← this file
+│
 ├── config/
-│   └── ai.config.ts       # loadAiConfig() from env
+│   └── ai.config.ts               ← env-driven config + tier price table
+│
 ├── dto/
-│   └── chat.dto.ts        # ChatRequestDto / ChatResponseDto
-├── providers/
-│   └── openrouter.provider.ts
+│   └── chat.dto.ts
+│
 ├── types/
-│   └── ai.types.ts        # AiProvider, AiCompletion, AiError, AiTier…
-└── utils/
-    ├── router.ts          # pickTier + modelsForTier
-    └── rate-limiter.ts    # RateLimiter class
+│   └── ai.types.ts                ← AiProvider interface, AiError, AiCompletion, …
+│
+├── providers/
+│   └── openrouter.provider.ts     ← OpenAI-compatible fetch adapter + SSE parser
+│
+├── utils/
+│   ├── router.ts                  ← legacy keyword router (kept as extra signal)
+│   └── rate-limiter.ts
+│
+├── classifier/                    ★ NEW
+│   └── request-classifier.ts      ← RequestKind + tier suggestion
+│
+├── prompts/                       ★ NEW
+│   └── prompt-manager.ts          ← global/system/module/role prompts + versions
+│
+├── context/                       ★ NEW
+│   └── context-builder.ts         ← identity / tenant / locale / timezone envelope
+│
+├── policies/                      ★ NEW
+│   └── policies.ts                ← per-tenant PolicyConfig + PolicyRegistry
+│
+├── budget/                        ★ NEW
+│   └── budget-manager.ts          ← daily/monthly × tenant/user/workspace budgets
+│
+├── health/                        ★ NEW
+│   └── model-health.ts            ← per-model success/error/latency + quarantine
+│
+├── cache/                         ★ NEW
+│   └── response-cache.ts          ← TTL cache + named safe policies
+│
+├── tools/                         ★ NEW
+│   ├── tool.types.ts              ← AiTool + PermissionGate + ToolResult
+│   ├── tool-registry.ts           ← the ONLY place tools are registered
+│   ├── tool-executor.ts           ← the ONLY choke point that runs a tool
+│   └── permission-gate.ts         ← default role→slug bridge
+│
+├── memory/                        ★ NEW (interfaces + noop)
+│   ├── memory.types.ts            ← Conversation/Erp/User/Workspace/Tenant
+│   └── noop-memory.ts             ← default Phase-1 no-op implementation
+│
+└── mcp/                           ★ NEW (shape only, no runtime dep)
+    └── mcp-adapter.ts             ← toMcpToolDescriptors + handleMcpCall
 ```
 
-## API endpoints
+## Public API (unchanged from Phase 1)
 
-All require the standard `Authorization: Bearer <accessToken>`.
+- `GET  /api/ai/status`
+- `POST /api/ai/chat`
+- `POST /api/ai/chat/stream`
 
-### `GET /api/ai/status`
+Response shapes are **identical** to Phase 1 — every new layer is
+additive. Existing FE at `/ai` continues to work.
 
-Small health check for the FE. No secrets.
+## New configuration options
 
-```json
-{ "configured": true, "defaultProvider": "openrouter", "streamingEnabled": true }
-```
-
-### `POST /api/ai/chat`
-
-Non-streaming completion.
-
-Request:
-```json
-{ "message": "…", "conversationId": "optional", "workspace": "optional", "tierHint": "optional" }
-```
-
-Response:
-```json
-{
-  "conversationId": "…",
-  "requestId": "…",
-  "content": "…",
-  "usage": { "promptTokens": 0, "completionTokens": 0, "totalTokens": 0 },
-  "costUsd": 0.0,
-  "provider": "openrouter",
-  "model": "openai/gpt-4o-mini",
-  "latencyMs": 421,
-  "tier": "small"
-}
-```
-
-### `POST /api/ai/chat/stream`
-
-Server-Sent Events. Same request body. Emits three event kinds:
-
-```
-event: delta
-data: { "text": "…partial…" }
-
-event: done
-data: { conversationId, requestId, content, usage, costUsd, provider, model, latencyMs, tier }
-
-event: error
-data: { message, kind, status }
-```
-
-If `AI_ENABLE_STREAMING=false`, the endpoint automatically falls back
-to a single-shot response emitted as one `done` event (no `delta` events).
-
-## Environment variables
-
-| Var | Default | Purpose |
+| Layer | Class | Configurable via |
 |---|---|---|
-| `OPENROUTER_API_KEY` | *(unset)* | **Required.** Reads at startup, never logged. |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Override for testing. |
-| `AI_APP_NAME` | `Enjoy Milk ERP` | Sent to OpenRouter as `X-Title`. |
-| `AI_APP_REFERER` | `https://enjoymilk-web.onrender.com` | Sent as `HTTP-Referer` (their attribution). |
-| `AI_DEFAULT_PROVIDER` | `openrouter` | Which registered provider to use. |
-| `AI_ENABLE_STREAMING` | `true` | Global streaming switch. |
-| `AI_TIMEOUT` | `45000` | ms per HTTP call to the provider. |
-| `AI_MAX_RETRIES` | `2` | Reserved for future exponential-backoff retries on transient provider errors. |
-| `AI_TEMPERATURE` | `0.4` | Default temperature. |
-| `AI_MAX_TOKENS` | `2048` | Max completion tokens. |
-| `AI_RATE_RPM` | `60` | Per-user requests-per-minute limit. |
-| `AI_RATE_TPM` | `60000` | Per-user tokens-per-minute limit. |
-| `AI_RATE_CONCURRENT` | `4` | Max concurrent AI requests per user. |
+| Router / Provider | `AiConfig` | env vars — see below |
+| Policies | `PolicyRegistry.setForTenant()` | runtime (future admin UI) |
+| Budgets | `BudgetManager` | `DEFAULT_BUDGET_CONFIG` today; runtime override supported |
+| Health | `ModelHealthMonitor` | `DEFAULT_HEALTH_CONFIG` + `.configure()` |
+| Cache | `ResponseCache` + `CACHE_POLICIES` | per-request opt-in |
+| Prompts | `PromptManager.register()` | code today; versioned + locale-aware |
+| Rate limits | `AI_RATE_RPM/TPM/CONCURRENT` | env |
 
-## Routing (automatic)
+### Environment variables (Phase 1 remain valid)
 
-`utils/router.ts::pickTier(message, hint?)`:
+`OPENROUTER_API_KEY` (required), `OPENROUTER_BASE_URL`, `AI_APP_NAME`,
+`AI_APP_REFERER`, `AI_DEFAULT_PROVIDER`, `AI_ENABLE_STREAMING`,
+`AI_TIMEOUT`, `AI_MAX_RETRIES`, `AI_TEMPERATURE`, `AI_MAX_TOKENS`,
+`AI_RATE_RPM`, `AI_RATE_TPM`, `AI_RATE_CONCURRENT`, `APP_VERSION`.
 
-- `>800` chars → `premium`
-- keyword match (`analyze`, `refactor`, `architecture`, `حلّل`, `تحليل`, …) → `premium`
-- ≤ 40 chars → `small`
-- otherwise → `medium`
+## Routing flow
 
-Each tier has an ordered model list in `config/ai.config.ts::DEFAULT_TIERS`.
-Cheapest first. Editable without touching code (env-overrideable in future).
+1. **Classifier** (`classifier/request-classifier.ts`) returns a `RequestKind` + suggested tier + confidence.
+2. **Legacy heuristic** (`utils/router.ts`) still runs — if it says `premium`, we never downgrade below premium (defensive: it's tuned for known cases).
+3. **PolicyRegistry** vetoes: over-size prompts, disabled models, allow-list mismatches.
+4. **BudgetManager** may downgrade tier (soft) or deny (hard).
+5. **HealthMonitor** picks the healthiest model in the tier's ordered candidate list.
+6. **Provider** attempts model 1 → on failure, next candidate.
 
-## Fallback
+Rules the router follows are **data**, not code — swap `DEFAULT_TIERS` or `defaultTierFor()` without touching the service.
 
-`ai.service.ts::chat()` and `chatStream()`:
+## Budget flow
 
-1. Ask the router for the tier's model list.
-2. Try model #1 with the configured provider.
-3. On `AiError` other than `unauthorized` / `rate-limit`, move to the
-   next model in the list.
-4. If every model fails, throw the last error (mapped to a friendly
-   HTTP status by the controller).
+- Every USD spend from a successful completion is recorded in three
+  scopes: tenant, user, workspace (when present).
+- Every new request calls `budget.check()` — the strictest scope wins.
+- Crossing 80% of any soft limit triggers a WARNING event (once per
+  window). Listeners can send email/slack/telegram; Phase 1 just logs.
+- Hard limit → request rejected with `AiError('rate-limit')` → 429.
 
-`unauthorized` and `rate-limit` short-circuit — there's no value
-retrying if the key is wrong or the account is throttled.
+## Health monitoring
+
+- Sliding window of last N observations per model.
+- Errors + timeouts contribute to `errorRate`; latency EWMA is
+  updated per success.
+- Once `errorRate ≥ 0.5` after `minObservations`, the model is
+  **quarantined** for 5 min. `pick()` skips quarantined models.
+- Recovery: any successful call clears quarantine after its window.
+
+## Tool execution
+
+- **Registry** (`tools/tool-registry.ts`) is the only place tools are registered. Modules add tools at bootstrap.
+- **Executor** is the only code that runs a tool. It:
+  - looks up the tool,
+  - checks RBAC via **PermissionGate**,
+  - validates JSON-Schema `required` fields (lightweight),
+  - runs the handler,
+  - normalizes any throw into a safe `ToolResult`.
+- **The AI never touches Prisma / SQL directly.** All data reads/writes
+  in Phase 2 will come from registered tools invoked through the
+  Executor.
+
+## Permission flow
+
+`AiContext.role` (from JWT) → `DefaultPermissionGate.allows(ctx, required)`:
+
+- `admin:*` slugs require role = `ADMIN`
+- `manager:*` slugs require `ADMIN` or `MANAGER`
+- everything else = allowed for any authenticated user
+
+Swap for a fine-grained per-slug matrix by replacing `DefaultPermissionGate` — the AI code doesn't change.
+
+## Caching
+
+- Opt-in per request via `ctx.cache = { policy: 'companyInfo' }`.
+- Never cache anything user-mutable (invoices, payroll, auth, orders).
+- Named policies with TTLs live in `CACHE_POLICIES`:
+  - `companyInfo` — 24h
+  - `staticLookup` — 1h
+  - `dashboard` — 5 min
+  - `help` — 24h
+- Key includes `tenantId + policyName + hash(message)` — same message from any user in the same tenant reuses.
+
+## Provider layer
+
+Only `AiProvider` in `types/ai.types.ts` is public. Everything else
+(OpenRouter, future OpenAI, Anthropic, Gemini, Azure, Ollama, LM Studio,
+vLLM) implements the interface. To add a provider:
+
+1. Create `providers/<name>.provider.ts` implementing `AiProvider`.
+2. Register it in `AiService.onModuleInit()`.
+3. Set `AI_DEFAULT_PROVIDER=<name>` or extend the router to pick per-request.
+4. No ERP code changes.
+
+## Future MCP integration
+
+`mcp/mcp-adapter.ts` already renders the tool registry into MCP
+descriptors and bridges MCP calls into the ToolExecutor. When we
+install `@modelcontextprotocol/sdk` (Phase 2), a thin `mcp-server.ts`
+will wire this adapter — nothing else needs to change.
 
 ## Logging
 
-Every completed / failed request is inserted into `AiRequestLog`
-(Prisma model + migration `20260723190000_ai_request_log`):
+Every request writes one row to `AiRequestLog`:
+`tenantId · userId · conversationId · requestId · workspace · tier ·
+provider · model · promptTokens · completionTokens · totalTokens ·
+costUsd · latencyMs · success · retryCount · errorMessage · startedAt ·
+finishedAt`. **Never** stores prompt text, response text, or the API key.
 
-- `tenantId`, `userId`, `conversationId`, `requestId`
-- `workspace`, `tier`, `provider`, `model`
-- `promptTokens`, `completionTokens`, `totalTokens`, `costUsd`
-- `latencyMs`, `success`, `retryCount`, `errorMessage`
-- `startedAt`, `finishedAt`
+## Constraints respected
 
-**Never stored**: the prompt, the response, the API key, request/response bodies.
-Enough to build cost + usage dashboards in Phase 2 without leaking PII.
+- No ERP module (Inventory, Production, Customers, Accounting,
+  Invoices, Reports, Employees, Suppliers, Warehouses) is wired to
+  the AI in Phase 1.
+- FE still talks only to `/api/ai/*`.
+- Backward compatibility with the Phase 1 API preserved.
 
-## Streaming implementation
+## Phase 2 (deliberately deferred)
 
-- OpenRouter's SSE frames are `data: {...}\n\n` lines terminated by `data: [DONE]`.
-- The provider parses them into `AiStreamChunk` yields.
-- The controller re-emits them as three named SSE events (`delta` / `done` / `error`)
-  so the FE can react ergonomically.
-
-## Error handling
-
-Every failure surfaces as an `AiError` with a `kind`:
-
-| Kind | HTTP | User message |
-|---|---|---|
-| `timeout` | 504 | انتهت مهلة الطلب |
-| `rate-limit` | 429 | تم تجاوز الحد المسموح |
-| `unauthorized` | 503 | الخدمة غير مُهيّأة (opaque to end user) |
-| `provider-unavailable` | 503 | المزوّد غير متاح مؤقتاً |
-| `invalid-response` | 502 | استجابة غير صالحة |
-| `unknown` | 500 | خطأ داخلي |
-
-## Adding a new provider
-
-1. Create `providers/<name>.provider.ts` implementing `AiProvider`.
-2. Register it in `AiService.onModuleInit()` (`this.providers.set(name, instance)`).
-3. Set `AI_DEFAULT_PROVIDER=<name>` in env (or add a router that picks per-request).
-4. No changes needed anywhere else in the ERP.
-
-## Frontend
-
-`apps/web/app/ai/page.tsx` — the `/ai` route. Streams via `fetch()` +
-`ReadableStream` reader, renders SSE frames incrementally. Falls back
-to a single-shot render if streaming is off. Provider readiness probed
-via `GET /api/ai/status`.
-
-## Phase 2 (not in this commit)
-
-- Persist conversation history + attach relevant ERP context per workspace.
+- Register real tools (`inventory.stockOf`, `production.summary`, `invoices.list`, …).
+- Implement `ConversationMemory` and `ErpContextMemory` on Postgres.
+- Wire an MCP server on top of `mcp-adapter.ts`.
 - Cost/usage dashboards over `AiRequestLog`.
-- Per-role budgets + hard quotas.
-- Feature-specific AI helpers (invoice-line describer, waste-anomaly
-  explainer, procurement suggestions, etc.) that reuse `AiService`.
+- Admin UI for per-tenant policies + budgets.
