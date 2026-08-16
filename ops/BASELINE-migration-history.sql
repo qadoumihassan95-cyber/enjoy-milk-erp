@@ -1,4 +1,15 @@
 -- =====================================================================
+--  ⚠ SUPERSEDED — DO NOT RUN. Use ops/REPAIR-migration-history.sql.
+-- =====================================================================
+--  This script assumed it would run BEFORE the first `migrate deploy`.
+--  It didn't: 8f863ee reached production first, `migrate deploy` applied
+--  and part-failed the three migrations itself, and `prisma migrate
+--  resolve` was used to recover. The live history therefore no longer
+--  matches this script's preconditions.
+--
+--  ops/REPAIR-migration-history.sql handles the state that actually
+--  exists. Kept here only as a record of what was originally prepared.
+-- =====================================================================
 --  BASELINE the Prisma migration history — run ONCE, BEFORE deploying
 --  the first image that uses `prisma migrate deploy`.
 -- =====================================================================

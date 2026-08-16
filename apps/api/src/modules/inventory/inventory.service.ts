@@ -359,6 +359,92 @@ export class InventoryService {
     });
   }
 
+  /**
+   * ─── Keep PurchaseBatch (FIFO) in step with a StockLevel adjustment ──
+   *
+   * WHY (incident 2026-08-16)
+   * -------------------------
+   * `adjustStock` used to move StockLevel only. FIFO consumption reads
+   * PurchaseBatch.remaining, so every ADD/COUNT-increase created stock that
+   * production and sales could never consume: the balance screen showed
+   * 40,000 raw milk while `fifo.consumeForProduction` reported 0 available
+   * and rejected the posting. StockLevel and the batch ledger have to move
+   * together or the two disagree forever.
+   *
+   * Positive delta → open a batch for exactly the added quantity.
+   * Negative delta → retire the oldest batches for exactly the removed
+   *                  quantity, so Σ remaining tracks the balance down too.
+   *
+   * This does NOT bypass any FIFO check. Production and sales still consume
+   * through fifo.* and still reject genuine shortages; we are only making
+   * sure an adjustment is represented in both ledgers.
+   *
+   * Unit cost precedence: explicit `unitCost` on the request → item.avgCost
+   * → item.costPrice → 0. Callers may supply one; the UI is unchanged and
+   * simply omits it.
+   */
+  private async syncFifoForAdjustment(
+    tx: any,
+    tenantId: string,
+    itemId: string,
+    delta: number,
+    opts: { unitCost?: number | string | null; userId?: string; reason?: string },
+  ) {
+    if (!delta) return;
+
+    if (delta > 0) {
+      const item = await tx.item.findUnique({ where: { id: itemId } });
+      const explicit =
+        opts.unitCost === null || opts.unitCost === undefined || opts.unitCost === ''
+          ? null
+          : Number(opts.unitCost);
+      const unitCost =
+        explicit !== null && Number.isFinite(explicit) && explicit >= 0
+          ? explicit
+          : Number(item?.avgCost ?? item?.costPrice ?? 0);
+
+      await tx.purchaseBatch.create({
+        data: {
+          tenantId,
+          itemId,
+          batchNumber: null,
+          purchaseDate: new Date(),
+          quantity: new Prisma.Decimal(delta),
+          remaining: new Prisma.Decimal(delta),
+          unitCost: new Prisma.Decimal(unitCost),
+          sourceType: 'ADJUSTMENT',
+          createdById: opts.userId ?? null,
+        },
+      });
+      return;
+    }
+
+    // delta < 0 — retire oldest batches first.
+    let need = Math.abs(delta);
+    const batches = await tx.purchaseBatch.findMany({
+      where: { tenantId, itemId, remaining: { gt: 0 } },
+      orderBy: [{ purchaseDate: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    for (const b of batches) {
+      if (need <= 0) break;
+      const avail = Number(b.remaining);
+      const take = Math.min(avail, need);
+      await tx.purchaseBatch.update({
+        where: { id: b.id },
+        data: { remaining: new Prisma.Decimal(avail - take) },
+      });
+      need -= take;
+    }
+
+    // `need > 0` means the batch ledger under-covered this item before the
+    // adjustment — historical stock that predates FIFO tracking. We do NOT
+    // throw: whether the deduction is permitted is already decided by the
+    // StockLevel guard above, and refusing a routine correction because of
+    // a legacy gap would block real work. The shortfall is pre-existing and
+    // is what ops/opening-stock-batch-backfill.sql exists to close.
+  }
+
   private async upsertStockLevel(
     tx: any,
     tenantId: string,
@@ -786,6 +872,15 @@ export class InventoryService {
       // حدّث الرصيد
       await this.upsertStockLevel(tx, tenantId, data.itemId, data.warehouseId, null, delta);
       const after = before + delta;
+
+      // ─── مزامنة دفعات FIFO مع التعديل ──────────────────────────────
+      // بدون هذه الخطوة يزيد StockLevel بينما تبقى PurchaseBatch كما هي،
+      // فيظهر رصيد لا يستطيع الإنتاج ولا البيع استهلاكه (حادثة 2026-08-16).
+      await this.syncFifoForAdjustment(tx, tenantId, data.itemId, delta, {
+        unitCost: data.unitCost,
+        userId,
+        reason: data.reason,
+      });
 
       // سجّل StockMovement
       await tx.stockMovement.create({

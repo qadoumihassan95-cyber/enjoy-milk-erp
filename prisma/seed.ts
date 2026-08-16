@@ -49,24 +49,38 @@ async function main() {
   }
 
   // ── Warehouses ──────────────────────────────────
+  // SINGLE-WAREHOUSE MODEL: the factory operates from MAIN. The legacy
+  // codes are still provisioned (historical StockMovement rows reference
+  // them) but INACTIVE — matching the state that
+  // 20260814170000_single_warehouse_consolidation leaves on an existing
+  // database, so a fresh install and production agree.
+  //
+  // `update: {}` means an already-provisioned warehouse is NEVER
+  // modified. In particular a deactivated legacy warehouse is never
+  // resurrected, and MAIN is never renamed.
   const warehouses = [
-    { code: 'BULK', name: 'مستودع البودرة المستوردة', type: 'POWDER_BULK' },
-    { code: 'PKG', name: 'مستودع التغليف', type: 'PACKAGING' },
-    { code: 'FIN', name: 'مستودع المنتج النهائي', type: 'FINISHED_GOODS' },
-    { code: 'QHL', name: 'حجر صحي', type: 'QUARANTINE' },
+    { code: 'MAIN', name: 'المخزن الرئيسي', type: 'GENERAL', active: true },
+    { code: 'BULK', name: 'مستودع البودرة المستوردة', type: 'POWDER_BULK', active: false },
+    { code: 'PKG', name: 'مستودع التغليف', type: 'PACKAGING', active: false },
+    { code: 'FIN', name: 'مستودع المنتج النهائي', type: 'FINISHED_GOODS', active: false },
+    { code: 'QHL', name: 'حجر صحي', type: 'QUARANTINE', active: false },
   ];
 
   for (const w of warehouses) {
     await prisma.warehouse.upsert({
       where: { tenantId_code: { tenantId: tenant.id, code: w.code } },
       update: {},
-      create: { tenantId: tenant.id, code: w.code, name: w.name, type: w.type as any },
+      create: {
+        tenantId: tenant.id,
+        code: w.code,
+        name: w.name,
+        type: w.type as any,
+        active: w.active,
+      },
     });
   }
 
-  const bulkWh = await prisma.warehouse.findFirst({ where: { tenantId: tenant.id, code: 'BULK' } });
-  const finWh = await prisma.warehouse.findFirst({ where: { tenantId: tenant.id, code: 'FIN' } });
-  const pkgWh = await prisma.warehouse.findFirst({ where: { tenantId: tenant.id, code: 'PKG' } });
+  const mainWh = await prisma.warehouse.findFirst({ where: { tenantId: tenant.id, code: 'MAIN' } });
 
   // ── Items ───────────────────────────────────────
   // المخزون الخام: حليب + كرتون + ألمنيوم
@@ -206,82 +220,70 @@ async function main() {
     });
   }
 
-  // ── Initial Stock ───────────────────────────────
-  const rawMilk200 = await prisma.item.findFirst({ where: { sku: 'RAW-MILK-200' } });
-  const rawMilk500 = await prisma.item.findFirst({ where: { sku: 'RAW-MILK-500' } });
-  const sachet250 = await prisma.item.findFirst({ where: { sku: 'CTN-24' } });
-  const carton24 = await prisma.item.findFirst({ where: { sku: 'CTN-12' } });
-  const tin1kg = await prisma.item.findFirst({ where: { sku: 'ALU-200' } });
+  // ── Initial Stock (DEMO ONLY — never touches real data) ──────────
+  //
+  // WHY THIS IS GUARDED (incident 2026-08-16)
+  // -----------------------------------------
+  // This block used to run `stockLevel.upsert({ update: { quantity: N } })`
+  // on every container start. The API's start command runs the seed on
+  // EVERY boot, so each deploy silently rewrote five items' balances back
+  // to demo constants, destroying real counted stock with no StockMovement
+  // and no audit trail.
+  //
+  // The seed now only plants demo stock when the tenant has NO inventory
+  // history whatsoever — no StockLevel rows AND no StockMovement rows.
+  // On any database that has ever held real stock this is a no-op, so a
+  // restart or redeploy can never change a balance.
+  const existingStockLevels = await prisma.stockLevel.count({ where: { tenantId: tenant.id } });
+  const existingMovements = await prisma.stockMovement.count({ where: { tenantId: tenant.id } });
+  const inventoryIsVirgin = existingStockLevels === 0 && existingMovements === 0;
 
-  if (rawMilk200 && bulkWh) {
-    await prisma.stockLevel.upsert({
-      where: {
-        itemId_warehouseId_batchId: {
-          itemId: rawMilk200.id, warehouseId: bulkWh.id, batchId: null as any,
+  if (!inventoryIsVirgin) {
+    console.log(
+      `[seed] Inventory already exists (${existingStockLevels} stock levels, ` +
+      `${existingMovements} movements) — skipping demo stock. Real balances preserved.`,
+    );
+  } else if (!mainWh) {
+    console.log('[seed] MAIN warehouse missing — skipping demo stock.');
+  } else {
+    const demoStock: Array<{ sku: string; qty: number; unitCost: number }> = [
+      { sku: 'RAW-MILK-200', qty: 2000,  unitCost: 1 },
+      { sku: 'RAW-MILK-500', qty: 1500,  unitCost: 1 },
+      { sku: 'CTN-24',       qty: 10000, unitCost: 1 },
+      { sku: 'CTN-12',       qty: 500,   unitCost: 1 },
+      { sku: 'ALU-200',      qty: 2000,  unitCost: 1 },
+    ];
+
+    for (const d of demoStock) {
+      const item = await prisma.item.findFirst({ where: { tenantId: tenant.id, sku: d.sku } });
+      if (!item) continue;
+
+      // StockLevel and PurchaseBatch are created TOGETHER. Stock with no
+      // backing batch is invisible to FIFO, so production and sales would
+      // reject it as "insufficient" even though the balance looks fine.
+      await prisma.stockLevel.create({
+        data: {
+          tenantId: tenant.id,
+          itemId: item.id,
+          warehouseId: mainWh.id,
+          quantity: new Prisma.Decimal(d.qty),
         },
-      } as any,
-      update: { quantity: new Prisma.Decimal(2000) },
-      create: {
-        tenantId: tenant.id, itemId: rawMilk200.id, warehouseId: bulkWh.id,
-        quantity: new Prisma.Decimal(2000),
-      },
-    }).catch(() => {});
-  }
-  if (rawMilk500 && bulkWh) {
-    await prisma.stockLevel.upsert({
-      where: {
-        itemId_warehouseId_batchId: {
-          itemId: rawMilk500.id, warehouseId: bulkWh.id, batchId: null as any,
+      });
+
+      await prisma.purchaseBatch.create({
+        data: {
+          tenantId: tenant.id,
+          itemId: item.id,
+          batchNumber: null,
+          purchaseDate: new Date('2020-01-01T00:00:00Z'), // sorts first under FIFO
+          quantity: new Prisma.Decimal(d.qty),
+          remaining: new Prisma.Decimal(d.qty),
+          unitCost: new Prisma.Decimal(item.costPrice ?? d.unitCost),
+          sourceType: 'OPENING_BALANCE',
         },
-      } as any,
-      update: { quantity: new Prisma.Decimal(1500) },
-      create: {
-        tenantId: tenant.id, itemId: rawMilk500.id, warehouseId: bulkWh.id,
-        quantity: new Prisma.Decimal(1500),
-      },
-    }).catch(() => {});
-  }
-  if (sachet250 && pkgWh) {
-    await prisma.stockLevel.upsert({
-      where: {
-        itemId_warehouseId_batchId: {
-          itemId: sachet250.id, warehouseId: pkgWh.id, batchId: null as any,
-        },
-      } as any,
-      update: { quantity: new Prisma.Decimal(10000) },
-      create: {
-        tenantId: tenant.id, itemId: sachet250.id, warehouseId: pkgWh.id,
-        quantity: new Prisma.Decimal(10000),
-      },
-    }).catch(() => {});
-  }
-  if (carton24 && pkgWh) {
-    await prisma.stockLevel.upsert({
-      where: {
-        itemId_warehouseId_batchId: {
-          itemId: carton24.id, warehouseId: pkgWh.id, batchId: null as any,
-        },
-      } as any,
-      update: { quantity: new Prisma.Decimal(500) },
-      create: {
-        tenantId: tenant.id, itemId: carton24.id, warehouseId: pkgWh.id,
-        quantity: new Prisma.Decimal(500),
-      },
-    }).catch(() => {});
-  }
-  if (tin1kg && pkgWh) {
-    await prisma.stockLevel.upsert({
-      where: {
-        itemId_warehouseId_batchId: {
-          itemId: tin1kg.id, warehouseId: pkgWh.id, batchId: null as any,
-        },
-      } as any,
-      update: { quantity: new Prisma.Decimal(2000) },
-      create: {
-        tenantId: tenant.id, itemId: tin1kg.id, warehouseId: pkgWh.id,
-        quantity: new Prisma.Decimal(2000),
-      },
-    }).catch(() => {});
+      });
+    }
+    console.log(`[seed] Empty database — planted ${demoStock.length} demo stock rows in MAIN.`);
   }
 
   // ── Production Lines & Machines ──────────────────
