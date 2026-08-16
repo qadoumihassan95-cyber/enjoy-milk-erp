@@ -299,13 +299,9 @@ export class InventoryService {
       where: { tenantId, code: 'MAIN' },
     });
     if (wh) return wh;
-    // 2) fallback: خذ أول مخزن موجود واعتبره الرئيسي
-    wh = await this.prisma.warehouse.findFirst({
-      where: { tenantId, active: true },
-      orderBy: { createdAt: 'asc' },
-    });
-    if (wh) return wh;
-    // 3) لا يوجد أي مخزن — أنشئ MAIN
+    // 2) MAIN غير موجود — أنشئه. لا نتبنّى مخزناً قديماً (BULK/FIN/PKG)
+    //    لأن ذلك يربط الكتابة بمخزن لا يحمل الرصيد فعلياً بينما الواجهة
+    //    تجمع عبر كل المخازن → أرقام خاطئة بصمت (حادثة 2026-08-16).
     return this.prisma.warehouse.create({
       data: {
         tenantId,

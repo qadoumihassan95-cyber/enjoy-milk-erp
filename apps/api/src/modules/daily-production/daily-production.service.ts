@@ -294,26 +294,6 @@ export class DailyProductionService {
       );
     }
 
-    // ─── DB-LEVEL DOUBLE-POST GUARD (G4) ──────────────────────────
-    // Two concurrent /post requests can race between the read above
-    // and the write inside the $transaction. We atomically flip the
-    // status via updateMany with a WHERE clause on the current status.
-    // Only ONE call gets count===1; every other concurrent call gets
-    // count===0 and we throw before any inventory side-effect runs.
-    // This is the strongest guarantee we can give without adding
-    // Postgres advisory locks (which would require a raw query).
-    const claim = await this.prisma.dailyProduction.updateMany({
-      where: { id, tenantId, status: 'DRAFT' },
-      data: { status: 'POSTING' as any, postedAt: new Date(), postedById: userId },
-    });
-    if (claim.count !== 1) {
-      // Somebody else won the race. Re-read to give a precise error.
-      const now = await this.prisma.dailyProduction.findFirst({ where: { id, tenantId } });
-      throw new BadRequestException(
-        `لا يمكن الترحيل — الحالة الحالية: ${now?.status ?? 'unknown'}`,
-      );
-    }
-
     // Resolve the SINGLE operational warehouse. If MAIN doesn't exist
     // yet (fresh tenant), it is auto-created — matches the /inventory
     // receive/adjust behaviour and guarantees the two modules always
@@ -336,6 +316,32 @@ export class DailyProductionService {
     };
 
     return this.prisma.$transaction(async (tx) => {
+      // ─── DB-LEVEL DOUBLE-POST GUARD (G4) ────────────────────────
+      // Two concurrent /post requests can race between the read above and
+      // the writes below. We atomically claim the sheet with an updateMany
+      // whose WHERE pins the current status. Only ONE caller gets
+      // count===1; a concurrent caller blocks on the row lock until this
+      // transaction ends, then re-evaluates the WHERE and gets count===0.
+      //
+      // THIS MUST STAY INSIDE THE TRANSACTION (incident 2026-08-16).
+      // It previously ran on this.prisma before $transaction opened, so it
+      // committed on its own. Any later failure — an insufficient-stock
+      // BadRequest, a FIFO shortage — rolled back the inventory work but
+      // LEFT status='POSTING' committed. The sheet then became permanently
+      // unpostable: every retry matched neither DRAFT nor POSTED and threw
+      // "لا يمكن الترحيل — الحالة الحالية: POSTING". Exactly one live sheet
+      // (cmsvrcm590014z0puc21wmt28) was stranded this way.
+      const claim = await tx.dailyProduction.updateMany({
+        where: { id, tenantId, status: 'DRAFT' },
+        data: { status: 'POSTING' as any, postedAt: new Date(), postedById: userId },
+      });
+      if (claim.count !== 1) {
+        const now = await tx.dailyProduction.findFirst({ where: { id, tenantId } });
+        throw new BadRequestException(
+          `لا يمكن الترحيل — الحالة الحالية: ${now?.status ?? 'unknown'}`,
+        );
+      }
+
       // ─── خصم الكرتون ───
       for (const c of dp.cartonUsage) {
         requireItem(c, 'كرتون');
@@ -941,14 +947,22 @@ export class DailyProductionService {
    * from posting production. Mirrors InventoryService.resolveMainWarehouse
    * so the two modules always converge on the same warehouse.
    */
+  /**
+   * Resolve the single operational warehouse (code=MAIN), creating it if
+   * absent.
+   *
+   * NOTE (incident 2026-08-16): this used to fall back to the OLDEST
+   * ACTIVE warehouse when MAIN was missing. On a database where the
+   * single-warehouse consolidation had not run, that silently bound every
+   * write to a legacy warehouse (BULK) while the UI kept summing across
+   * all warehouses — wrong adjustment arithmetic, production decrementing
+   * a warehouse that held none of the stock, and no error anywhere. A
+   * missing MAIN must never be papered over with an arbitrary warehouse:
+   * we create the real thing instead.
+   */
   private async resolveMainWarehouse(tenantId: string) {
-    let wh = await this.prisma.warehouse.findFirst({
+    const wh = await this.prisma.warehouse.findFirst({
       where: { tenantId, code: 'MAIN' },
-    });
-    if (wh) return wh;
-    wh = await this.prisma.warehouse.findFirst({
-      where: { tenantId, active: true },
-      orderBy: { createdAt: 'asc' },
     });
     if (wh) return wh;
     return this.prisma.warehouse.create({

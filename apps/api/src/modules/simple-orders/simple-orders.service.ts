@@ -767,13 +767,11 @@ export class SimpleOrdersService {
    * so all three converge on the same warehouse row.
    */
   private async resolveMainWarehouse(tx: any, tenantId: string) {
-    let wh = await tx.warehouse.findFirst({ where: { tenantId, code: 'MAIN' } });
+    const wh = await tx.warehouse.findFirst({ where: { tenantId, code: 'MAIN' } });
     if (wh) return wh;
-    wh = await tx.warehouse.findFirst({
-      where: { tenantId, active: true },
-      orderBy: { createdAt: 'asc' },
-    });
-    if (wh) return wh;
+    // No legacy-warehouse fallback — adopting BULK/FIN/PKG when MAIN is
+    // absent silently binds writes to a warehouse that holds none of the
+    // balance (incident 2026-08-16). Create the real MAIN instead.
     return tx.warehouse.create({
       data: { tenantId, code: 'MAIN', name: 'المخزن الرئيسي', type: 'GENERAL' },
     });
