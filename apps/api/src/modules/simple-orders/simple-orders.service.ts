@@ -30,26 +30,46 @@ export class SimpleOrdersService {
   // ─── List ─────────────────────────────────────────
   async list(
     tenantId: string,
-    opts: { status?: string; search?: string; orderType?: string } = {},
+    opts: {
+      status?: string;
+      search?: string;
+      orderType?: string;
+      from?: string;
+      to?: string;
+      excludeCancelled?: boolean;
+      limit?: number;
+    } = {},
   ) {
+    const where: any = { tenantId };
+    if (opts.status)      where.status    = opts.status;
+    if (opts.orderType)   where.orderType = opts.orderType;
+    if (opts.excludeCancelled) where.status = { not: 'CANCELLED' };
+    if (opts.from || opts.to) {
+      where.orderDate = {};
+      if (opts.from) where.orderDate.gte = new Date(opts.from);
+      if (opts.to) {
+        const t = new Date(opts.to); t.setDate(t.getDate() + 1);
+        where.orderDate.lt = t;
+      }
+    }
+    if (opts.search) {
+      where.OR = [
+        { customerName: { contains: opts.search, mode: 'insensitive' } },
+        { customerPhone: { contains: opts.search } },
+        { number: { contains: opts.search } },
+        { contractNumber: { contains: opts.search, mode: 'insensitive' } },
+        { shipmentTrackingNumber: { contains: opts.search, mode: 'insensitive' } },
+      ];
+    }
+    // Reports pass an explicit limit (or 0 for "all"). Interactive list
+    // pages get a paged default. Never truncate silently.
+    const take =
+      opts.limit === undefined ? 200 : opts.limit <= 0 ? undefined : opts.limit;
     return this.prisma.simpleOrder.findMany({
-      where: {
-        tenantId,
-        ...(opts.status && { status: opts.status }),
-        ...(opts.orderType && { orderType: opts.orderType }),
-        ...(opts.search && {
-          OR: [
-            { customerName: { contains: opts.search, mode: 'insensitive' } },
-            { customerPhone: { contains: opts.search } },
-            { number: { contains: opts.search } },
-            { contractNumber: { contains: opts.search, mode: 'insensitive' } },
-            { shipmentTrackingNumber: { contains: opts.search, mode: 'insensitive' } },
-          ],
-        }),
-      },
+      where,
       include: { lines: true },
       orderBy: { orderDate: 'desc' },
-      take: 200,
+      ...(take !== undefined && { take }),
     });
   }
 
@@ -171,11 +191,14 @@ export class SimpleOrdersService {
       });
 
       // خصم المخزون فوراً للمنتجات المرتبطة بـ item + احتساب FIFO
-      const finWh = await tx.warehouse.findFirst({
-        where: { tenantId, code: 'FIN' },
-      });
+      // Single-warehouse model — resolve MAIN (or the tenant's oldest
+      // active warehouse, or create MAIN). NEVER silently skip when a
+      // legacy code doesn't exist — that was the root cause of sales
+      // succeeding without any StockMovement being written on freshly
+      // provisioned tenants.
+      const finWh = await this.resolveMainWarehouse(tx, tenantId);
       for (const line of order.lines) {
-        if (line.itemId && finWh) {
+        if (line.itemId) {
           await this.deductStock(
             tx,
             tenantId,
@@ -198,22 +221,27 @@ export class SimpleOrdersService {
             },
           });
 
-          // ─── FIFO: توزيع التكلفة على أقدم الدفعات (best-effort) ─
-          try {
-            await this.fifo.consumeForSale(
-              tenantId,
-              {
-                saleOrderId: order.id,
-                saleLineId: line.id,
-                itemId: line.itemId,
-                quantity: Number(line.quantity),
-              },
-              tx,
-            );
-          } catch {
-            /* لا توجد دفعات كافية بعد — نتجاهل بأمان،
-               التوزيع يمكن أن يُنفَّذ لاحقاً عند إضافة دفعات مطابقة */
-          }
+          // ─── FIFO consumption — MUST propagate on failure (G5) ─
+          // Previous behaviour silently swallowed failures, letting
+          // sales close with COGS=0 whenever no batches existed. That
+          // masked real problems (missing opening-stock batches,
+          // stock drift, race conditions). Now every FIFO error rolls
+          // back the whole transaction — the operator sees a clear
+          // Arabic error and can act.
+          //
+          // If a legitimate opening-stock item has no batches, run
+          // ops/opening-stock-batch-backfill.sql to create batches
+          // from current StockLevel + item.avgCost.
+          await this.fifo.consumeForSale(
+            tenantId,
+            {
+              saleOrderId: order.id,
+              saleLineId: line.id,
+              itemId: line.itemId,
+              quantity: Number(line.quantity),
+            },
+            tx,
+          );
         }
       }
 
@@ -229,12 +257,23 @@ export class SimpleOrdersService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      // 1) أرجع المخزون من البنود القديمة
-      const finWh = await tx.warehouse.findFirst({
-        where: { tenantId, code: 'FIN' },
-      });
+      // ─── 1) FULL REVERSAL of the old lines ─────────────────────
+      //   a. Reverse every FIFO SaleCostAllocation booked at create
+      //      time. Skipping this leaves orphan allocations that inflate
+      //      subsequent COGS reports and pretend batches were consumed
+      //      that in fact are still available.
+      //   b. Adjust the StockLevel back up (into MAIN — see rationale
+      //      in resolveMainWarehouse).
+      //   c. Write a StockMovement RETURN for the restoration so the
+      //      ledger stays reconcilable with StockLevel.
+      const finWh = await this.resolveMainWarehouse(tx, tenantId);
+
+      // reverseForSale is safe to call even when no allocations exist —
+      // it just deletes zero rows. No silent swallow needed.
+      await this.fifo.reverseForSale(tenantId, id, tx);
+
       for (const line of existing.lines) {
-        if (line.itemId && finWh) {
+        if (line.itemId) {
           await this.adjustStock(
             tx,
             tenantId,
@@ -242,6 +281,20 @@ export class SimpleOrdersService {
             finWh.id,
             Number(line.quantity),
           );
+          await tx.stockMovement.create({
+            data: {
+              tenantId,
+              type: 'RETURN',
+              itemId: line.itemId,
+              toWarehouseId: finWh.id,
+              quantity: line.quantity,
+              reasonCode: 'ORDER_EDIT_REVERSAL',
+              refType: 'SimpleOrder',
+              refId: id,
+              notes: `إرجاع بند قديم عند تعديل الطلبية ${existing.number}`,
+              performedById: userId,
+            },
+          });
         }
       }
 
@@ -268,7 +321,11 @@ export class SimpleOrdersService {
       for (let i = 0; i < newLines.length; i++) {
         const l = newLines[i];
         const c = computed[i];
-        await tx.simpleOrderLine.create({
+        // Capture the returned row so we can pass its stable `id` to
+        // fifo.consumeForSale — SimpleOrderLine has no createdAt field
+        // in this schema, so a post-hoc lookup by (orderId, itemId, qty)
+        // is fragile when two lines carry identical values.
+        const createdLine = await tx.simpleOrderLine.create({
           data: {
             orderId: id,
             itemId: l.itemId ?? null,
@@ -282,7 +339,7 @@ export class SimpleOrdersService {
           },
         });
 
-        if (l.itemId && finWh) {
+        if (l.itemId) {
           await this.deductStock(
             tx,
             tenantId,
@@ -304,6 +361,20 @@ export class SimpleOrdersService {
               performedById: userId,
             },
           });
+
+          // Re-consume FIFO for the NEW line. MUST propagate on failure
+          // — same rationale as create() above (G5). If the batch pool
+          // is insufficient, the whole edit rolls back atomically.
+          await this.fifo.consumeForSale(
+            tenantId,
+            {
+              saleOrderId: id,
+              saleLineId: createdLine.id,
+              itemId: l.itemId,
+              quantity: Number(l.quantity),
+            },
+            tx,
+          );
         }
       }
 
@@ -604,11 +675,14 @@ export class SimpleOrdersService {
 
     return this.prisma.$transaction(async (tx) => {
       // أرجع المخزون لكل البنود
-      const finWh = await tx.warehouse.findFirst({
-        where: { tenantId, code: 'FIN' },
-      });
+      // Single-warehouse model — resolve MAIN (or the tenant's oldest
+      // active warehouse, or create MAIN). NEVER silently skip when a
+      // legacy code doesn't exist — that was the root cause of sales
+      // succeeding without any StockMovement being written on freshly
+      // provisioned tenants.
+      const finWh = await this.resolveMainWarehouse(tx, tenantId);
       for (const line of order.lines) {
-        if (line.itemId && finWh) {
+        if (line.itemId) {
           await this.adjustStock(
             tx,
             tenantId,
@@ -634,11 +708,9 @@ export class SimpleOrdersService {
       }
 
       // ─── FIFO: عكس التوزيع واسترجاع الرصيد إلى الدفعات ───
-      try {
-        await this.fifo.reverseForSale(tenantId, id, tx);
-      } catch {
-        /* لا توجد توزيعات — تجاهل بأمان */
-      }
+      // Safe to call with no allocations (deletes zero rows); real
+      // errors propagate and roll back the transaction (G5).
+      await this.fifo.reverseForSale(tenantId, id, tx);
 
       await tx.simpleOrder.delete({ where: { id } });
       return { ok: true };
@@ -689,6 +761,24 @@ export class SimpleOrdersService {
     return `ORD-${year}-${String(count + 1).padStart(4, '0')}`;
   }
 
+  /**
+   * Resolve the single operational warehouse (code=MAIN). Auto-creates
+   * it on first use. Mirrors InventoryService + DailyProductionService
+   * so all three converge on the same warehouse row.
+   */
+  private async resolveMainWarehouse(tx: any, tenantId: string) {
+    let wh = await tx.warehouse.findFirst({ where: { tenantId, code: 'MAIN' } });
+    if (wh) return wh;
+    wh = await tx.warehouse.findFirst({
+      where: { tenantId, active: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (wh) return wh;
+    return tx.warehouse.create({
+      data: { tenantId, code: 'MAIN', name: 'المخزن الرئيسي', type: 'GENERAL' },
+    });
+  }
+
   private async deductStock(
     tx: any,
     tenantId: string,
@@ -707,6 +797,8 @@ export class SimpleOrdersService {
       });
     }
     // لو ما في stock level — لا نرمي خطأ، فقط نسجل الحركة
+    // (Historical behaviour preserved to avoid breaking legacy orders
+    // that were created before the single-warehouse migration ran.)
   }
 
   private async adjustStock(

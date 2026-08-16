@@ -7,6 +7,7 @@ import { FinanceService } from '../finance/finance.service';
 import { EmployeesService } from '../employees/employees.service';
 import { LicensesService } from '../licenses/licenses.service';
 import { DailyProductionService } from '../daily-production/daily-production.service';
+import { FifoCostingService } from '../fifo/fifo.service';
 
 @Module({
   controllers: [DashboardController],
@@ -21,6 +22,10 @@ import { DailyProductionService } from '../daily-production/daily-production.ser
     EmployeesService,
     LicensesService,
     DailyProductionService,
+    // DailyProductionService gained a FifoCostingService dependency in this
+    // release; DashboardModule declares its own DailyProductionService
+    // provider, so the costing service must be resolvable here too.
+    FifoCostingService,
   ],
 })
 export class DashboardModule {}

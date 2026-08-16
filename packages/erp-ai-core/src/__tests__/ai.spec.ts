@@ -13,11 +13,14 @@
  * a mocked global fetch.
  */
 
-import { loadAiConfig } from './config/ai.config';
-import { OpenRouterProvider } from './providers/openrouter.provider';
-import { pickTier, modelsForTier } from './utils/router';
-import { RateLimiter } from './utils/rate-limiter';
-import { AiError } from './types/ai.types';
+import {
+  loadAiConfig,
+  OpenRouterProvider,
+  pickTier,
+  modelsForTier,
+  RateLimiter,
+  AiError,
+} from '../index';
 
 function mkCfg(overrides: any = {}) {
   const base = loadAiConfig();

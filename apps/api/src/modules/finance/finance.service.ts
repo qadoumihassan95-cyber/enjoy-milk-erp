@@ -300,11 +300,23 @@ export class FinanceService {
         orderDate: { gte: from, lte: to },
         status: { not: 'CANCELLED' },
       },
-      select: { total: true, paid: true, balance: true },
+      select: { total: true, balance: true },
     });
     const totalSales = orders.reduce((s, o) => s + Number(o.total), 0);
-    const collected = orders.reduce((s, o) => s + Number(o.paid), 0);
     const outstanding = orders.reduce((s, o) => s + Number(o.balance), 0);
+
+    // ── التحصيلات: تُحسب من دفعات SimpleOrderPayment ضمن نافذة الدفع ─
+    // (لا نستخدم SimpleOrder.paid المُخزَّن الذي يجمع كل الدفعات حتى الآن
+    //  ثم يُنسَب إلى orderDate — كان ذلك يحسب دفعات هذا الشهر ضمن شهر إصدار
+    //  الطلبية بدلاً من شهر استلام النقد.)
+    const paymentsAgg = await this.prisma.simpleOrderPayment.aggregate({
+      where: {
+        tenantId,
+        createdAt: { gte: from, lte: to },
+      },
+      _sum: { amount: true },
+    });
+    const collected = Number(paymentsAgg._sum.amount ?? 0);
 
     // ── المصاريف حسب التصنيف ──
     const expenses = await this.prisma.expense.findMany({

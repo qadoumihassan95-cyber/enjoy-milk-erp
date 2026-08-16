@@ -56,6 +56,22 @@ export class DailyProductionController {
     return this.service.computeWarehouseBalance(user.tenantId);
   }
 
+  /**
+   * تقرير التكلفة والفاقد — SINGLE SOURCE for /reports Cost & Waste tab.
+   * Reads real raw-material cost from ProductionCostAllocation, waste
+   * quantities from ProductionWaste, produced quantities from
+   * ProductionProducedItem. FE MUST bind to this endpoint instead of
+   * computing on the client.
+   */
+  @Get('report/cost-waste')
+  costWaste(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.service.getCostAndWasteReport(user.tenantId, { from, to });
+  }
+
   @Get(':id')
   get(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.service.getWithBalance(user.tenantId, id);

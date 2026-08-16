@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import { weightedAverageCost } from './costing';
 
 @Injectable()
 export class InventoryService {
@@ -180,21 +181,55 @@ export class InventoryService {
     });
   }
 
+  /**
+   * Update MASTER DATA ONLY. This endpoint MUST NOT create any
+   * StockMovement or StockAdjustment — quantity changes flow through
+   * `adjustStock` (POST /inventory/adjust) so every stock delta has an
+   * explicit reason on the audit trail.
+   *
+   * Field policy: only touch what the caller sent. Any field the caller
+   * left `undefined` is preserved as-is (no silent nulling). Decimal
+   * fields accept null/empty-string to explicitly clear, otherwise are
+   * coerced through `Prisma.Decimal`.
+   */
   async updateItem(tenantId: string, id: string, data: any) {
     await this.getItem(tenantId, id);
+    const dec = (v: any) =>
+      v === undefined ? undefined
+      : v === null || v === '' ? null
+      : new Prisma.Decimal(v);
+    const int = (v: any) =>
+      v === undefined ? undefined
+      : v === null || v === '' ? null
+      : Number(v);
+    const str = (v: any) =>
+      v === undefined ? undefined
+      : v === null || v === '' ? null
+      : String(v).trim();
+
     return this.prisma.item.update({
       where: { id },
       data: {
-        name: data.name,
-        barcode: data.barcode,
-        unit: data.unit,
-        netWeightGrams: data.netWeightGrams,
-        packagingFormat: data.packagingFormat,
-        packsPerCarton: data.packsPerCarton,
-        shelfLifeDays: data.shelfLifeDays,
-        reorderLevel: data.reorderLevel ? new Prisma.Decimal(data.reorderLevel) : null,
-        costPrice: data.costPrice ? new Prisma.Decimal(data.costPrice) : null,
-        sellPrice: data.sellPrice ? new Prisma.Decimal(data.sellPrice) : null,
+        name: data.name !== undefined ? String(data.name).trim() : undefined,
+        barcode: str(data.barcode),
+        type: data.type ?? undefined,
+        unit: data.unit ?? undefined,
+        active: data.active === undefined ? undefined : Boolean(data.active),
+        netWeightGrams: int(data.netWeightGrams),
+        packagingFormat: data.packagingFormat ?? undefined,
+        packsPerCarton: int(data.packsPerCarton),
+        shelfLifeDays: int(data.shelfLifeDays),
+        reorderLevel: dec(data.reorderLevel),
+        costPrice: dec(data.costPrice),
+        sellPrice: dec(data.sellPrice),
+        // Extended metadata — SACK weight (kgPerSack) uses the existing
+        // bagWeightKg column. If the caller sends kgPerSack we honour it.
+        bagWeightKg: dec(data.bagWeightKg ?? data.kgPerSack),
+        gramsPerUnit: dec(data.gramsPerUnit),
+        nameEn: str(data.nameEn),
+        category: str(data.category),
+        notes: str(data.notes),
+        defaultSupplierId: data.defaultSupplierId ?? undefined,
       },
     });
   }
@@ -377,6 +412,14 @@ export class InventoryService {
         where.performedAt.lt = t;
       }
     }
+    // Movement report MUST NOT silently truncate. When the caller omits
+    // `limit` we return everything in the window — the FE Movement
+    // report was previously capped at 500 while the XLSX export had no
+    // cap, so screen and export disagreed for busy periods. Interactive
+    // list pages can pass an explicit `limit` for pagination.
+    const take = opts.limit === undefined
+      ? undefined
+      : opts.limit <= 0 ? undefined : opts.limit;
     return this.prisma.stockMovement.findMany({
       where,
       include: {
@@ -385,7 +428,7 @@ export class InventoryService {
         toWarehouse: true,
       },
       orderBy: { performedAt: 'desc' },
-      take: opts.limit ?? 500,
+      ...(take !== undefined && { take }),
     });
   }
 
@@ -670,8 +713,11 @@ export class InventoryService {
 
     const type = String(data.type || 'ADD').toUpperCase();
     const qty = Number(data.quantity);
-    if (type !== 'COUNT' && !(qty > 0)) {
+    if (type !== 'COUNT' && type !== 'CORRECTION' && !(qty > 0)) {
       throw new BadRequestException('الكمية يجب أن تكون أكبر من صفر');
+    }
+    if (type === 'COUNT' && !(qty >= 0)) {
+      throw new BadRequestException('الكمية بعد الجرد يجب أن تكون ≥ 0');
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -682,6 +728,20 @@ export class InventoryService {
         where: { itemId: data.itemId, warehouseId: data.warehouseId, batchId: null },
       });
       const before = current ? Number(current.quantity) : 0;
+      // For a COUNT (physical inventory / "set quantity to X" from the
+      // edit-item modal) the user expects the ITEM total across every
+      // warehouse to become X, not just the MAIN row. After the
+      // 20260814170000_single_warehouse_consolidation migration this is
+      // the same value, but defensively we compute the true total so a
+      // freshly-received legacy row cannot re-introduce drift.
+      let itemTotal = before;
+      if (type === 'COUNT') {
+        const agg = await tx.stockLevel.aggregate({
+          where: { itemId: data.itemId, tenantId, batchId: null },
+          _sum: { quantity: true },
+        });
+        itemTotal = Number(agg._sum.quantity ?? 0);
+      }
 
       let delta = 0;
       let moveType = 'ADJUSTMENT';
@@ -700,8 +760,9 @@ export class InventoryService {
           moveType = 'ADJUSTMENT';
           break;
         case 'COUNT':
-          // جرد — قيمة مطلقة
-          delta = qty - before;
+          // جرد — قيمة مطلقة على مجموع الصنف عبر كل المخازن
+          // delta على MAIN = target - (before_MAIN + non_main_total)
+          delta = qty - itemTotal;
           moveType = 'ADJUSTMENT';
           break;
         case 'DAMAGE':
@@ -786,6 +847,16 @@ export class InventoryService {
     return this.prisma.$transaction(async (tx) => {
       const item = await tx.item.findFirst({ where: { id: data.itemId, tenantId } });
       if (!item) throw new NotFoundException('الصنف غير موجود');
+
+      // ─── CAPTURE PRE-RECEIPT STATE FIRST ───────────────────────────
+      // Weighted-average cost MUST be computed from the stock and cost
+      // that existed BEFORE this receipt. If we read `currentStock`
+      // after `upsertStockLevel` writes the new qty, the receipt gets
+      // counted twice — the old bug fixed here. Same rule for oldAvg.
+      const oldStockBeforeReceipt = await this.getCurrentStock(tx, data.itemId);
+      const oldAvgBeforeReceipt = item.avgCost
+        ? Number(item.avgCost)
+        : Number(item.costPrice ?? 0);
 
       // أنشئ الـ Batch إن وُجد رقم
       let batchId: string | null = null;
@@ -872,13 +943,17 @@ export class InventoryService {
       }
 
       // حدّث بيانات الصنف (متوسط تكلفة مرجّح، آخر شراء)
+      // Uses the PRE-receipt snapshot captured above so we don't
+      // double-count `qty`. The helper `weightedAverageCost` is the
+      // single source of truth — regression tests in costing.spec.ts
+      // lock its behaviour in.
       if (data.unitCost && source === 'SUPPLIER') {
-        const currentAvg = item.avgCost ? Number(item.avgCost) : Number(item.costPrice ?? 0);
-        const currentStock = await this.getCurrentStock(tx, data.itemId);
-        const newTotal = currentStock + qty;
-        const newAvg = newTotal > 0
-          ? (currentAvg * currentStock + Number(data.unitCost) * qty) / newTotal
-          : Number(data.unitCost);
+        const newAvg = weightedAverageCost({
+          oldQty: oldStockBeforeReceipt,
+          oldAvg: oldAvgBeforeReceipt,
+          rcvQty: qty,
+          unitCost: Number(data.unitCost),
+        });
         await tx.item.update({
           where: { id: data.itemId },
           data: {

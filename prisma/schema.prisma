@@ -1276,7 +1276,8 @@ model PurchaseBatch {
   createdById    String?
   createdAt      DateTime @default(now())
 
-  allocations SaleCostAllocation[]
+  allocations           SaleCostAllocation[]
+  productionAllocations ProductionCostAllocation[]
 
   @@index([tenantId, itemId, purchaseDate])
   @@index([itemId, remaining])
@@ -1304,6 +1305,29 @@ model SaleCostAllocation {
   @@index([saleLineId])
   @@index([batchId])
   @@index([itemId])
+}
+
+// توزيع تكلفة استهلاك مواد خام في إنتاج على دفعات الشراء.
+// نظير SaleCostAllocation لكن للمواد الخام التي تُستهلك في DailyProduction.
+// كل سطر يُشير إلى الدفعة المستهلكة والكمية المسحوبة والتكلفة.
+model ProductionCostAllocation {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  dailyProductionId  String              // DailyProduction.id
+  rawItemId          String              // Item.id (المادة الخام المُستهلكة)
+  batchId            String              // PurchaseBatch.id
+  quantity           Decimal  @db.Decimal(18, 4)
+  unitCost           Decimal  @db.Decimal(18, 4)
+  totalCost          Decimal  @db.Decimal(18, 4)
+  method             String   @default("FIFO")
+  createdAt          DateTime @default(now())
+
+  batch PurchaseBatch @relation(fields: [batchId], references: [id])
+
+  @@index([tenantId, dailyProductionId])
+  @@index([dailyProductionId])
+  @@index([batchId])
+  @@index([rawItemId])
 }
 
 // إعدادات المستأجر — الأسلوب الحسابي (FIFO افتراضي، قابل للتوسع)

@@ -115,6 +115,31 @@ export default function ProductionDetailPage() {
   };
 
   const saveAll = async () => {
+    // Guard: every row with quantity > 0 MUST have a linked inventory
+    // item — otherwise the ledger cannot decrement/increment stock and
+    // the printed sheet drifts from the actual balance. This mirrors
+    // the strict server-side check in DailyProductionService.post.
+    const missing: string[] = [];
+    const checkRows = (rows: Row[], section: string, qtyKey: string) => {
+      rows.forEach((r, i) => {
+        const q = Number(r[qtyKey] ?? 0);
+        if (q > 0 && !r.itemId) {
+          missing.push(`${section} — السطر ${i + 1} (${r.itemName || 'بدون اسم'})`);
+        }
+      });
+    };
+    checkRows(cartonUsage, 'الكرتون', 'quantity');
+    checkRows(aluminumUsage, 'الألمنيوم', 'quantity');
+    checkRows(milkUsage, 'الحليب', 'quantity');
+    checkRows(produced, 'الإنتاج', 'cartonsTotal');
+    checkRows(wastages, 'التوالف', 'quantity');
+    if (missing.length) {
+      toast.error(
+        `الرجاء اختيار الصنف من قائمة المخزون في:\n${missing.slice(0, 5).join('\n')}${missing.length > 5 ? `\n… و${missing.length - 5} سطراً آخر` : ''}`,
+      );
+      return;
+    }
+
     setSaving(true);
     try {
       await api.post(`/daily-production/${id}/save-all`, {

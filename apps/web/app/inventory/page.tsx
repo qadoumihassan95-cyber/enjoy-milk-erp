@@ -1341,6 +1341,9 @@ function NewItemModal({
     productionReorderLevel: '',
     notes: '',
     active: true,
+    // 1 sack = X kg. Configurable per item; only relevant when unit=BAG.
+    // Blank means "no conversion" — the item transacts purely in its unit.
+    kgPerSack: '',
   });
   const [saving, setSaving] = useState(false);
   const [duplicate, setDuplicate] = useState<any>(null);
@@ -1364,7 +1367,13 @@ function NewItemModal({
           productionReorderLevel: form.productionReorderLevel ? +form.productionReorderLevel : undefined,
           notes: form.notes.trim() || undefined,
           active: form.active,
-          bagWeightKg: form.unit === 'BAG' ? 25 : undefined,
+          // Per-item sack weight. Sent only when unit=BAG; blank field
+          // means "no conversion configured" and the item transacts in
+          // its declared unit. NO global "assume 25" fallback.
+          bagWeightKg:
+            form.unit === 'BAG' && form.kgPerSack
+              ? +form.kgPerSack
+              : undefined,
         })
         .then((r) => r.data);
 
@@ -1492,10 +1501,27 @@ function NewItemModal({
                 <option value="CTN">كرتون / CARTON</option>
                 <option value="KG">كيلوغرام / KG</option>
                 <option value="G">غرام / G</option>
-                <option value="BAG">شوال / BAG (25 كغ)</option>
+                <option value="BAG">شوال / SACK</option>
                 <option value="ROLL">رول / ROLL</option>
               </select>
             </div>
+            {form.unit === 'BAG' && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-zinc-700">وزن الشوال الواحد (كغ)</label>
+                <input
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  value={form.kgPerSack}
+                  onChange={(e) => setForm({ ...form, kgPerSack: e.target.value })}
+                  placeholder="مثال: 25"
+                  className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+                />
+                <div className="text-[11px] text-zinc-500">
+                  يُستخدم في التحويل بين الشوال والكيلوغرام أثناء الإنتاج.
+                </div>
+              </div>
+            )}
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-700">الكمية الابتدائية</label>
               <input
@@ -1603,6 +1629,9 @@ function EditItemModal({
     barcode: item.barcode ?? '',
     type: item.type ?? 'CONSUMABLE',
     unit: item.unit ?? 'PCS',
+    // kgPerSack is stored as bagWeightKg on the Item row. Blank means
+    // "no conversion" — the item ships purely in its declared unit.
+    kgPerSack: item.bagWeightKg ? String(item.bagWeightKg) : '',
     costPrice: item.costPrice ? String(item.costPrice) : '',
     minStock: item.minStock ? String(item.minStock) : '',
     reorderLevel: item.reorderLevel ? String(item.reorderLevel) : '',
@@ -1618,12 +1647,18 @@ function EditItemModal({
     if (!form.name.trim()) return toast.error('اسم الصنف مطلوب');
     setSaving(true);
     try {
-      // 1) تحديث خصائص الصنف (بدون كمية)
+      // 1) تحديث خصائص الصنف (بدون كمية) — Master-data ONLY, no stock side effects.
       await api.patch(`/inventory/items/${item.id}`, {
         name: form.name.trim(),
         barcode: form.barcode.trim() || undefined,
         unit: form.unit,
-        costPrice: form.costPrice ? +form.costPrice : undefined,
+        active: form.active,
+        costPrice: form.costPrice ? +form.costPrice : null,
+        // 1 sack = X kg. Only relevant when unit=BAG (شوال). Sent as
+        // null when empty so the BE clears the stored value.
+        bagWeightKg: form.unit === 'BAG' && form.kgPerSack
+          ? +form.kgPerSack
+          : null,
       });
       await api.patch(`/inventory/items/${item.id}/settings`, {
         minStock: form.minStock ? +form.minStock : null,
@@ -1693,10 +1728,27 @@ function EditItemModal({
                 <option value="CTN">كرتون / CARTON</option>
                 <option value="KG">كيلوغرام / KG</option>
                 <option value="G">غرام / G</option>
-                <option value="BAG">شوال / BAG</option>
+                <option value="BAG">شوال / SACK</option>
                 <option value="ROLL">رول / ROLL</option>
               </select>
             </div>
+            {form.unit === 'BAG' && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-zinc-700">وزن الشوال الواحد (كغ)</label>
+                <input
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  value={form.kgPerSack}
+                  onChange={(e) => setForm({ ...form, kgPerSack: e.target.value })}
+                  placeholder="مثال: 25"
+                  className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+                />
+                <div className="text-[11px] text-zinc-500">
+                  يُستخدم في التحويل بين الشوال والكيلوغرام أثناء الإنتاج.
+                </div>
+              </div>
+            )}
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-700">التكلفة</label>
               <input type="number" step="0.01" value={form.costPrice} onChange={(e) => setForm({ ...form, costPrice: e.target.value })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" />

@@ -5,7 +5,7 @@
  * with the rest of the codebase's minimal-DTO style.
  */
 
-import type { AiTier } from '../types/ai.types';
+import type { AiTier } from '@qadoumi/erp-ai-core';
 
 export interface ChatRequestDto {
   /** The user's new message. Required, non-empty. */

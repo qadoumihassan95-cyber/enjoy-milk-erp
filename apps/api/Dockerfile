@@ -13,6 +13,7 @@ RUN corepack enable && corepack prepare pnpm@8.15.0 --activate
 # Workspace manifests (better layer caching)
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/api/package.json apps/api/
+COPY packages/erp-ai-core/package.json packages/erp-ai-core/
 COPY prisma ./prisma
 
 # Install ALL deps (incl. dev) — needed for nest build + prisma CLI
@@ -20,6 +21,11 @@ RUN pnpm install --frozen-lockfile
 
 # Generate Prisma client from the current schema
 RUN pnpm exec prisma generate --schema=./prisma/schema.prisma
+
+# Build the shared AI core package FIRST — apps/api resolves it from
+# node_modules (main = dist/index.js), so its dist must exist before nest build.
+COPY packages/erp-ai-core packages/erp-ai-core
+RUN cd packages/erp-ai-core && pnpm exec tsc -p tsconfig.build.json
 
 # Build the NestJS app
 COPY apps/api/tsconfig.json apps/api/nest-cli.json apps/api/
@@ -50,6 +56,9 @@ ENV NODE_ENV=production PORT=3001
 COPY --from=builder --chown=app:app /app/node_modules ./node_modules
 COPY --from=builder --chown=app:app /app/apps/api/node_modules ./apps/api/node_modules
 COPY --from=builder --chown=app:app /app/apps/api/dist ./apps/api/dist
+# apps/api/node_modules/@qadoumi/erp-ai-core is a pnpm symlink into /app/packages,
+# so the package (with its built dist) must be present in the runtime image.
+COPY --from=builder --chown=app:app /app/packages ./packages
 COPY --from=builder --chown=app:app /app/apps/api/package.json ./apps/api/
 COPY --from=builder --chown=app:app /app/apps/api/tsconfig.json ./apps/api/
 COPY --from=builder --chown=app:app /app/prisma ./prisma

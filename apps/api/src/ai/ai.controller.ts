@@ -34,11 +34,12 @@ type ExpressRes = any;
 import { CurrentUser } from '../core/auth/current-user.decorator';
 import type { AuthenticatedUser } from '../core/auth/jwt.strategy';
 import { AiService } from './ai.service';
-import { AiError } from './types/ai.types';
+import { AiError } from '@qadoumi/erp-ai-core';
 import type { ChatRequestDto, ChatResponseDto } from './dto/chat.dto';
 
 function mapAiErrorToHttp(err: unknown): HttpException {
   if (err instanceof AiError) {
+    const e = err as AiError;
     const map: Record<string, HttpStatus> = {
       timeout: HttpStatus.GATEWAY_TIMEOUT,
       'rate-limit': HttpStatus.TOO_MANY_REQUESTS,
@@ -47,15 +48,15 @@ function mapAiErrorToHttp(err: unknown): HttpException {
       'invalid-response': HttpStatus.BAD_GATEWAY,
       unknown: HttpStatus.INTERNAL_SERVER_ERROR,
     };
-    const status = map[err.kind] ?? HttpStatus.INTERNAL_SERVER_ERROR;
+    const status = map[e.kind] ?? HttpStatus.INTERNAL_SERVER_ERROR;
     // Never expose internal provider messages verbatim to end users.
     const userMsg =
-      err.kind === 'timeout' ? 'انتهت مهلة طلب الذكاء الاصطناعي، جرب مرة أخرى.' :
-      err.kind === 'rate-limit' ? 'تم تجاوز الحد المسموح للذكاء الاصطناعي، انتظر قليلاً.' :
-      err.kind === 'unauthorized' ? 'خدمة الذكاء الاصطناعي غير مُهيّأة على الخادم.' :
-      err.kind === 'provider-unavailable' ? 'مزوّد الذكاء الاصطناعي غير متاح مؤقتاً.' :
+      e.kind === 'timeout' ? 'انتهت مهلة طلب الذكاء الاصطناعي، جرب مرة أخرى.' :
+      e.kind === 'rate-limit' ? 'تم تجاوز الحد المسموح للذكاء الاصطناعي، انتظر قليلاً.' :
+      e.kind === 'unauthorized' ? 'خدمة الذكاء الاصطناعي غير مُهيّأة على الخادم.' :
+      e.kind === 'provider-unavailable' ? 'مزوّد الذكاء الاصطناعي غير متاح مؤقتاً.' :
       'خطأ في خدمة الذكاء الاصطناعي.';
-    return new HttpException({ message: userMsg, kind: err.kind }, status);
+    return new HttpException({ message: userMsg, kind: e.kind }, status);
   }
   return new HttpException(
     { message: 'خطأ داخلي في خدمة الذكاء الاصطناعي.' },

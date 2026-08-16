@@ -7,19 +7,27 @@
  * All tests are self-contained — no live network, no DB.
  */
 
-import { classifyHeuristic, classifyRequest, defaultTierFor } from './classifier/request-classifier';
-import { BudgetManager, DEFAULT_BUDGET_CONFIG } from './budget/budget-manager';
-import { ModelHealthMonitor } from './health/model-health';
-import { ResponseCache, CACHE_POLICIES } from './cache/response-cache';
-import { PolicyRegistry, DEFAULT_POLICY } from './policies/policies';
-import { PromptManager, createDefaultPromptManager } from './prompts/prompt-manager';
-import { ContextBuilder } from './context/context-builder';
-import { ToolRegistry } from './tools/tool-registry';
-import { ToolExecutor } from './tools/tool-executor';
-import { DefaultPermissionGate } from './tools/permission-gate';
-import { toMcpToolDescriptors, handleMcpCall } from './mcp/mcp-adapter';
-import { createNoopMemory } from './memory/noop-memory';
-import type { AiTool } from './tools/tool.types';
+import {
+  classifyHeuristic,
+  classifyRequest,
+  defaultTierFor,
+  BudgetManager,
+  DEFAULT_BUDGET_CONFIG,
+  ModelHealthMonitor,
+  ResponseCache,
+  CACHE_POLICIES,
+  PolicyRegistry,
+  PromptManager,
+  createDefaultPromptManager,
+  ContextBuilder,
+  ToolRegistry,
+  ToolExecutor,
+  DefaultPermissionGate,
+  toMcpToolDescriptors,
+  handleMcpCall,
+  createNoopMemory,
+} from '../index';
+import type { AiTool } from '../index';
 
 describe('Classifier', () => {
   it('empty → simple-lookup', () => {
@@ -75,7 +83,6 @@ describe('BudgetManager', () => {
     b.record({ tenantId: 'tw' }, 8);
     b.check({ tenantId: 'tw' }, 'medium');
     expect(warned).toBe(1);
-    // Second check within window does NOT re-warn.
     b.check({ tenantId: 'tw' }, 'medium');
     expect(warned).toBe(1);
   });
@@ -104,7 +111,6 @@ describe('ModelHealthMonitor', () => {
       quarantineMs: 1, latencyEwmaAlpha: 0.3,
     });
     h.recordFailure('m'); h.recordFailure('m');
-    // wait briefly
     return new Promise((r) => setTimeout(r, 5)).then(() => {
       expect(h.isAvailable('m')).toBe(true);
     });
@@ -206,7 +212,6 @@ describe('ToolRegistry + Executor + Permissions', () => {
     expect(r.size()).toBe(1);
     const d = r.describe();
     expect(d[0].name).toBe('inv.count');
-    // Handler must NOT leak in descriptor.
     expect((d[0] as any).handle).toBeUndefined();
   });
 

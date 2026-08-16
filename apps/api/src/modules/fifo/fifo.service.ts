@@ -183,6 +183,121 @@ export class FifoCostingService {
   }
 
   // ═══════════════════════════════════════════════════════════
+  // (2b) استهلاك دفعات لعملية إنتاج (مواد خام)
+  // ═══════════════════════════════════════════════════════════
+  /**
+   * Production-side twin of `consumeForSale`. Consumes raw-material
+   * PurchaseBatch rows FIFO, decrements `remaining`, and writes a
+   * `ProductionCostAllocation` per batch touched. Returns the total
+   * cost consumed so the caller can price produced batches.
+   *
+   * ⚠️  Contract:
+   *   • Called from within an outer $transaction — callers MUST pass
+   *     `tx`. The method is idempotent per (dailyProductionId, rawItemId)
+   *     because DailyProduction.post() runs exactly once per record
+   *     (re-post is blocked with a status guard).
+   *   • Throws if PurchaseBatch stock is insufficient. The outer
+   *     transaction rolls back cleanly — the ledger stays consistent.
+   */
+  async consumeForProduction(
+    tenantId: string,
+    dto: {
+      dailyProductionId: string;
+      rawItemId: string;
+      quantity: number | string;
+    },
+    tx?: Prisma.TransactionClient,
+  ): Promise<{ totalCost: number; allocations: any[]; quantityConsumed: number }> {
+    const need = Number(dto.quantity);
+    if (!(need > 0)) return { totalCost: 0, allocations: [], quantityConsumed: 0 };
+
+    const exec = async (client: Prisma.TransactionClient) => {
+      const batches = await client.purchaseBatch.findMany({
+        where: {
+          tenantId,
+          itemId: dto.rawItemId,
+          remaining: { gt: 0 },
+        },
+        orderBy: [{ purchaseDate: 'asc' }, { createdAt: 'asc' }],
+      });
+
+      const totalAvailable = batches.reduce((s, b) => s + Number(b.remaining), 0);
+      if (totalAvailable + 1e-9 < need) {
+        throw new BadRequestException(
+          `دفعات المادة الخام غير كافية (المتاح: ${totalAvailable}، المطلوب: ${need})`,
+        );
+      }
+
+      let remainingNeed = need;
+      let totalCost = 0;
+      const allocations: any[] = [];
+
+      for (const b of batches) {
+        if (remainingNeed <= 0) break;
+        const avail = Number(b.remaining);
+        const take = Math.min(avail, remainingNeed);
+        if (take <= 0) continue;
+        const lineCost = take * Number(b.unitCost);
+        totalCost += lineCost;
+        remainingNeed -= take;
+
+        await client.purchaseBatch.update({
+          where: { id: b.id },
+          data: { remaining: new Prisma.Decimal(avail - take) },
+        });
+
+        const alloc = await (client as any).productionCostAllocation.create({
+          data: {
+            tenantId,
+            dailyProductionId: dto.dailyProductionId,
+            rawItemId: dto.rawItemId,
+            batchId: b.id,
+            quantity: new Prisma.Decimal(take),
+            unitCost: new Prisma.Decimal(Number(b.unitCost)),
+            totalCost: new Prisma.Decimal(lineCost),
+            method: 'FIFO',
+          },
+        });
+        allocations.push(alloc);
+      }
+
+      return { totalCost, allocations, quantityConsumed: need - remainingNeed };
+    };
+
+    return tx ? exec(tx) : this.prisma.$transaction((c) => exec(c));
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // (3b) عكس عملية إنتاج — استعادة الدفعات + حذف التوزيعات
+  // ═══════════════════════════════════════════════════════════
+  async reverseForProduction(
+    tenantId: string,
+    dailyProductionId: string,
+    tx?: Prisma.TransactionClient,
+  ) {
+    const exec = async (client: Prisma.TransactionClient) => {
+      const allocs = await (client as any).productionCostAllocation.findMany({
+        where: { tenantId, dailyProductionId },
+      });
+      for (const a of allocs) {
+        const b = await client.purchaseBatch.findUnique({ where: { id: a.batchId } });
+        if (!b) continue;
+        await client.purchaseBatch.update({
+          where: { id: b.id },
+          data: {
+            remaining: new Prisma.Decimal(Number(b.remaining) + Number(a.quantity)),
+          },
+        });
+      }
+      await (client as any).productionCostAllocation.deleteMany({
+        where: { tenantId, dailyProductionId },
+      });
+      return { restoredAllocations: allocs.length };
+    };
+    return tx ? exec(tx) : this.prisma.$transaction((c) => exec(c));
+  }
+
+  // ═══════════════════════════════════════════════════════════
   // (4) تقارير
   // ═══════════════════════════════════════════════════════════
 
@@ -205,35 +320,53 @@ export class FifoCostingService {
     return { totalValue: round(totalValue, 4), byItem };
   }
 
-  /** COGS + إجمالي المبيعات + الربح، ضمن نطاق تاريخ اختياري */
+  /**
+   * COGS + إجمالي المبيعات + الربح، ضمن نطاق تاريخ اختياري.
+   *
+   * PERIOD ANCHORING: revenue and COGS are both anchored on
+   * `SimpleOrder.orderDate` so back-dated orders land in the same
+   * period on both sides. Previously revenue used `orderDate` while
+   * COGS used `SaleCostAllocation.createdAt`, which scattered the two
+   * legs across periods whenever an order was created on a date other
+   * than its orderDate (any back-dated order).
+   *
+   * CANCELLED FILTER: revenue explicitly excludes CANCELLED orders,
+   * matching the FE assumption that "gross profit" is on realised sales.
+   * Without this filter, cancelled orders inflated revenue while their
+   * matching COGS had been reversed via reverseForSale — phantom profit.
+   */
   async getCogsProfit(
     tenantId: string,
     range?: { from?: Date | string; to?: Date | string },
   ) {
-    const where: Prisma.SaleCostAllocationWhereInput = { tenantId };
-    if (range?.from || range?.to) {
-      where.createdAt = {};
-      if (range.from) (where.createdAt as any).gte = new Date(range.from);
-      if (range.to) (where.createdAt as any).lte = new Date(range.to);
-    }
-    const cogsRows = await this.prisma.saleCostAllocation.findMany({
-      where,
-      select: { saleOrderId: true, totalCost: true, quantity: true },
-    });
-    const cogs = cogsRows.reduce((s, r) => s + Number(r.totalCost), 0);
+    // Build the shared orderDate window ONCE — revenue and COGS use it identically.
+    const orderDateWindow: any = {};
+    if (range?.from) orderDateWindow.gte = new Date(range.from);
+    if (range?.to) orderDateWindow.lte = new Date(range.to);
+    const hasWindow = !!(range?.from || range?.to);
 
-    // إجمالي المبيعات لنفس النطاق
-    const salesWhere: Prisma.SimpleOrderWhereInput = { tenantId };
-    if (range?.from || range?.to) {
-      salesWhere.orderDate = {};
-      if (range.from) (salesWhere.orderDate as any).gte = new Date(range.from);
-      if (range.to) (salesWhere.orderDate as any).lte = new Date(range.to);
-    }
-    const salesAgg = await this.prisma.simpleOrder.aggregate({
-      where: salesWhere,
-      _sum: { total: true },
+    // Two-step to avoid needing a schema-level SaleCostAllocation→SimpleOrder
+    // relation. Step 1: enumerate the qualifying orders for the period.
+    // Step 2: sum allocations whose saleOrderId ∈ that set.
+    // Same set of orders drives both revenue and COGS — no scatter.
+    const qualifyingOrders = await this.prisma.simpleOrder.findMany({
+      where: {
+        tenantId,
+        status: { not: 'CANCELLED' },
+        ...(hasWindow && { orderDate: orderDateWindow }),
+      },
+      select: { id: true, total: true },
     });
-    const revenue = Number(salesAgg._sum.total ?? 0);
+    const orderIds = qualifyingOrders.map((o) => o.id);
+    const revenue = qualifyingOrders.reduce((s, o) => s + Number(o.total), 0);
+
+    const cogsRows = orderIds.length
+      ? await this.prisma.saleCostAllocation.findMany({
+          where: { tenantId, saleOrderId: { in: orderIds } },
+          select: { saleOrderId: true, totalCost: true, quantity: true },
+        })
+      : [];
+    const cogs = cogsRows.reduce((s, r) => s + Number(r.totalCost), 0);
     return {
       revenue: round(revenue, 4),
       cogs: round(cogs, 4),

@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import { FifoCostingService } from '../fifo/fifo.service';
 
 /**
  * Daily Production Service — ورقة الإنتاج اليومية
@@ -26,7 +27,10 @@ import { PrismaService } from '../../core/prisma/prisma.service';
  */
 @Injectable()
 export class DailyProductionService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly fifo: FifoCostingService,
+  ) {}
 
   // ─── List ─────────────────────────────────────────
   async list(tenantId: string, opts: { from?: string; to?: string } = {}) {
@@ -255,28 +259,88 @@ export class DailyProductionService {
   }
 
   // ─── POST — تطبيق على المخزون ─────────────────────
+  /**
+   * SINGLE-WAREHOUSE MODEL
+   * ---------------------
+   * The factory operates from ONE warehouse (code=MAIN). Historical
+   * data may still reference legacy warehouses (FIN/BULK/PKG/QHL) via
+   * StockMovement.fromWarehouseId, but every new consumption/output
+   * MUST land against MAIN so that:
+   *   • Sum(StockLevel per item) == the number the user sees in
+   *     /inventory (single source of truth).
+   *   • A receipt in /inventory/receive (which also targets MAIN) is
+   *     visible to production, and vice-versa.
+   *   • No row ever silently drops because a legacy warehouse code
+   *     didn't exist on a freshly-provisioned tenant.
+   *
+   * STRICT ITEM LINKAGE
+   * -------------------
+   * A row with quantity>0 but no itemId used to be silently skipped —
+   * the sheet showed the number, the ledger didn't move, and stock
+   * drift accumulated. We now throw. The FE must pick an item from
+   * the ItemSelector; free-text-only rows are rejected at post time.
+   */
   async post(tenantId: string, userId: string, id: string) {
     const dp = await this.get(tenantId, id);
     if (dp.status === 'POSTED') {
       throw new BadRequestException('تم الترحيل مسبقاً');
     }
+    if (dp.status === 'CANCELLED') {
+      // Reject re-post of a cancelled sheet — otherwise a subsequent
+      // cancel() will reverse BOTH the old and the new movements and
+      // corrupt the ledger.
+      throw new BadRequestException(
+        'لا يمكن ترحيل ورقة ملغاة. أنشئ ورقة جديدة بدلاً منها.',
+      );
+    }
 
-    const rawWh = await this.prisma.warehouse.findFirst({
-      where: { tenantId, code: 'BULK' },
+    // ─── DB-LEVEL DOUBLE-POST GUARD (G4) ──────────────────────────
+    // Two concurrent /post requests can race between the read above
+    // and the write inside the $transaction. We atomically flip the
+    // status via updateMany with a WHERE clause on the current status.
+    // Only ONE call gets count===1; every other concurrent call gets
+    // count===0 and we throw before any inventory side-effect runs.
+    // This is the strongest guarantee we can give without adding
+    // Postgres advisory locks (which would require a raw query).
+    const claim = await this.prisma.dailyProduction.updateMany({
+      where: { id, tenantId, status: 'DRAFT' },
+      data: { status: 'POSTING' as any, postedAt: new Date(), postedById: userId },
     });
-    const pkgWh = await this.prisma.warehouse.findFirst({
-      where: { tenantId, code: 'PKG' },
-    });
-    const finWh = await this.prisma.warehouse.findFirst({
-      where: { tenantId, code: 'FIN' },
-    });
+    if (claim.count !== 1) {
+      // Somebody else won the race. Re-read to give a precise error.
+      const now = await this.prisma.dailyProduction.findFirst({ where: { id, tenantId } });
+      throw new BadRequestException(
+        `لا يمكن الترحيل — الحالة الحالية: ${now?.status ?? 'unknown'}`,
+      );
+    }
+
+    // Resolve the SINGLE operational warehouse. If MAIN doesn't exist
+    // yet (fresh tenant), it is auto-created — matches the /inventory
+    // receive/adjust behaviour and guarantees the two modules always
+    // agree on where stock lives.
+    const mainWh = await this.resolveMainWarehouse(tenantId);
+
+    // Helper: uniform per-row validation. Anything with a positive
+    // quantity MUST resolve to an item — otherwise the printed sheet
+    // and the ledger would diverge.
+    const requireItem = (
+      row: { itemId?: string | null; itemName?: string | null; quantity?: any },
+      section: string,
+    ) => {
+      const qty = Number(row.quantity ?? 0);
+      if (qty > 0 && !row.itemId) {
+        throw new BadRequestException(
+          `${section}: "${row.itemName ?? '(بدون اسم)'}" — يجب اختيار الصنف من قائمة المخزون قبل الترحيل`,
+        );
+      }
+    };
 
     return this.prisma.$transaction(async (tx) => {
       // ─── خصم الكرتون ───
       for (const c of dp.cartonUsage) {
-        if (!c.itemId) continue;
-        const wh = c.warehouseId ?? pkgWh?.id;
-        if (!wh) continue;
+        requireItem(c, 'كرتون');
+        if (!c.itemId) continue; // qty=0, nothing to do
+        const wh = c.warehouseId ?? mainWh.id;
         await tx.stockMovement.create({
           data: {
             tenantId,
@@ -296,9 +360,9 @@ export class DailyProductionService {
 
       // ─── خصم الألمنيوم ───
       for (const a of dp.aluminumUsage) {
+        requireItem(a, 'ألمنيوم');
         if (!a.itemId) continue;
-        const wh = a.warehouseId ?? pkgWh?.id;
-        if (!wh) continue;
+        const wh = a.warehouseId ?? mainWh.id;
         await tx.stockMovement.create({
           data: {
             tenantId,
@@ -318,9 +382,9 @@ export class DailyProductionService {
 
       // ─── خصم الحليب ───
       for (const m of dp.milkUsage) {
+        requireItem(m, 'حليب');
         if (!m.itemId) continue;
-        const wh = m.warehouseId ?? rawWh?.id;
-        if (!wh) continue;
+        const wh = m.warehouseId ?? mainWh.id;
         await tx.stockMovement.create({
           data: {
             tenantId,
@@ -338,11 +402,51 @@ export class DailyProductionService {
         await this.adjustStock(tx, tenantId, m.itemId, wh, -Number(m.quantity));
       }
 
-      // ─── إضافة المنتجات للمخزون النهائي ───
+      // ─── حساب تكلفة الإنتاج للكرتون الواحد ───
+      // Real FIFO cost basis: consume raw PurchaseBatch (oldest first)
+      // via fifo.consumeForProduction, sum the actual costs, and divide
+      // by total cartons produced. This is deterministic — the exact
+      // batches consumed are recorded in ProductionCostAllocation so
+      // cancel() can reverse them precisely and downstream sales of
+      // produced cartons record a real COGS.
+      //
+      // The consume calls also decrement PurchaseBatch.remaining so
+      // StockLevel and Σ(remaining) stay reconciled per item.
+      const totalCartons = dp.produced.reduce(
+        (s: number, p: any) => s + Number(p.cartonsTotal ?? 0),
+        0,
+      );
+      const rawRows: Array<{ itemId: string; qty: number }> = [];
+      for (const c of dp.cartonUsage)   if (c.itemId) rawRows.push({ itemId: c.itemId, qty: Number(c.quantity) });
+      for (const a of dp.aluminumUsage) if (a.itemId) rawRows.push({ itemId: a.itemId, qty: Number(a.quantity) });
+      for (const m of dp.milkUsage)     if (m.itemId) rawRows.push({ itemId: m.itemId, qty: Number(m.quantity) });
+
+      let rawCostTotal = 0;
+      for (const r of rawRows) {
+        // If FIFO batches are insufficient (which shouldn't happen —
+        // adjustStock above already caught StockLevel shortages), the
+        // fifo service throws and the outer $transaction rolls back.
+        const consumed = await this.fifo.consumeForProduction(
+          tenantId,
+          { dailyProductionId: dp.id, rawItemId: r.itemId, quantity: r.qty },
+          tx,
+        );
+        rawCostTotal += consumed.totalCost;
+      }
+      const perCartonCost = totalCartons > 0 && rawCostTotal > 0
+        ? rawCostTotal / totalCartons
+        : null; // fallback per item below
+
+      // ─── إضافة المنتجات للمخزون النهائي + دفعة FIFO ───
       for (const p of dp.produced) {
+        const qty = Number(p.cartonsTotal ?? 0);
+        if (qty > 0 && !p.itemId) {
+          throw new BadRequestException(
+            `منتج: "${p.itemName ?? '(بدون اسم)'}" — يجب اختيار الصنف من قائمة المخزون قبل الترحيل`,
+          );
+        }
         if (!p.itemId) continue;
-        const wh = p.warehouseId ?? finWh?.id;
-        if (!wh) continue;
+        const wh = p.warehouseId ?? mainWh.id;
         // الكمية = مجموع الكراتين (نسجّل بعدد الكراتين كوحدة قياس)
         await tx.stockMovement.create({
           data: {
@@ -350,22 +454,50 @@ export class DailyProductionService {
             type: 'IN',
             itemId: p.itemId,
             toWarehouseId: wh,
-            quantity: new Prisma.Decimal(p.cartonsTotal),
+            quantity: new Prisma.Decimal(qty),
             reasonCode: 'PROD_OUTPUT',
             refType: 'DailyProduction',
             refId: dp.id,
-            notes: `إنتاج: ${p.itemName} (${p.cartonsTotal} كرتون)`,
+            notes: `إنتاج: ${p.itemName} (${qty} كرتون)`,
             performedById: userId,
           },
         });
-        await this.adjustStock(tx, tenantId, p.itemId, wh, p.cartonsTotal);
+        await this.adjustStock(tx, tenantId, p.itemId, wh, qty);
+
+        // Create a PurchaseBatch for the produced cartons so a later
+        // sale of this SKU can consume FIFO and record a real COGS.
+        // Without this batch, sales of produced cartons record COGS=0
+        // and gross-profit reports are silently inflated.
+        if (qty > 0) {
+          let unitCost = perCartonCost;
+          if (unitCost === null) {
+            const producedItem = await tx.item.findUnique({ where: { id: p.itemId } });
+            unitCost = producedItem?.avgCost
+              ? Number(producedItem.avgCost)
+              : Number(producedItem?.costPrice ?? 0);
+          }
+          await tx.purchaseBatch.create({
+            data: {
+              tenantId,
+              itemId: p.itemId,
+              batchNumber: null,
+              purchaseDate: new Date(),
+              quantity: new Prisma.Decimal(qty),
+              remaining: new Prisma.Decimal(qty),
+              unitCost: new Prisma.Decimal(unitCost),
+              sourceType: 'PRODUCTION',
+              sourceRefId: dp.id,
+              createdById: userId,
+            },
+          });
+        }
       }
 
       // ─── خصم التوالف ───
       for (const w of dp.wastages) {
+        requireItem(w, 'توالف');
         if (!w.itemId) continue;
-        const wh = w.warehouseId ?? finWh?.id;
-        if (!wh) continue;
+        const wh = w.warehouseId ?? mainWh.id;
         await tx.stockMovement.create({
           data: {
             tenantId,
@@ -383,25 +515,68 @@ export class DailyProductionService {
         await this.adjustStock(tx, tenantId, w.itemId, wh, -Number(w.quantity));
       }
 
+      // Flip claim → final POSTED (postedAt/postedById already set by claim).
       return tx.dailyProduction.update({
         where: { id },
-        data: {
-          status: 'POSTED',
-          postedAt: new Date(),
-          postedById: userId,
-        },
+        data: { status: 'POSTED' },
       });
     });
   }
 
   // ─── Cancel (إرجاع المخزون) ───────────────────────
+  /**
+   * Reverses every StockMovement written by post() and flips the record
+   * to CANCELLED.
+   *
+   * SINGLE-WAREHOUSE REVERSAL RULE
+   * ------------------------------
+   * The reversal StockMovement preserves the original warehouseId for
+   * audit continuity (so pre-consolidation posts still name FIN/BULK/PKG
+   * in reports that group by warehouse). BUT the actual balance
+   * adjustment is applied to MAIN — because after the consolidation
+   * migration the historical warehouses hold quantity=0 and are marked
+   * inactive. Writing the reversal delta back into those zeroed rows
+   * would create phantom stock nobody sees on /inventory.
+   *
+   * This rule is a no-op for posts made AFTER the fix went live, because
+   * their movements already name MAIN — mainWh.id === m.fromWarehouseId.
+   */
   async cancel(tenantId: string, userId: string, id: string) {
     const dp = await this.get(tenantId, id);
     if (dp.status !== 'POSTED') {
       throw new BadRequestException('لا يمكن إلغاء سجل لم يتم ترحيله');
     }
 
+    // Resolve MAIN once, outside the loop.
+    const mainWh = await this.resolveMainWarehouse(tenantId);
+
     return this.prisma.$transaction(async (tx) => {
+      // ─── Reverse FIFO first ────────────────────────────────
+      // Restore PurchaseBatch.remaining for every raw material the
+      // production consumed (via ProductionCostAllocation) and delete
+      // the allocations. This is a no-op for pre-B1 productions —
+      // their POST didn't create allocations, so reverseForProduction
+      // finds nothing to reverse. Safe either way.
+      await this.fifo.reverseForProduction(tenantId, id, tx);
+
+      // ─── Reverse the produced PurchaseBatch ─────────────────
+      // Delete any PurchaseBatch we created for this production. We
+      // check remaining==quantity — if any of the produced cartons
+      // have already been sold, remaining is lower and reversal is
+      // unsafe (would leave the sale's SaleCostAllocation dangling).
+      // In that case we refuse to cancel.
+      const producedBatches = await tx.purchaseBatch.findMany({
+        where: { tenantId, sourceType: 'PRODUCTION', sourceRefId: id },
+      });
+      for (const b of producedBatches) {
+        if (Number(b.remaining) + 1e-9 < Number(b.quantity)) {
+          throw new BadRequestException(
+            'لا يمكن الإلغاء — بعض الكراتين المنتجة قد بيعت بالفعل. أنشئ حركة إرجاع بدلاً من الإلغاء.',
+          );
+        }
+        await tx.purchaseBatch.delete({ where: { id: b.id } });
+      }
+
       const movements = await tx.stockMovement.findMany({
         where: { tenantId, refType: 'DailyProduction', refId: id },
       });
@@ -409,19 +584,25 @@ export class DailyProductionService {
       for (const m of movements) {
         const reverseType =
           m.type === 'IN' ? 'OUT' : m.type === 'OUT' ? 'IN' : 'IN';
+
+        // Audit trail: name the historical warehouse the original
+        // movement referenced (or MAIN if the movement carried none).
+        const auditFromWh =
+          reverseType === 'OUT'
+            ? m.toWarehouseId ?? m.fromWarehouseId
+            : null;
+        const auditToWh =
+          reverseType === 'IN'
+            ? m.fromWarehouseId ?? m.toWarehouseId
+            : null;
+
         await tx.stockMovement.create({
           data: {
             tenantId,
             type: reverseType,
             itemId: m.itemId,
-            fromWarehouseId:
-              reverseType === 'OUT'
-                ? m.toWarehouseId ?? m.fromWarehouseId
-                : null,
-            toWarehouseId:
-              reverseType === 'IN'
-                ? m.fromWarehouseId ?? m.toWarehouseId
-                : null,
+            fromWarehouseId: auditFromWh,
+            toWarehouseId: auditToWh,
             quantity: m.quantity,
             reasonCode: 'REVERSAL',
             refType: 'DailyProduction-Reversal',
@@ -430,14 +611,13 @@ export class DailyProductionService {
             performedById: userId,
           },
         });
-        const wh =
-          reverseType === 'IN'
-            ? m.fromWarehouseId ?? m.toWarehouseId
-            : m.toWarehouseId ?? m.fromWarehouseId;
-        if (wh && m.itemId) {
+
+        if (m.itemId) {
           const delta =
             reverseType === 'IN' ? Number(m.quantity) : -Number(m.quantity);
-          await this.adjustStock(tx, tenantId, m.itemId, wh, delta);
+          // BALANCE update always targets MAIN — see rationale above.
+          // Never route the delta into the historical warehouseId.
+          await this.adjustStock(tx, tenantId, m.itemId, mainWh.id, delta);
         }
       }
 
@@ -755,6 +935,41 @@ export class DailyProductionService {
   }
 
   // ─── Helpers ──────────────────────────────────────
+  /**
+   * Resolve the single operational warehouse (code=MAIN). Auto-creates
+   * it on first use so a freshly-provisioned tenant is never blocked
+   * from posting production. Mirrors InventoryService.resolveMainWarehouse
+   * so the two modules always converge on the same warehouse.
+   */
+  private async resolveMainWarehouse(tenantId: string) {
+    let wh = await this.prisma.warehouse.findFirst({
+      where: { tenantId, code: 'MAIN' },
+    });
+    if (wh) return wh;
+    wh = await this.prisma.warehouse.findFirst({
+      where: { tenantId, active: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (wh) return wh;
+    return this.prisma.warehouse.create({
+      data: { tenantId, code: 'MAIN', name: 'المخزن الرئيسي', type: 'GENERAL' },
+    });
+  }
+
+  /**
+   * Adjust a single StockLevel row inside a transaction.
+   *
+   * PREVIOUS BEHAVIOUR (buggy): silently clamped to zero on shortage
+   * (`Math.max(0, newQty)`), and silently ignored decrements when no
+   * row existed at all. Both patterns hid aluminum-not-deducted and
+   * over-sell scenarios — the ledger showed movement while the balance
+   * never actually dropped.
+   *
+   * NEW BEHAVIOUR: throw a BadRequestException on shortage so the
+   * enclosing $transaction rolls back cleanly. On a decrement into a
+   * non-existent row we throw with the same shape (would produce a
+   * negative balance if we created it).
+   */
   private async adjustStock(
     tx: any,
     tenantId: string,
@@ -767,9 +982,15 @@ export class DailyProductionService {
     });
     if (existing) {
       const newQty = Number(existing.quantity) + delta;
+      if (newQty < 0) {
+        const item = await tx.item.findUnique({ where: { id: itemId } });
+        throw new BadRequestException(
+          `المخزون لا يكفي للصنف "${item?.name ?? itemId}" (المتاح: ${existing.quantity}، المطلوب سحبه: ${Math.abs(delta)})`,
+        );
+      }
       await tx.stockLevel.update({
         where: { id: existing.id },
-        data: { quantity: new Prisma.Decimal(Math.max(0, newQty)) },
+        data: { quantity: new Prisma.Decimal(newQty) },
       });
     } else if (delta > 0) {
       await tx.stockLevel.create({
@@ -780,7 +1001,144 @@ export class DailyProductionService {
           quantity: new Prisma.Decimal(delta),
         },
       });
+    } else if (delta < 0) {
+      const item = await tx.item.findUnique({ where: { id: itemId } });
+      throw new BadRequestException(
+        `المخزون لا يكفي للصنف "${item?.name ?? itemId}" (المتاح: 0، المطلوب سحبه: ${Math.abs(delta)})`,
+      );
     }
+  }
+
+  // Module-scoped rounder — mirrors `round` in fifo.service.ts.
+  // Not a class member so it can be used inside object literals.
+  // Kept local to avoid a stray helper file.
+  //
+  // (Declared at method-scope in getDailySummary too; harmless duplication.)
+  //
+  // ─── Cost & Waste Report (Blocker B3 fix) ─────────────────────────
+  /**
+   * SINGLE SOURCE OF TRUTH for the /reports "Cost & Waste" tab.
+   *
+   * Prior behaviour (FE-only): `producedQty × finished-item avgCost`
+   * — a rough estimate that ignored the real raw-material cost booked
+   * against each production via `ProductionCostAllocation`.
+   *
+   * New rule:
+   *   Per DailyProduction:
+   *     • productionCost = Σ ProductionCostAllocation.totalCost for this DP
+   *       (the actual raw cost consumed via FIFO)
+   *     • producedCartons = Σ ProductionProducedItem.cartonsTotal
+   *     • wasteQty        = Σ ProductionWaste.quantity
+   *     • wasteCost       = wasteQty * unitProductionCost
+   *                          where unitProductionCost = productionCost / producedCartons
+   *                          (waste is at production-cost basis — same rule finished
+   *                          cartons use when they leave the shelf via sale).
+   *
+   * Rolled up per date range: sums of the above plus percentages.
+   *
+   * DailyProductions posted BEFORE Blocker B1 have no
+   * ProductionCostAllocation rows. For those we surface the cost as 0
+   * with a `legacy=true` flag so the FE can show a clear "pre-FIFO
+   * historical row" indicator instead of a misleading approximation.
+   */
+  async getCostAndWasteReport(
+    tenantId: string,
+    opts: { from?: string; to?: string } = {},
+  ) {
+    const where: any = { tenantId, status: 'POSTED' };
+    if (opts.from || opts.to) {
+      where.productionDate = {};
+      if (opts.from) where.productionDate.gte = new Date(opts.from);
+      if (opts.to) {
+        const t = new Date(opts.to); t.setDate(t.getDate() + 1);
+        where.productionDate.lt = t;
+      }
+    }
+    const productions = await this.prisma.dailyProduction.findMany({
+      where,
+      include: {
+        produced: true,
+        wastages: true,
+      },
+      orderBy: { productionDate: 'asc' },
+    });
+    if (productions.length === 0) {
+      return {
+        from: opts.from ?? null,
+        to: opts.to ?? null,
+        totals: {
+          productionCost: 0,
+          producedCartons: 0,
+          wasteQty: 0,
+          wasteCost: 0,
+          wastePct: 0,
+          legacyProductions: 0,
+        },
+        rows: [],
+      };
+    }
+
+    // Batch-load allocations for every production in the window.
+    const dpIds = productions.map((p) => p.id);
+    const allocations: Array<{ dailyProductionId: string; totalCost: any }> =
+      await (this.prisma as any).productionCostAllocation.findMany({
+        where: { tenantId, dailyProductionId: { in: dpIds } },
+        select: { dailyProductionId: true, totalCost: true },
+      });
+    const costByDp = new Map<string, number>();
+    for (const a of allocations) {
+      const s = costByDp.get(a.dailyProductionId) ?? 0;
+      costByDp.set(a.dailyProductionId, s + Number(a.totalCost));
+    }
+
+    let totalCost = 0, totalCartons = 0, totalWasteQty = 0, totalWasteCost = 0;
+    let legacyCount = 0;
+    const rows = productions.map((p: any) => {
+      const productionCost = costByDp.get(p.id) ?? 0;
+      const producedCartons = p.produced.reduce(
+        (s: number, x: any) => s + Number(x.cartonsTotal ?? 0), 0,
+      );
+      const wasteQty = p.wastages.reduce(
+        (s: number, x: any) => s + Number(x.quantity ?? 0), 0,
+      );
+      const unitCost = producedCartons > 0 ? productionCost / producedCartons : 0;
+      const wasteCost = wasteQty * unitCost;
+      const legacy = productionCost === 0 && producedCartons > 0;
+      if (legacy) legacyCount++;
+      totalCost += productionCost;
+      totalCartons += producedCartons;
+      totalWasteQty += wasteQty;
+      totalWasteCost += wasteCost;
+      return {
+        productionId: p.id,
+        productionDate: p.productionDate,
+        productionCost,
+        producedCartons,
+        wasteQty,
+        wasteCost,
+        unitCost,
+        legacy, // true => posted before Blocker B1; no FIFO cost recorded
+      };
+    });
+
+    const denom = totalCartons + totalWasteQty;
+    const wastePct = denom > 0 ? (totalWasteQty / denom) * 100 : 0;
+    const r4 = (n: number) => Math.round(n * 10_000) / 10_000;
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+
+    return {
+      from: opts.from ?? null,
+      to: opts.to ?? null,
+      totals: {
+        productionCost: r4(totalCost),
+        producedCartons: totalCartons,
+        wasteQty: totalWasteQty,
+        wasteCost: r4(totalWasteCost),
+        wastePct: r2(wastePct),
+        legacyProductions: legacyCount,
+      },
+      rows,
+    };
   }
 
   async delete(tenantId: string, id: string) {
