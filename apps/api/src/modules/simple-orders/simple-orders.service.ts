@@ -771,9 +771,12 @@ export class SimpleOrdersService {
     if (wh) return wh;
     // No legacy-warehouse fallback — adopting BULK/FIN/PKG when MAIN is
     // absent silently binds writes to a warehouse that holds none of the
-    // balance (incident 2026-08-16). Create the real MAIN instead.
-    return tx.warehouse.create({
-      data: { tenantId, code: 'MAIN', name: 'المخزن الرئيسي', type: 'GENERAL' },
+    // balance (incident 2026-08-16). Create the real MAIN instead, via
+    // upsert so concurrent callers converge on one row.
+    return tx.warehouse.upsert({
+      where: { tenantId_code: { tenantId, code: 'MAIN' } },
+      update: {},
+      create: { tenantId, code: 'MAIN', name: 'المخزن الرئيسي', type: 'GENERAL' },
     });
   }
 

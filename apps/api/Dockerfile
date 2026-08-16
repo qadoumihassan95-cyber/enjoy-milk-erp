@@ -75,7 +75,35 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
 ENTRYPOINT ["/sbin/tini","--"]
 # On boot: (1) apply pending migrations, (2) seed once (idempotent — upserts,
 # لا يصفّر كلمات المرور), (3) start the API. الـ seed غير حرج: لو فشل، الـ API يكمل.
-# ملاحظة: نستخدم `db push` بدل `migrate deploy` لمزامنة القاعدة مع الـ schema الحالي
-# تماماً (الـ migrations كانت قديمة ولا تطابق schema v2). آمن لأن القاعدة لا تحوي
-# بيانات حقيقية بعد، والبذور تُعاد تلقائياً.
-CMD ["sh","-c","node node_modules/prisma/build/index.js db push --schema=./prisma/schema.prisma --accept-data-loss --skip-generate && echo '=== SEED START ===' && (NODE_PATH=/app/apps/api/node_modules:/app/node_modules node prisma/seed.js || echo '=== SEED SKIPPED (non-fatal) ===') && echo '=== SEED END ===' && node apps/api/dist/main.js"]
+#
+# `migrate deploy` — NOT `db push` (incident 2026-08-16)
+# ------------------------------------------------------
+# This previously ran `db push --accept-data-loss`. Two consequences, both
+# of which bit us in production:
+#
+#   1. `db push` syncs SCHEMA ONLY. It executes no DML, so every data
+#      migration under prisma/migrations was silently skipped. That is
+#      how 20260814170000_single_warehouse_consolidation never ran: the
+#      deploy went green, the ProductionCostAllocation table appeared,
+#      and no MAIN warehouse was ever created. It also writes nothing to
+#      _prisma_migrations, so there was no way to tell after the fact.
+#
+#   2. `--accept-data-loss` authorises Prisma to DROP columns and tables
+#      whenever schema.prisma and the database disagree. On a live ERP
+#      that is a standing risk of silent data destruction.
+#
+# `migrate deploy` applies pending migrations in order, runs their DML,
+# records each one in _prisma_migrations, and never drops anything that
+# a migration did not explicitly ask it to.
+#
+# It is intentionally chained with `&&`: if a migration fails the process
+# exits non-zero, the container never starts, Render's health check never
+# passes, and the PREVIOUS container keeps serving traffic. A failed
+# deploy is strictly safer than an API running against a schema it does
+# not agree with.
+#
+# PREREQUISITE — run ops/BASELINE-migration-history.sql against a database
+# whose schema was previously managed by `db push`, BEFORE the first image
+# with this CMD reaches it. Otherwise `migrate deploy` will try to re-apply
+# migrations whose objects already exist and will fail on startup.
+CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy --schema=./prisma/schema.prisma && echo '=== SEED START ===' && (NODE_PATH=/app/apps/api/node_modules:/app/node_modules node prisma/seed.js || echo '=== SEED SKIPPED (non-fatal) ===') && echo '=== SEED END ===' && node apps/api/dist/main.js"]

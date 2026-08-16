@@ -295,15 +295,19 @@ export class InventoryService {
    */
   async resolveMainWarehouse(tenantId: string) {
     // 1) ابحث عن MAIN
-    let wh = await this.prisma.warehouse.findFirst({
+    const wh = await this.prisma.warehouse.findFirst({
       where: { tenantId, code: 'MAIN' },
     });
     if (wh) return wh;
     // 2) MAIN غير موجود — أنشئه. لا نتبنّى مخزناً قديماً (BULK/FIN/PKG)
     //    لأن ذلك يربط الكتابة بمخزن لا يحمل الرصيد فعلياً بينما الواجهة
     //    تجمع عبر كل المخازن → أرقام خاطئة بصمت (حادثة 2026-08-16).
-    return this.prisma.warehouse.create({
-      data: {
+    //    upsert بدل create ليكون الإنشاء آمناً عند التزامن
+    //    (@@unique([tenantId, code])).
+    return this.prisma.warehouse.upsert({
+      where: { tenantId_code: { tenantId, code: 'MAIN' } },
+      update: {},
+      create: {
         tenantId,
         code: 'MAIN',
         name: 'المخزن الرئيسي',

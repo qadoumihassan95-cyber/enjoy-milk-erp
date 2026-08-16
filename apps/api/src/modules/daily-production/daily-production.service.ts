@@ -965,8 +965,14 @@ export class DailyProductionService {
       where: { tenantId, code: 'MAIN' },
     });
     if (wh) return wh;
-    return this.prisma.warehouse.create({
-      data: { tenantId, code: 'MAIN', name: 'المخزن الرئيسي', type: 'GENERAL' },
+    // Not found — create it race-safely. Two concurrent callers landing
+    // here both resolve to the SAME row because of @@unique([tenantId,
+    // code]); a plain create() would make the loser throw P2002. The
+    // read above keeps the hot path a single SELECT.
+    return this.prisma.warehouse.upsert({
+      where: { tenantId_code: { tenantId, code: 'MAIN' } },
+      update: {},
+      create: { tenantId, code: 'MAIN', name: 'المخزن الرئيسي', type: 'GENERAL' },
     });
   }
 
