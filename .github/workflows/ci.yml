@@ -157,7 +157,52 @@ jobs:
         run: npx jest --config packages/erp-ai-core/jest.config.js --ci
 
   # ───────────────────────────────────────────────────────────────────
-  #  3. Regression guards — cheap greps for defects already fixed once.
+  #  3. FIFO concurrency proof — REAL PostgreSQL, two live transactions.
+  #
+  #  A mocked Prisma client cannot interleave transactions, so it cannot
+  #  observe a lost update. This job runs the actual thing.
+  #
+  #  The harness self-validates: scenario A replays the OLD
+  #  read-modify-write pattern and asserts that it DOES double-consume.
+  #  If that control ever stops failing, the harness has stopped being
+  #  able to detect the defect and the other scenarios mean nothing.
+  # ───────────────────────────────────────────────────────────────────
+  fifo-concurrency:
+    name: FIFO concurrency (real PostgreSQL)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: fifotest
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install pg driver
+        run: npm install --no-save --prefix /tmp/pgdeps pg
+
+      - name: Concurrency proof
+        env:
+          DATABASE_URL: postgres://ci:ci@localhost:5432/fifotest
+          PG_MODULE_PREFIX: /tmp/pgdeps
+        run: node apps/api/test/fifo-concurrency.int.js
+
+  # ───────────────────────────────────────────────────────────────────
+  #  4. Regression guards — cheap greps for defects already fixed once.
   # ───────────────────────────────────────────────────────────────────
   guards:
     name: Regression guards

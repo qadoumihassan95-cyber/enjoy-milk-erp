@@ -495,6 +495,14 @@ export class DailyProductionService {
       for (const a of dp.aluminumUsage) if (a.itemId) rawRows.push({ itemId: a.itemId, qty: Number(a.quantity) });
       for (const m of dp.milkUsage)     if (m.itemId) rawRows.push({ itemId: m.itemId, qty: Number(m.quantity) });
 
+      // ─── ترتيب حتمي للقفل (deterministic lock ordering) ───
+      // كل استهلاك يأخذ قفل صفوف على دفعات الصنف حتى نهاية المعاملة.
+      // لو رحّلت وردية أ المواد بالترتيب (X ثم Y) ورحّلت وردية ب بالترتيب
+      // (Y ثم X) في نفس اللحظة، لأمسكت كل واحدة بقفل تنتظره الأخرى —
+      // deadlock. الترتيب حسب itemId يجعل كل المعاملات تطلب الأقفال بنفس
+      // التسلسل، فيستحيل تكوّن دورة انتظار.
+      rawRows.sort((a, b) => (a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0));
+
       let rawCostTotal = 0;
       for (const r of rawRows) {
         // If FIFO batches are insufficient (which shouldn't happen —

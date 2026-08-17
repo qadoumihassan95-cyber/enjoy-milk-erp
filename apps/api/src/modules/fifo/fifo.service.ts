@@ -1,4 +1,8 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  ConflictException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../core/prisma/prisma.service';
 
@@ -18,6 +22,145 @@ import { PrismaService } from '../../core/prisma/prisma.service';
 @Injectable()
 export class FifoCostingService {
   constructor(private readonly prisma: PrismaService) {}
+
+  // ═══════════════════════════════════════════════════════════
+  // (0) أمان التزامن — قفل صفوف الدفعات
+  // ═══════════════════════════════════════════════════════════
+  /**
+   * Concurrency model — why this exists
+   * ───────────────────────────────────
+   * The previous implementation read candidate batches with a plain
+   * `findMany`, computed `avail - take` in JavaScript, then wrote that
+   * absolute value back. Under PostgreSQL's default READ COMMITTED
+   * isolation two concurrent transactions both read `remaining = 100`,
+   * both computed `100 - 60 = 40`, and both wrote 40. 120 units were
+   * consumed from a batch that held 100, silently, with no error — a
+   * textbook lost update. COGS is wrong from that moment on and nothing
+   * surfaces it.
+   *
+   * Two independent defences are now in place.
+   *
+   * 1. `SELECT … FOR UPDATE` (this method).
+   *    Takes a row-level exclusive lock on every candidate batch for the
+   *    remainder of the transaction. A second transaction touching the
+   *    same batches blocks at this statement until the first commits or
+   *    rolls back, and then re-reads the *new* `remaining`. Serialised,
+   *    so FIFO order and availability are both computed against reality.
+   *
+   *    `SKIP LOCKED` is deliberately NOT used: skipping a locked batch
+   *    would break FIFO ordering and could report a false shortage.
+   *    Blocking is the correct behaviour here.
+   *
+   * 2. A guarded conditional decrement at the write site:
+   *      updateMany({ where: { id, remaining: { gte: take } },
+   *                   data:  { remaining: { decrement: take } } })
+   *    This compiles to `SET remaining = remaining - take WHERE
+   *    remaining >= take` — evaluated by the database against the current
+   *    row, never against a value computed in application memory. Even if
+   *    a future caller invokes this service outside a transaction and the
+   *    lock is therefore not held to commit, the decrement still cannot
+   *    drive `remaining` negative; it matches zero rows instead, and we
+   *    raise rather than silently over-consume.
+   *
+   * Deadlock avoidance — deterministic lock ordering
+   * ────────────────────────────────────────────────
+   * Within one item, every caller locks rows in the same total order:
+   * `purchaseDate, createdAt, id`. `id` is included so the ordering is
+   * total even when two batches share a timestamp — without it two
+   * transactions could acquire the same pair of rows in opposite orders.
+   *
+   * Across items, the caller is responsible for consuming items in a
+   * deterministic order. `daily-production.service.post()` sorts its raw
+   * rows by `itemId` before consuming for exactly this reason: two sheets
+   * listing the same materials in different order would otherwise be able
+   * to deadlock.
+   *
+   * Residual deadlocks (unavoidable in principle) are handled by
+   * `runWithRetry` below.
+   */
+  private async lockBatchesForUpdate(
+    client: Prisma.TransactionClient,
+    tenantId: string,
+    itemId: string,
+  ): Promise<void> {
+    // Only the ids are selected: the lock is the point, and reading the
+    // numeric columns back through Prisma's typed client below avoids
+    // raw-driver Decimal conversion differences.
+    await client.$queryRaw`
+      SELECT id
+      FROM "PurchaseBatch"
+      WHERE "tenantId" = ${tenantId}
+        AND "itemId"   = ${itemId}
+        AND remaining  > 0
+      ORDER BY "purchaseDate" ASC, "createdAt" ASC, id ASC
+      FOR UPDATE
+    `;
+  }
+
+  /**
+   * Read the FIFO-ordered candidate batches for an item, holding an
+   * exclusive lock on each for the rest of the transaction.
+   */
+  private async lockAndLoadBatches(
+    client: Prisma.TransactionClient,
+    tenantId: string,
+    itemId: string,
+  ) {
+    await this.lockBatchesForUpdate(client, tenantId, itemId);
+    return client.purchaseBatch.findMany({
+      where: { tenantId, itemId, remaining: { gt: 0 } },
+      orderBy: [{ purchaseDate: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    });
+  }
+
+  /**
+   * Atomically take `qty` from one batch.
+   *
+   * Returns false when the row no longer satisfies `remaining >= qty`,
+   * which under a correctly held lock should be unreachable — it is the
+   * backstop described in defence (2) above.
+   */
+  private async takeFromBatch(
+    client: Prisma.TransactionClient,
+    batchId: string,
+    qty: number,
+  ): Promise<boolean> {
+    const res = await client.purchaseBatch.updateMany({
+      where: { id: batchId, remaining: { gte: new Prisma.Decimal(qty) } },
+      data: { remaining: { decrement: new Prisma.Decimal(qty) } },
+    });
+    return res.count === 1;
+  }
+
+  /**
+   * Retry wrapper for the transactions this service opens itself.
+   *
+   * PostgreSQL aborts one participant of a deadlock (40P01) and can abort
+   * a transaction on serialization failure (40001). Both are transient and
+   * safe to replay: nothing was committed. Callers that pass their own
+   * `tx` are NOT retried here — retrying half of someone else's
+   * transaction would be incorrect, so their outer handler owns it.
+   */
+  private async runWithRetry<T>(
+    fn: (client: Prisma.TransactionClient) => Promise<T>,
+    attempts = 3,
+  ): Promise<T> {
+    let lastErr: unknown;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        return await this.prisma.$transaction((c) => fn(c));
+      } catch (err: any) {
+        const code = err?.code ?? err?.meta?.code;
+        const transient =
+          code === '40P01' || code === '40001' || code === 'P2034';
+        if (!transient || i === attempts - 1) throw err;
+        lastErr = err;
+        // Small linear backoff — enough to let the winner commit.
+        await new Promise((r) => setTimeout(r, 25 * (i + 1)));
+      }
+    }
+    throw lastErr;
+  }
 
   // ═══════════════════════════════════════════════════════════
   // (1) إنشاء دفعة شراء
@@ -86,15 +229,13 @@ export class FifoCostingService {
 
     // إذا لم يُقدَّم tx، ننشئ واحداً محلياً
     const exec = async (client: Prisma.TransactionClient) => {
-      // Lock السطور — نقرأ الدفعات المتاحة مرتّبة FIFO
-      const batches = await client.purchaseBatch.findMany({
-        where: {
-          tenantId,
-          itemId: dto.itemId,
-          remaining: { gt: 0 },
-        },
-        orderBy: [{ purchaseDate: 'asc' }, { createdAt: 'asc' }],
-      });
+      // قفل صفوف الدفعات فعلياً (SELECT … FOR UPDATE) قبل القراءة —
+      // راجع lockBatchesForUpdate لشرح سبب ذلك.
+      const batches = await this.lockAndLoadBatches(
+        client,
+        tenantId,
+        dto.itemId,
+      );
 
       const totalAvailable = batches.reduce((s, b) => s + Number(b.remaining), 0);
       if (totalAvailable + 1e-9 < need) {
@@ -117,11 +258,13 @@ export class FifoCostingService {
         totalCost += lineCost;
         remainingNeed -= take;
 
-        // خصم الرصيد المتبقي من الدفعة
-        await client.purchaseBatch.update({
-          where: { id: b.id },
-          data: { remaining: new Prisma.Decimal(avail - take) },
-        });
+        // خصم ذرّي مشروط — تقيّمه قاعدة البيانات على الصف الحالي
+        const ok = await this.takeFromBatch(client, b.id, take);
+        if (!ok) {
+          throw new ConflictException(
+            'تعذّر خصم الدفعة بسبب تعديل متزامن — أعد المحاولة',
+          );
+        }
 
         // إنشاء سجل التوزيع الدائم
         const alloc = await client.saleCostAllocation.create({
@@ -147,7 +290,9 @@ export class FifoCostingService {
       };
     };
 
-    return tx ? exec(tx) : this.prisma.$transaction((c) => exec(c));
+    // عند فتح المعاملة داخلياً نعيد المحاولة على الأخطاء العابرة
+    // (deadlock / serialization). أما إذا مرّر المتصل tx فالمسؤولية عليه.
+    return tx ? exec(tx) : this.runWithRetry(exec);
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -162,16 +307,13 @@ export class FifoCostingService {
       const allocs = await client.saleCostAllocation.findMany({
         where: { tenantId, saleOrderId },
       });
+      // زيادة ذرّية بدل قراءة-ثم-كتابة: الاسترجاع كان يعاني من نفس سباق
+      // الفقدان (lost update) الموجود في الاستهلاك — عمليتا إلغاء متزامنتان
+      // على دفعة واحدة كانتا تكتبان القيمة نفسها فتضيع إحدى الاستعادتين.
       for (const a of allocs) {
-        const b = await client.purchaseBatch.findUnique({ where: { id: a.batchId } });
-        if (!b) continue;
-        await client.purchaseBatch.update({
-          where: { id: b.id },
-          data: {
-            remaining: new Prisma.Decimal(
-              Number(b.remaining) + Number(a.quantity),
-            ),
-          },
+        await client.purchaseBatch.updateMany({
+          where: { id: a.batchId, tenantId },
+          data: { remaining: { increment: new Prisma.Decimal(Number(a.quantity)) } },
         });
       }
       await client.saleCostAllocation.deleteMany({
@@ -179,7 +321,9 @@ export class FifoCostingService {
       });
       return { restoredAllocations: allocs.length };
     };
-    return tx ? exec(tx) : this.prisma.$transaction((c) => exec(c));
+    // عند فتح المعاملة داخلياً نعيد المحاولة على الأخطاء العابرة
+    // (deadlock / serialization). أما إذا مرّر المتصل tx فالمسؤولية عليه.
+    return tx ? exec(tx) : this.runWithRetry(exec);
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -240,14 +384,12 @@ export class FifoCostingService {
     }
 
     const exec = async (client: Prisma.TransactionClient) => {
-      const batches = await client.purchaseBatch.findMany({
-        where: {
-          tenantId,
-          itemId: dto.rawItemId,
-          remaining: { gt: 0 },
-        },
-        orderBy: [{ purchaseDate: 'asc' }, { createdAt: 'asc' }],
-      });
+      // نفس استراتيجية القفل المستخدمة في البيع — راجع lockBatchesForUpdate
+      const batches = await this.lockAndLoadBatches(
+        client,
+        tenantId,
+        dto.rawItemId,
+      );
 
       const totalAvailable = batches.reduce((s, b) => s + Number(b.remaining), 0);
 
@@ -272,10 +414,12 @@ export class FifoCostingService {
         totalCost += lineCost;
         remainingNeed -= take;
 
-        await client.purchaseBatch.update({
-          where: { id: b.id },
-          data: { remaining: new Prisma.Decimal(avail - take) },
-        });
+        const ok = await this.takeFromBatch(client, b.id, take);
+        if (!ok) {
+          throw new ConflictException(
+            'تعذّر خصم الدفعة بسبب تعديل متزامن — أعد المحاولة',
+          );
+        }
 
         const alloc = await (client as any).productionCostAllocation.create({
           data: {
@@ -341,7 +485,9 @@ export class FifoCostingService {
       };
     };
 
-    return tx ? exec(tx) : this.prisma.$transaction((c) => exec(c));
+    // عند فتح المعاملة داخلياً نعيد المحاولة على الأخطاء العابرة
+    // (deadlock / serialization). أما إذا مرّر المتصل tx فالمسؤولية عليه.
+    return tx ? exec(tx) : this.runWithRetry(exec);
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -370,11 +516,10 @@ export class FifoCostingService {
           continue;
         }
 
-        await client.purchaseBatch.update({
-          where: { id: b.id },
-          data: {
-            remaining: new Prisma.Decimal(Number(b.remaining) + Number(a.quantity)),
-          },
+        // زيادة ذرّية — انظر التعليق في reverseForSale
+        await client.purchaseBatch.updateMany({
+          where: { id: b.id, tenantId },
+          data: { remaining: { increment: new Prisma.Decimal(Number(a.quantity)) } },
         });
       }
 
@@ -394,7 +539,9 @@ export class FifoCostingService {
         removedShortageBatches: shortageBatchIds.length,
       };
     };
-    return tx ? exec(tx) : this.prisma.$transaction((c) => exec(c));
+    // عند فتح المعاملة داخلياً نعيد المحاولة على الأخطاء العابرة
+    // (deadlock / serialization). أما إذا مرّر المتصل tx فالمسؤولية عليه.
+    return tx ? exec(tx) : this.runWithRetry(exec);
   }
 
   // ═══════════════════════════════════════════════════════════
