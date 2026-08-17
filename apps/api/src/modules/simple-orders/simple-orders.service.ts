@@ -787,19 +787,56 @@ export class SimpleOrdersService {
     warehouseId: string,
     qty: number,
   ) {
+    // ── جذر المشكلة ──────────────────────────────────────────────
+    // كان هنا `Math.max(0, newQty)`. عند بيع كمية أكبر من الرصيد كانت
+    // الفاتورة تُسجَّل بالكامل وتستهلك دفعات FIFO بالكامل، بينما يتوقف
+    // الرصيد عند صفر — أي أن الفرق يختفي بلا أثر. النتيجة: StockLevel
+    // أقل مما استُهلك فعلياً، وتقرير المطابقة يرى انحرافاً لا مصدر له.
+    //
+    // الرصيد السالب مسموح عمداً (نفس منطق WARNING_MODE في الإنتاج): البيع
+    // حدث فعلاً، والتصحيح يأتي لاحقاً بجرد أو تسوية. المهم أن يُسجَّل
+    // النقص بدل أن يُبتَلع.
+    await this.upsertStockLevelExact(tx, tenantId, itemId, warehouseId, -qty);
+  }
+
+  /**
+   * Applies a delta to a StockLevel row, creating it when absent.
+   *
+   * The previous pair of helpers each had a silent-loss branch: deductStock
+   * did nothing at all when no row existed, and adjustStock dropped negative
+   * deltas in the same case (`else if (delta > 0)`). Both meant a sale could
+   * consume FIFO and bill the customer while the balance recorded nothing.
+   *
+   * A missing row is treated as a balance of zero and materialised, so the
+   * resulting negative balance is visible to the reconciliation report
+   * instead of being lost.
+   */
+  private async upsertStockLevelExact(
+    tx: any,
+    tenantId: string,
+    itemId: string,
+    warehouseId: string,
+    delta: number,
+  ) {
+    if (!delta) return;
     const existing = await tx.stockLevel.findFirst({
       where: { itemId, warehouseId, batchId: null },
     });
     if (existing) {
-      const newQty = Number(existing.quantity) - qty;
       await tx.stockLevel.update({
         where: { id: existing.id },
-        data: { quantity: new Prisma.Decimal(Math.max(0, newQty)) },
+        data: { quantity: new Prisma.Decimal(Number(existing.quantity) + delta) },
       });
+      return;
     }
-    // لو ما في stock level — لا نرمي خطأ، فقط نسجل الحركة
-    // (Historical behaviour preserved to avoid breaking legacy orders
-    // that were created before the single-warehouse migration ran.)
+    await tx.stockLevel.create({
+      data: {
+        tenantId,
+        itemId,
+        warehouseId,
+        quantity: new Prisma.Decimal(delta),
+      },
+    });
   }
 
   private async adjustStock(
@@ -809,25 +846,8 @@ export class SimpleOrdersService {
     warehouseId: string,
     delta: number,
   ) {
-    const existing = await tx.stockLevel.findFirst({
-      where: { itemId, warehouseId, batchId: null },
-    });
-    if (existing) {
-      await tx.stockLevel.update({
-        where: { id: existing.id },
-        data: {
-          quantity: new Prisma.Decimal(Number(existing.quantity) + delta),
-        },
-      });
-    } else if (delta > 0) {
-      await tx.stockLevel.create({
-        data: {
-          tenantId,
-          itemId,
-          warehouseId,
-          quantity: new Prisma.Decimal(delta),
-        },
-      });
-    }
+    // كان هنا `else if (delta > 0)` — أي أن أي تخفيض على صنف بلا سطر رصيد
+    // كان يُهمَل بصمت. الآن يُنشأ السطر بقيمة سالبة ليظهر النقص.
+    await this.upsertStockLevelExact(tx, tenantId, itemId, warehouseId, delta);
   }
 }
