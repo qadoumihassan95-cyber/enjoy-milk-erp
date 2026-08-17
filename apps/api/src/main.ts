@@ -3,9 +3,15 @@ import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { validateJwtSecretAtStartup } from './core/config/jwt-secret';
 
 async function bootstrap() {
   const isProd = process.env.NODE_ENV === 'production';
+
+  // ── التحقق من الإعدادات الحرجة قبل إنشاء التطبيق ──
+  // في الإنتاج: يفشل الإقلاع فوراً إذا كان JWT_SECRET مفقوداً أو ضعيفاً،
+  // بدلاً من العمل بصمت بسرّ معروف. لا يطبع السرّ نفسه أبداً.
+  const jwtStatus = validateJwtSecretAtStartup();
 
   // قائمة العناوين المسموح لها (CORS)
   const allowedOrigins = (process.env.APP_URL?.split(',').map((s) => s.trim()) ?? [
@@ -64,6 +70,7 @@ async function bootstrap() {
 
   const logger = new Logger('Bootstrap');
   logger.log(`🥛 Enjoy Milk API listening on port ${port} (${process.env.NODE_ENV ?? 'development'})`);
+  logger.log(`🔐 ${jwtStatus}`);
   if (!isProd) logger.log(`📚 Swagger: http://localhost:${port}/api/docs`);
 }
 
