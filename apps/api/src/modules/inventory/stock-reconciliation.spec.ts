@@ -15,6 +15,10 @@ function makeDb(seed: {
   items?: Row[];
   stockLevels?: Row[];
   batches?: Row[];
+  movements?: Row[];
+  milk?: Row[];
+  waste?: Row[];
+  allocations?: Row[];
 }) {
   const items = seed.items ?? [];
   const stockLevels = seed.stockLevels ?? [];
@@ -70,6 +74,15 @@ function makeDb(seed: {
     item: table(items, 'item'),
     stockLevel: table(stockLevels, 'stockLevel'),
     purchaseBatch: table(batches, 'purchaseBatch'),
+    // Stage 4.4 diagnostics read these. Empty by default so the existing
+    // findings assertions are unaffected; the diagnostics suite below
+    // seeds them explicitly.
+    stockMovement: table(seed.movements ?? [], 'stockMovement'),
+    productionMilkUsage: table(seed.milk ?? [], 'productionMilkUsage'),
+    productionCartonUsage: table([], 'productionCartonUsage'),
+    productionAluminumUsage: table([], 'productionAluminumUsage'),
+    productionWaste: table(seed.waste ?? [], 'productionWaste'),
+    productionCostAllocation: table(seed.allocations ?? [], 'productionCostAllocation'),
     $transaction: () => { throw new Error('WRITE ATTEMPTED: $transaction'); },
     $executeRaw: () => { throw new Error('WRITE ATTEMPTED: $executeRaw'); },
   } as any;
@@ -325,5 +338,142 @@ describe('the SQL twin stays read-only', () => {
     for (const verb of ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'TRUNCATE', 'CREATE']) {
       expect(code.toUpperCase()).not.toMatch(new RegExp(`\\b${verb}\\s+`, 'i'));
     }
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+//  Stage 4.4 — row-level diagnostics
+// ═════════════════════════════════════════════════════════════════════
+
+describe('conversion mismatch', () => {
+  it('flags a waste row whose unit disagrees with the item — the live 300 "L" on a PCS item', async () => {
+    const db = makeDb({
+      items: [item('p', 'حليب 1 لتر', { unit: 'PCS' })],
+      stockLevels: [level('p', 100)],
+      batches: [batch('p', 100)],
+      waste: [{ id: 'w1', tenantId: 't1', itemId: 'p', quantity: 300, unit: 'L', dailyProductionId: 'dp1' }],
+    });
+    const d = (await run(db)).diagnostics.conversionMismatch;
+
+    expect(d).toHaveLength(1);
+    expect(d[0].source).toBe('wastage');
+    expect(d[0].rowUnit).toBe('L');
+    expect(d[0].itemUnit).toBe('PCS');
+    expect(d[0].quantity).toBe(300);
+  });
+
+  it('flags a row the converter gave up on', async () => {
+    const db = makeDb({
+      items: [item('r', 'رول', { unit: 'ROLL' })],
+      milk: [{ id: 'm1', tenantId: 't1', itemId: 'r', quantity: 5, unit: 'ROLL', factorSource: 'UNCONVERTIBLE', dailyProductionId: 'dp1' }],
+    });
+    const d = (await run(db)).diagnostics.conversionMismatch;
+    expect(d.map((x: any) => x.factorSource)).toContain('UNCONVERTIBLE');
+  });
+
+  it('says nothing when units agree', async () => {
+    const db = makeDb({
+      items: [item('k', 'حليب خام', { unit: 'KG' })],
+      milk: [{ id: 'm1', tenantId: 't1', itemId: 'k', quantity: 100, unit: 'KG', factorSource: 'ITEM', dailyProductionId: 'dp1' }],
+    });
+    expect((await run(db)).diagnostics.conversionMismatch).toEqual([]);
+  });
+});
+
+describe('legacy conversion factor', () => {
+  it('lists items still relying on the 25 kg fallback', async () => {
+    const db = makeDb({
+      items: [item('k', 'حليب خام', { unit: 'KG', bagWeightKg: null })],
+      milk: [
+        { id: 'm1', tenantId: 't1', itemId: 'k', quantity: 100, unit: 'KG', factorSource: 'LEGACY_DEFAULT', dailyProductionId: 'dp1' },
+        { id: 'm2', tenantId: 't1', itemId: 'k', quantity: 50, unit: 'KG', factorSource: 'LEGACY_DEFAULT', dailyProductionId: 'dp2' },
+      ],
+    });
+    const d = (await run(db)).diagnostics.legacyFactorItems;
+
+    expect(d).toHaveLength(1);
+    expect(d[0].itemId).toBe('k');
+    expect(d[0].rows).toBe(2);
+    expect(d[0].bagWeightKg).toBeNull();
+  });
+
+  it('says nothing once the item carries its own factor', async () => {
+    const db = makeDb({
+      items: [item('k', 'حليب خام', { unit: 'KG', bagWeightKg: 30 })],
+      milk: [{ id: 'm1', tenantId: 't1', itemId: 'k', quantity: 300, unit: 'KG', factorSource: 'ITEM', dailyProductionId: 'dp1' }],
+    });
+    expect((await run(db)).diagnostics.legacyFactorItems).toEqual([]);
+  });
+});
+
+describe('movement ledger mismatch', () => {
+  it('flags a balance that its own movements cannot explain', async () => {
+    // The ×100 shape: ledger says 2,117, balance says 211,700.
+    const db = makeDb({
+      items: [item('x', 'صنف')],
+      stockLevels: [level('x', 211700)],
+      batches: [batch('x', 211700)],
+      movements: [{ itemId: 'x', tenantId: 't1', type: 'IN', quantity: 2117 }],
+    });
+    const d = (await run(db)).diagnostics.ledgerMismatch;
+
+    expect(d).toHaveLength(1);
+    expect(d[0].stockLevel).toBe(211700);
+    expect(d[0].netFromMovements).toBe(2117);
+    expect(d[0].unexplained).toBe(209583);
+  });
+
+  it('nets OUT movements against IN', async () => {
+    const db = makeDb({
+      items: [item('x', 'صنف')],
+      stockLevels: [level('x', 70)],
+      batches: [batch('x', 70)],
+      movements: [
+        { itemId: 'x', tenantId: 't1', type: 'IN', quantity: 100 },
+        { itemId: 'x', tenantId: 't1', type: 'OUT', quantity: 30 },
+      ],
+    });
+    expect((await run(db)).diagnostics.ledgerMismatch).toEqual([]);
+  });
+
+  it('sorts the biggest unexplained gap first', async () => {
+    const db = makeDb({
+      items: [item('small', 'صغير'), item('big', 'كبير')],
+      stockLevels: [level('small', 110), level('big', 5000)],
+      batches: [batch('small', 110), batch('big', 5000)],
+      movements: [
+        { itemId: 'small', tenantId: 't1', type: 'IN', quantity: 100 },
+        { itemId: 'big', tenantId: 't1', type: 'IN', quantity: 100 },
+      ],
+    });
+    const d = (await run(db)).diagnostics.ledgerMismatch;
+    expect(d[0].itemId).toBe('big');
+  });
+});
+
+describe('waste with no measured cost', () => {
+  it('flags a sheet that recorded waste but has no waste allocation', async () => {
+    const db = makeDb({
+      items: [item('x', 'صنف')],
+      waste: [{ id: 'w1', tenantId: 't1', itemId: 'x', quantity: 5, unit: 'KG', dailyProductionId: 'dp-old' }],
+      allocations: [{ tenantId: 't1', dailyProductionId: 'dp-old', method: 'FIFO' }],
+    });
+    const d = (await run(db)).diagnostics.wasteCostMissing;
+
+    expect(d).toHaveLength(1);
+    expect(d[0].dailyProductionId).toBe('dp-old');
+    expect(d[0].wasteQuantity).toBe(5);
+  });
+
+  it('says nothing once waste consumed FIFO', async () => {
+    const db = makeDb({
+      items: [item('x', 'صنف')],
+      waste: [{ id: 'w1', tenantId: 't1', itemId: 'x', quantity: 5, unit: 'KG', dailyProductionId: 'dp-new' }],
+      allocations: [
+        { tenantId: 't1', dailyProductionId: 'dp-new', method: 'FIFO' },
+        { tenantId: 't1', dailyProductionId: 'dp-new', method: 'FIFO_WASTE_RAW' },
+      ],
+    });
+    expect((await run(db)).diagnostics.wasteCostMissing).toEqual([]);
   });
 });

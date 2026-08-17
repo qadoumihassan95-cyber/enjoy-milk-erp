@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import { normaliseUnit } from './unit-conversion';
 
 /**
  * StockReconciliationService — READ-ONLY stock model audit.
@@ -71,6 +72,12 @@ export class StockReconciliationService {
       absoluteDrift: number;
     };
     findings: ReconciliationFinding[];
+    diagnostics: {
+      conversionMismatch: any[];
+      legacyFactorItems: any[];
+      ledgerMismatch: any[];
+      wasteCostMissing: any[];
+    };
   }> {
     const R = StockReconciliationService.round;
     const EPS = StockReconciliationService.EPS;
@@ -244,6 +251,11 @@ export class StockReconciliationService {
       }
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    //  Stage 4.4 diagnostics — row-level checks, still strictly read-only
+    // ═══════════════════════════════════════════════════════════════
+    const diagnostics = await this.collectDiagnostics(tenantId);
+
     const fifoInventoryValue = valueRows.reduce(
       (s, b) => s + Number(b.remaining) * Number(b.unitCost),
       0,
@@ -277,6 +289,140 @@ export class StockReconciliationService {
         absoluteDrift: R(absoluteDrift),
       },
       findings,
+      diagnostics,
     };
+  }
+
+  /**
+   * Row-level checks that do not fit the per-item findings shape.
+   *
+   * Same contract as the rest of this service: every query is a read, and
+   * nothing here repairs anything. These surface the specific defects
+   * Stage 4 fixed going forward, so the historical rows they left behind
+   * stay visible until someone decides what to do with them.
+   */
+  private async collectDiagnostics(tenantId: string) {
+    const R = StockReconciliationService.round;
+
+    const [milk, carton, aluminum, waste, items, movements, levels, wasteSheets] =
+      await Promise.all([
+        (this.prisma as any).productionMilkUsage.findMany({ where: { tenantId } }),
+        (this.prisma as any).productionCartonUsage.findMany({ where: { tenantId } }),
+        (this.prisma as any).productionAluminumUsage.findMany({ where: { tenantId } }),
+        (this.prisma as any).productionWaste.findMany({ where: { tenantId } }),
+        this.prisma.item.findMany({
+          where: { tenantId },
+          select: { id: true, sku: true, name: true, unit: true, bagWeightKg: true },
+        }),
+        this.prisma.stockMovement.findMany({
+          where: { tenantId },
+          select: { itemId: true, type: true, quantity: true },
+        }),
+        this.prisma.stockLevel.groupBy({
+          by: ['itemId'], where: { tenantId }, _sum: { quantity: true },
+        }),
+        (this.prisma as any).productionCostAllocation.findMany({
+          where: { tenantId },
+          select: { dailyProductionId: true, method: true },
+        }),
+      ]);
+
+    const itemById = new Map(items.map((i: any) => [i.id, i]));
+
+    // ── 1. Conversion mismatch ──────────────────────────────────────
+    // A usage row whose unit disagrees with its item's, or that the
+    // converter could not reconcile at all. Live example: a waste row of
+    // 300 "L" against a PCS item.
+    const conversionMismatch: any[] = [];
+    const scan = (rows: any[], source: string) => {
+      for (const r of rows) {
+        if (!r.itemId) continue;
+        const item: any = itemById.get(r.itemId);
+        if (!item) continue;
+        const rowUnit = normaliseUnit(r.unit ?? item.unit);
+        const itemUnit = normaliseUnit(item.unit);
+        if (r.factorSource === 'UNCONVERTIBLE' || (r.unit && rowUnit !== itemUnit)) {
+          conversionMismatch.push({
+            source, rowId: r.id, itemId: r.itemId,
+            sku: item.sku, itemName: item.name,
+            rowUnit, itemUnit,
+            quantity: R(Number(r.quantity ?? 0)),
+            factorSource: r.factorSource ?? null,
+            detail: `وحدة السطر (${rowUnit}) تخالف وحدة الصنف (${itemUnit})`,
+          });
+        }
+      }
+    };
+    scan(milk, 'milkUsage');
+    scan(carton, 'cartonUsage');
+    scan(aluminum, 'aluminumUsage');
+    scan(waste, 'wastage');
+
+    // ── 2. Items still relying on the legacy 25 kg fallback ─────────
+    const legacyItemIds = new Set(
+      milk.filter((m: any) => m.factorSource === 'LEGACY_DEFAULT' && m.itemId)
+          .map((m: any) => m.itemId),
+    );
+    const legacyFactorItems = [...legacyItemIds].map((id) => {
+      const i: any = itemById.get(id as string);
+      return {
+        itemId: id, sku: i?.sku ?? null, itemName: i?.name ?? '',
+        bagWeightKg: i?.bagWeightKg ? Number(i.bagWeightKg) : null,
+        rows: milk.filter((m: any) => m.itemId === id && m.factorSource === 'LEGACY_DEFAULT').length,
+        detail: 'عرّف «وزن الكيس» على الصنف ليتوقف استخدام الافتراضي القديم',
+      };
+    });
+
+    // ── 3. Movement ledger mismatch ─────────────────────────────────
+    // StockLevel vs the net of the item's own movements. A large gap means
+    // the balance was written outside the application — this is the check
+    // that surfaced the ×100 anomaly.
+    const netByItem = new Map<string, number>();
+    for (const m of movements as any[]) {
+      const q = Number(m.quantity ?? 0);
+      const signed = m.type === 'IN' || m.type === 'RETURN' ? q : -q;
+      netByItem.set(m.itemId, (netByItem.get(m.itemId) ?? 0) + signed);
+    }
+    const ledgerMismatch: any[] = [];
+    for (const l of levels as any[]) {
+      const stock = Number(l._sum.quantity ?? 0);
+      const net = netByItem.get(l.itemId) ?? 0;
+      if (Math.abs(stock - net) > StockReconciliationService.EPS) {
+        const i: any = itemById.get(l.itemId);
+        ledgerMismatch.push({
+          itemId: l.itemId, sku: i?.sku ?? null, itemName: i?.name ?? '',
+          stockLevel: R(stock), netFromMovements: R(net),
+          unexplained: R(stock - net),
+          detail: 'الرصيد لا يساوي صافي حركاته — كُتب على الأرجح خارج التطبيق',
+        });
+      }
+    }
+    ledgerMismatch.sort((a, b) => Math.abs(b.unexplained) - Math.abs(a.unexplained));
+
+    // ── 4. Waste with no measured cost ──────────────────────────────
+    // A posted sheet that recorded waste but has no waste allocation was
+    // posted before waste consumed FIFO. Its waste cost in the report is
+    // the old carton-cost estimate, not a measurement.
+    const sheetsWithWasteAlloc = new Set(
+      (wasteSheets as any[])
+        .filter((a) => (a.method ?? '').startsWith('FIFO_WASTE'))
+        .map((a) => a.dailyProductionId),
+    );
+    const wasteBySheet = new Map<string, number>();
+    for (const w of waste as any[]) {
+      wasteBySheet.set(
+        w.dailyProductionId,
+        (wasteBySheet.get(w.dailyProductionId) ?? 0) + Number(w.quantity ?? 0),
+      );
+    }
+    const wasteCostMissing = [...wasteBySheet.entries()]
+      .filter(([id, qty]) => qty > 0 && !sheetsWithWasteAlloc.has(id))
+      .map(([dailyProductionId, qty]) => ({
+        dailyProductionId,
+        wasteQuantity: R(qty),
+        detail: 'توالف بلا تكلفة مقاسة — رُحِّلت قبل أن تستهلك التوالف دفعات FIFO',
+      }));
+
+    return { conversionMismatch, legacyFactorItems, ledgerMismatch, wasteCostMissing };
   }
 }
