@@ -1,0 +1,123 @@
+-- =====================================================================
+--  SCOPED opening-stock backfill — حليب خام ONLY
+-- =====================================================================
+--  Creates exactly ONE PurchaseBatch, for one item, so that daily
+--  production sheet cmsw2910y0004u37ykqdooolr can post. Every other item
+--  is deliberately left alone pending the costing recovery exercise
+--  (see ops/COSTING-RECOVERY-REPORT-2026-08-17.md).
+--
+--  TARGET — verified live 2026-08-17
+--  --------------------------------
+--    itemId        cmrxe2q6y0004rcaasmpih45d
+--    tenantId      cmpejojr80000uef0dx69ve2q
+--    sku           ITM-MRXE2Q6X
+--    name          حليب خام
+--    unit          KG
+--    active        true
+--    StockLevel    40,000.0000  (1 row)
+--    FIFO remaining 0           (0 existing batches, 0 OPENING_BALANCE)
+--    StockMovements 7
+--
+--  Exactly one item is named حليب خام, so the target is unambiguous. The
+--  script still pins the itemId literally rather than matching on name.
+--
+--  WHAT IT WRITES
+--  --------------
+--  One row in "PurchaseBatch": quantity = remaining = 40000, unit KG,
+--  sourceType 'OPENING_BALANCE', purchaseDate 2000-01-01 so it sorts
+--  FIRST under FIFO and is consumed before any real receipt.
+--
+--  It writes to NO other table. No StockLevel, no StockMovement, no
+--  allocation, no item master data. StockLevel is already 40,000 — this
+--  only gives that existing balance a cost basis so FIFO can consume it.
+--
+--  ⚠ YOU MUST SET THE UNIT COST — SECTION 2, ONE LINE
+--  The script ABORTS if the placeholder is left at 0, so it cannot
+--  silently create another zero-cost batch. Cost is per KG, in JOD.
+--
+--  No reliable cost exists in the database for this item (avgCost 0,
+--  costPrice 0, no priced receipts). The only related legacy record is
+--  "حليب خام عبوة 1 لتر" at 0.50 per LITRE — a different unit, so treat
+--  it as a sanity anchor, not an answer.
+--
+--  REVERSAL
+--  --------
+--  Safe to undo while nothing has consumed it:
+--    DELETE FROM "PurchaseBatch"
+--    WHERE "itemId" = 'cmrxe2q6y0004rcaasmpih45d'
+--      AND "sourceType" = 'OPENING_BALANCE';
+--  (Refuses if a ProductionCostAllocation references it — by design.)
+--
+--  HOW TO RUN
+--  ----------
+--  Render Dashboard → enjoymilk-db → Query Console.
+--  Section 1, keep the output → edit the cost in Section 2 → run
+--  Section 2 → run Section 3.
+-- =====================================================================
+
+-- =====================================================================
+-- SECTION 2 — THE INSERT (WRITES — single transaction)
+-- =====================================================================
+BEGIN;
+
+-- ─────────────────────────────────────────────────────────────────────
+--  ⬇⬇⬇  SET THE COST PER KG HERE — THE ONLY LINE TO EDIT  ⬇⬇⬇
+-- ─────────────────────────────────────────────────────────────────────
+CREATE TEMP TABLE _raw_milk_cost ON COMMIT DROP AS
+  SELECT 0.350000::numeric AS unit_cost;   -- confirmed by Hassan 2026-08-17: 0.35 JOD per KG
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Guard 1 — refuse to run with the placeholder still at zero.
+DO $$
+DECLARE c numeric;
+BEGIN
+  SELECT unit_cost INTO c FROM _raw_milk_cost;
+  IF c IS NULL OR c <= 0 THEN
+    RAISE EXCEPTION
+      'unitCost placeholder was not replaced (got %). Edit the value in SECTION 2 and re-run. Nothing was written.', c;
+  END IF;
+END $$;
+
+-- Guard 2 — refuse if the balance is no longer exactly 40,000, which
+-- would mean stock moved since this script was prepared and the batch
+-- would no longer match the balance it is meant to cover.
+DO $$
+DECLARE q numeric;
+BEGIN
+  SELECT COALESCE(SUM(quantity),0) INTO q
+  FROM "StockLevel" WHERE "itemId" = 'cmrxe2q6y0004rcaasmpih45d';
+  IF q <> 40000 THEN
+    RAISE EXCEPTION
+      'StockLevel for حليب خام is % , expected 40000. Re-check before backfilling. Nothing was written.', q;
+  END IF;
+END $$;
+
+-- The insert. NOT EXISTS makes it idempotent: a second run inserts zero
+-- rows rather than creating a duplicate opening batch.
+INSERT INTO "PurchaseBatch" (
+  id, "tenantId", "itemId", "batchNumber", "purchaseDate",
+  quantity, remaining, "unitCost", currency,
+  "sourceType", "sourceRefId", "createdById", "createdAt"
+)
+SELECT
+  gen_random_uuid()::text,
+  'cmpejojr80000uef0dx69ve2q',
+  'cmrxe2q6y0004rcaasmpih45d',
+  NULL,
+  '2000-01-01'::timestamp,          -- sorts first under FIFO
+  40000::numeric,                   -- quantity  — exactly the StockLevel
+  40000::numeric,                   -- remaining — fully unconsumed
+  (SELECT unit_cost FROM _raw_milk_cost),
+  'JOD',
+  'OPENING_BALANCE',
+  NULL,
+  NULL,
+  NOW()
+WHERE NOT EXISTS (
+  SELECT 1 FROM "PurchaseBatch" pb
+  WHERE pb."itemId" = 'cmrxe2q6y0004rcaasmpih45d'
+    AND pb."sourceType" = 'OPENING_BALANCE'
+);
+-- Expect: INSERT 0 1
+
+COMMIT;
