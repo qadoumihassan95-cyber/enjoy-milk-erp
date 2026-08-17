@@ -154,11 +154,45 @@ function makePrismaMock(store: Store) {
     const filtered = rows.filter((r) =>
       Object.entries(w).every(([k, v]) => r[k] === v || v === undefined),
     );
-    return {
-      _sum: {
-        quantity: filtered.reduce((s, r) => s + Number(r.quantity ?? 0), 0),
-      },
-    };
+    // Sums whichever fields the caller asked for. detectShortages now
+    // aggregates PurchaseBatch._sum.remaining alongside
+    // StockLevel._sum.quantity, so a hardcoded `quantity` is no longer
+    // enough. Falls back to quantity when _sum is unspecified.
+    const wanted = Object.keys(args?._sum ?? { quantity: true });
+    const _sum: Record<string, number> = {};
+    for (const f of wanted) {
+      _sum[f] = filtered.reduce((s, r) => s + Number(r[f] ?? 0), 0);
+    }
+    return { _sum };
+  };
+
+  /**
+   * Minimal Prisma filter-operator support, shared by updateMany.
+   * The FIFO concurrency fix relies on `remaining: { gte: take }`, so a
+   * mock that ignores operators would let a broken guard pass.
+   */
+  const matchValue = (actual: any, expected: any): boolean => {
+    if (expected === null || typeof expected !== 'object') return actual === expected;
+    if ('not' in expected) return actual !== expected.not;
+    if ('gte' in expected) return Number(actual) >= Number(expected.gte);
+    if ('gt' in expected) return Number(actual) > Number(expected.gt);
+    if ('lte' in expected) return Number(actual) <= Number(expected.lte);
+    if ('lt' in expected) return Number(actual) < Number(expected.lt);
+    if ('in' in expected) return (expected.in as any[]).includes(actual);
+    return actual === expected;
+  };
+
+  /** Applies Prisma's relative-update forms (increment / decrement). */
+  const applyData = (row: Row, data: any) => {
+    for (const [k, v] of Object.entries(data ?? {})) {
+      if (v && typeof v === 'object' && 'decrement' in (v as any)) {
+        row[k] = Number(row[k] ?? 0) - Number((v as any).decrement);
+      } else if (v && typeof v === 'object' && 'increment' in (v as any)) {
+        row[k] = Number(row[k] ?? 0) + Number((v as any).increment);
+      } else {
+        row[k] = v;
+      }
+    }
   };
 
   const tableApi = (rows: Row[]) => ({
@@ -193,14 +227,9 @@ function makePrismaMock(store: Store) {
       const matcher = args?.where ?? {};
       let count = 0;
       for (const r of rows) {
-        const ok = Object.entries(matcher).every(([k, v]) => {
-          if (v === null || typeof v !== 'object') return r[k] === v;
-          // Prisma "not: X" filter — minimal support.
-          if ('not' in (v as any)) return r[k] !== (v as any).not;
-          return r[k] === v;
-        });
+        const ok = Object.entries(matcher).every(([k, v]) => matchValue(r[k], v));
         if (ok) {
-          Object.assign(r, args.data);
+          applyData(r, args.data);
           count++;
         }
       }
@@ -243,6 +272,12 @@ function makePrismaMock(store: Store) {
     // STRICT_MODE settings row.
     tenantSetting: tableApi(store.tenantSettings),
     productionStockAudit: tableApi(store.productionStockAudits),
+    // FIFO now takes SELECT … FOR UPDATE before reading batches. A JS
+    // mock has no rows to lock, so this is a no-op that simply lets the
+    // call through — the real locking behaviour is proved against actual
+    // PostgreSQL in apps/api/test/fifo-concurrency.int.js.
+    $queryRaw: async () => [],
+    $executeRaw: async () => 0,
     $transaction: async (fn: any) => {
       if (typeof fn === 'function') return fn(client);
       // array form not used here

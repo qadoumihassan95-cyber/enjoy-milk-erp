@@ -19,7 +19,15 @@ import { DailyProductionService } from './daily-production.service';
 
 type Row = Record<string, any>;
 
-function makeDb(opts: { mode?: string; aluStock?: number } = {}) {
+function makeDb(opts: { mode?: string; aluStock?: number; aluFifo?: number } = {}) {
+  // detectShortages now reads BOTH layers and takes the minimum, so the
+  // harness has to model FIFO coverage too. By default the batch matches
+  // the StockLevel — the healthy case, where the two layers agree — so
+  // these specs keep testing posting modes rather than accidentally
+  // testing the layer mismatch. `aluFifo` lets a test set them apart.
+  const aluStock = opts.aluStock ?? 5;
+  const aluFifo = opts.aluFifo ?? aluStock;
+
   const state = {
     tenantSettings: opts.mode
       ? [{ id: 'ts', tenantId: 't1', productionPostingMode: opts.mode }]
@@ -30,13 +38,25 @@ function makeDb(opts: { mode?: string; aluStock?: number } = {}) {
       { id: 'fin', tenantId: 't1', name: 'منتج نهائي', avgCost: 10, costPrice: 9 },
     ] as Row[],
     stockLevels: [
-      { id: 'sl-alu', tenantId: 't1', itemId: 'alu', warehouseId: 'wh-main', batchId: null, quantity: opts.aluStock ?? 5 },
+      { id: 'sl-alu', tenantId: 't1', itemId: 'alu', warehouseId: 'wh-main', batchId: null, quantity: aluStock },
     ] as Row[],
     stockMovements: [] as Row[],
     dailyProductions: [
       { id: 'dp-1', tenantId: 't1', status: 'DRAFT' },
     ] as Row[],
-    purchaseBatches: [] as Row[],
+    purchaseBatches: [
+      {
+        id: 'pb-alu',
+        tenantId: 't1',
+        itemId: 'alu',
+        purchaseDate: new Date('2026-01-01'),
+        createdAt: new Date('2026-01-01'),
+        quantity: aluFifo,
+        remaining: aluFifo,
+        unitCost: 3,
+        sourceType: 'OPENING_BALANCE',
+      },
+    ] as Row[],
     productionCostAllocations: [] as Row[],
     productionStockAudits: [] as Row[],
     seq: 0,
@@ -78,13 +98,17 @@ function makeDb(opts: { mode?: string; aluStock?: number } = {}) {
       rows.push(made);
       return made;
     },
-    aggregate: async ({ where }: any) => {
-      const sum = rows
-        .filter((r) =>
-          Object.entries(where ?? {}).every(([k, v]) => (r[k] ?? null) === (v ?? null)),
-        )
-        .reduce((a, r) => a + Number(r.quantity ?? 0), 0);
-      return { _sum: { quantity: sum } };
+    // Sums whichever fields were requested: StockLevel._sum.quantity and
+    // PurchaseBatch._sum.remaining are both used by detectShortages.
+    aggregate: async ({ where, _sum }: any) => {
+      const matched = rows.filter((r) =>
+        Object.entries(where ?? {}).every(([k, v]) => (r[k] ?? null) === (v ?? null)),
+      );
+      const out: Record<string, number> = {};
+      for (const f of Object.keys(_sum ?? { quantity: true })) {
+        out[f] = matched.reduce((a, r) => a + Number(r[f] ?? 0), 0);
+      }
+      return { _sum: out };
     },
     deleteMany: async () => ({ count: 0 }),
   });
@@ -225,6 +249,30 @@ describe('production posting modes', () => {
       expect(Number(db.state.stockLevels[0].quantity)).toBe(-15);
     },
   );
+
+  // ─── the layer-divergence case ─────────────────────────────────────
+  // Balance looks healthy, FIFO cannot cover it. Before the fix this
+  // produced NO warning at all and the posting then blew up inside the
+  // transaction with a raw FIFO message.
+  it('WARNING_MODE engages when only the FIFO layer is short', async () => {
+    const db = makeDb({ mode: 'WARNING_MODE', aluStock: 500, aluFifo: 0 });
+    const res: any = await svcFor(db).post('t1', 'u1', 'dp-1');
+
+    expect(res.success).toBe(false);
+    expect(res.requiresConfirmation).toBe(true);
+    expect(res.warnings[0].limitedBy).toBe('FIFO_BATCHES');
+    expect(res.warnings[0].stockLevelAvailable).toBe(500);
+    expect(res.warnings[0].fifoAvailable).toBe(0);
+    // Nothing written before confirmation.
+    expect(Number(db.state.stockLevels[0].quantity)).toBe(500);
+    expect(db.state.dailyProductions[0].status).toBe('DRAFT');
+  });
+
+  it('STRICT_MODE blocks when only the FIFO layer is short', async () => {
+    const db = makeDb({ mode: 'STRICT_MODE', aluStock: 500, aluFifo: 0 });
+    await expect(svcFor(db).post('t1', 'u1', 'dp-1')).rejects.toThrow();
+    expect(db.state.dailyProductions[0].status).toBe('DRAFT');
+  });
 
   it('no shortage → posts straight through with an empty warnings array', async () => {
     const db = makeDb({ mode: 'WARNING_MODE', aluStock: 500 });

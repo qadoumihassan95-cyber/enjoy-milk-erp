@@ -1277,13 +1277,35 @@ export class DailyProductionService {
     collect(dp.milkUsage, 'حليب');
     collect(dp.wastages, 'توالف');
 
+    // ─── ما هو "المتاح" فعلياً؟ ───────────────────────────────
+    // كان هذا الفحص يقرأ StockLevel فقط، وهذا خطأ: الترحيل يستهلك
+    // PurchaseBatch.remaining عبر FIFO، لا StockLevel. الطبقتان قد
+    // تتباعدان — مثال حقيقي من الإنتاج: حليب خام برصيد StockLevel
+    // = 40,000 بينما FIFO remaining = 0 (رصيد افتتاحي بلا دفعات).
+    //
+    // النتيجة كانت أن detectShortages لا يرى نقصاً إطلاقاً، فلا
+    // STRICT_MODE يمنع ولا WARNING_MODE يحذّر، ثم يفشل الترحيل من داخل
+    // المعاملة برسالة FIFO خام لا يفهمها المستخدم.
+    //
+    // المتاح الحقيقي = أصغر الطبقتين: لا يمكن استهلاك أكثر مما يسمح به
+    // الرصيد، ولا أكثر مما تغطيه الدفعات.
     const out: any[] = [];
     for (const n of needed.values()) {
-      const agg = await this.prisma.stockLevel.aggregate({
-        where: { tenantId, itemId: n.itemId, batchId: null },
-        _sum: { quantity: true },
-      });
-      const available = Number(agg._sum.quantity ?? 0);
+      const [stockAgg, fifoAgg] = await Promise.all([
+        this.prisma.stockLevel.aggregate({
+          where: { tenantId, itemId: n.itemId, batchId: null },
+          _sum: { quantity: true },
+        }),
+        this.prisma.purchaseBatch.aggregate({
+          where: { tenantId, itemId: n.itemId },
+          _sum: { remaining: true },
+        }),
+      ]);
+
+      const stockAvailable = Number(stockAgg._sum.quantity ?? 0);
+      const fifoAvailable = Number(fifoAgg._sum.remaining ?? 0);
+      const available = Math.min(stockAvailable, fifoAvailable);
+
       if (available + 1e-9 < n.qty) {
         out.push({
           type: 'INSUFFICIENT_STOCK',
@@ -1293,6 +1315,12 @@ export class DailyProductionService {
           requiredQuantity: n.qty,
           availableQuantity: available,
           shortageQuantity: Math.round((n.qty - available) * 10000) / 10000,
+          // أي الطبقتين هي القيد — يميّز "لا يوجد رصيد" عن "الرصيد موجود
+          // لكن بلا دفعات تكلفة"، وهما حالتان تُعالَجان بشكل مختلف تماماً.
+          limitedBy:
+            fifoAvailable < stockAvailable ? 'FIFO_BATCHES' : 'STOCK_LEVEL',
+          stockLevelAvailable: stockAvailable,
+          fifoAvailable,
         });
       }
     }
