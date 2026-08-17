@@ -71,6 +71,18 @@ export default function ProductionDetailPage() {
   const [produced, setProduced] = useState<Row[]>([]);
   const [wastages, setWastages] = useState<Row[]>([]);
   const [saving, setSaving] = useState(false);
+  const [posting, setPosting] = useState(false);
+  /** نقص المخزون المُعاد من الخادم — وجوده يفتح حوار التأكيد. */
+  const [shortages, setShortages] = useState<
+    | Array<{
+        item: string;
+        section?: string;
+        requiredQuantity: number;
+        availableQuantity: number;
+        shortageQuantity: number;
+      }>
+    | null
+  >(null);
 
   // Load data into local state
   useEffect(() => {
@@ -161,17 +173,47 @@ export default function ProductionDetailPage() {
     toast.success('تم حفظ ورقة الإنتاج');
   };
 
+  /**
+   * ترحيل للمخزون
+   *
+   * الخادم لم يعد يرمي خطأ عند نقص المخزون. أول نداء يعيد
+   * { success:false, requiresConfirmation:true, warnings:[...] } دون أي
+   * كتابة، فنعرض حوار التأكيد. عند الموافقة نعيد الإرسال مع
+   * allowShortage=true فيُرحَّل الإنتاج ويُسجَّل العجز.
+   */
+  const runPost = async (allowShortage: boolean) => {
+    setPosting(true);
+    try {
+      const res = await api.post(`/daily-production/${id}/post`, { allowShortage });
+      const data = res?.data ?? {};
+
+      if (data.requiresConfirmation) {
+        setShortages(data.warnings ?? []);
+        return;
+      }
+
+      setShortages(null);
+      await safeRefetch();
+      invalidateProductionDependents();
+
+      if (data.warnings?.length) {
+        toast.success(`تم الترحيل مع تسجيل عجز في ${data.warnings.length} صنف`);
+      } else {
+        toast.success('تم الترحيل للمخزون');
+      }
+    } catch (e: any) {
+      // STRICT_MODE، أو صلاحيات غير كافية في OVERRIDE_MODE، أو أي خطأ آخر:
+      // رسالة واضحة بدل صفحة الخطأ العامة.
+      setShortages(null);
+      toast.error(e?.response?.data?.message || 'تعذّر الترحيل');
+    } finally {
+      setPosting(false);
+    }
+  };
+
   const doPost = async () => {
     if (!confirm('ترحيل اليوم وتطبيقه على المخزون؟')) return;
-    try {
-      await api.post(`/daily-production/${id}/post`);
-    } catch (e: any) {
-      toast.error(e?.response?.data?.message || 'تعذّر الترحيل');
-      return;
-    }
-    await safeRefetch();
-    invalidateProductionDependents();
-    toast.success('تم الترحيل للمخزون');
+    await runPost(false);
   };
 
   const doCancel = async () => {
@@ -261,6 +303,76 @@ export default function ProductionDetailPage() {
         </header>
 
         {/* ─── Action bar ─── */}
+        {/* ─── حوار تأكيد نقص المخزون ───────────────────────────
+            يحل محل صفحة الخطأ العامة. لا شيء يُكتب في المخزون قبل
+            ضغط "تسجيل مع تحذير". */}
+        {shortages && shortages.length > 0 && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="shortage-title"
+          >
+            <Card className="w-full max-w-lg p-5 space-y-4 bg-white">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="h-6 w-6 text-amber-500 shrink-0 mt-0.5" />
+                <div>
+                  <h3 id="shortage-title" className="font-bold text-zinc-800">
+                    نقص في مخزون المواد
+                  </h3>
+                  <p className="text-sm text-zinc-600 mt-1">
+                    يوجد نقص في مخزون بعض المواد. هل تريد تسجيل الإنتاج مع إنشاء
+                    عجز بالمخزون؟
+                  </p>
+                </div>
+              </div>
+
+              <div className="border rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-zinc-50 text-zinc-500 text-xs">
+                    <tr>
+                      <th className="p-2 text-right">الصنف</th>
+                      <th className="p-2 text-center">المطلوب</th>
+                      <th className="p-2 text-center">المتاح</th>
+                      <th className="p-2 text-center">العجز</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shortages.map((w, i) => (
+                      <tr key={i} className="border-t">
+                        <td className="p-2">{w.item}</td>
+                        <td className="p-2 text-center">{w.requiredQuantity}</td>
+                        <td className="p-2 text-center">{w.availableQuantity}</td>
+                        <td className="p-2 text-center font-bold text-amber-600">
+                          {w.shortageQuantity}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <p className="text-[11px] text-zinc-500">
+                سيُسجَّل العجز في سجل تدقيق المخزون باسم المستخدم الحالي، ويمكن
+                تصحيحه لاحقاً عبر تعديل المخزون.
+              </p>
+
+              <div className="flex gap-2 justify-end">
+                <Button
+                  variant="outline"
+                  onClick={() => setShortages(null)}
+                  disabled={posting}
+                >
+                  إلغاء
+                </Button>
+                <Button onClick={() => runPost(true)} loading={posting}>
+                  تسجيل مع تحذير
+                </Button>
+              </div>
+            </Card>
+          </div>
+        )}
+
         <Card className="p-4 flex items-center justify-between flex-wrap gap-3 bg-zinc-50">
           <div className="flex gap-2 flex-wrap">
             {!disabled && (
@@ -268,7 +380,7 @@ export default function ProductionDetailPage() {
                 <Button onClick={saveAll} loading={saving} title="Ctrl+S">
                   <Save className="h-4 w-4" /> حفظ كل البيانات
                 </Button>
-                <Button variant="outline" onClick={doPost}>
+                <Button variant="outline" onClick={doPost} loading={posting}>
                   <CheckCircle2 className="h-4 w-4" /> ترحيل للمخزون
                 </Button>
               </>

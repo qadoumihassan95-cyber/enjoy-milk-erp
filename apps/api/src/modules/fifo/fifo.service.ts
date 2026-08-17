@@ -196,8 +196,28 @@ export class FifoCostingService {
    *     `tx`. The method is idempotent per (dailyProductionId, rawItemId)
    *     because DailyProduction.post() runs exactly once per record
    *     (re-post is blocked with a status guard).
-   *   • Throws if PurchaseBatch stock is insufficient. The outer
-   *     transaction rolls back cleanly — the ledger stays consistent.
+   *   • Throws if PurchaseBatch stock is insufficient, UNLESS
+   *     `allowShortage` is set. The outer transaction rolls back
+   *     cleanly — the ledger stays consistent.
+   *
+   * SHORTAGE COSTING (`allowShortage: true`)
+   * ----------------------------------------
+   * A factory consumes material it physically has even when the ledger
+   * has not caught up. When the batches cannot cover the requirement we
+   * consume every real batch first (true FIFO order, real unit costs),
+   * then open ONE synthetic batch for the uncovered remainder:
+   *
+   *     sourceType = 'SHORTAGE', quantity = shortfall, remaining = 0
+   *     unitCost   = item.avgCost ?? item.costPrice ?? 0
+   *
+   * `remaining: 0` means it can never be consumed again, so it adds no
+   * phantom availability. It exists so the shortfall carries a cost and
+   * a ProductionCostAllocation row: COGS stays complete instead of
+   * silently understating by the missing quantity, and every deficit is
+   * queryable by `sourceType='SHORTAGE'` for later correction.
+   *
+   * `quantityConsumed` reports the REAL quantity drawn from real
+   * batches; `shortageQuantity` reports what had to be synthesised.
    */
   async consumeForProduction(
     tenantId: string,
@@ -205,11 +225,19 @@ export class FifoCostingService {
       dailyProductionId: string;
       rawItemId: string;
       quantity: number | string;
+      allowShortage?: boolean;
     },
     tx?: Prisma.TransactionClient,
-  ): Promise<{ totalCost: number; allocations: any[]; quantityConsumed: number }> {
+  ): Promise<{
+    totalCost: number;
+    allocations: any[];
+    quantityConsumed: number;
+    shortageQuantity: number;
+  }> {
     const need = Number(dto.quantity);
-    if (!(need > 0)) return { totalCost: 0, allocations: [], quantityConsumed: 0 };
+    if (!(need > 0)) {
+      return { totalCost: 0, allocations: [], quantityConsumed: 0, shortageQuantity: 0 };
+    }
 
     const exec = async (client: Prisma.TransactionClient) => {
       const batches = await client.purchaseBatch.findMany({
@@ -222,7 +250,10 @@ export class FifoCostingService {
       });
 
       const totalAvailable = batches.reduce((s, b) => s + Number(b.remaining), 0);
-      if (totalAvailable + 1e-9 < need) {
+
+      // Without allowShortage this remains exactly the strict FIFO gate
+      // it has always been.
+      if (totalAvailable + 1e-9 < need && !dto.allowShortage) {
         throw new BadRequestException(
           `دفعات المادة الخام غير كافية (المتاح: ${totalAvailable}، المطلوب: ${need})`,
         );
@@ -261,7 +292,53 @@ export class FifoCostingService {
         allocations.push(alloc);
       }
 
-      return { totalCost, allocations, quantityConsumed: need - remainingNeed };
+      // Whatever the real batches could not cover.
+      const shortageQuantity = remainingNeed > 1e-9 ? remainingNeed : 0;
+
+      if (shortageQuantity > 0) {
+        const item = await client.item.findUnique({ where: { id: dto.rawItemId } });
+        const unitCost = Number(item?.avgCost ?? item?.costPrice ?? 0);
+
+        // remaining: 0 — documents the deficit and carries its cost, but
+        // can never be consumed, so it adds no phantom availability.
+        const shortageBatch = await client.purchaseBatch.create({
+          data: {
+            tenantId,
+            itemId: dto.rawItemId,
+            batchNumber: null,
+            purchaseDate: new Date(),
+            quantity: new Prisma.Decimal(shortageQuantity),
+            remaining: new Prisma.Decimal(0),
+            unitCost: new Prisma.Decimal(unitCost),
+            sourceType: 'SHORTAGE',
+            sourceRefId: dto.dailyProductionId,
+          },
+        });
+
+        const lineCost = shortageQuantity * unitCost;
+        totalCost += lineCost;
+
+        const alloc = await (client as any).productionCostAllocation.create({
+          data: {
+            tenantId,
+            dailyProductionId: dto.dailyProductionId,
+            rawItemId: dto.rawItemId,
+            batchId: shortageBatch.id,
+            quantity: new Prisma.Decimal(shortageQuantity),
+            unitCost: new Prisma.Decimal(unitCost),
+            totalCost: new Prisma.Decimal(lineCost),
+            method: 'FIFO_SHORTAGE',
+          },
+        });
+        allocations.push(alloc);
+      }
+
+      return {
+        totalCost,
+        allocations,
+        quantityConsumed: need - remainingNeed,
+        shortageQuantity,
+      };
     };
 
     return tx ? exec(tx) : this.prisma.$transaction((c) => exec(c));
@@ -279,9 +356,20 @@ export class FifoCostingService {
       const allocs = await (client as any).productionCostAllocation.findMany({
         where: { tenantId, dailyProductionId },
       });
+      const shortageBatchIds: string[] = [];
+
       for (const a of allocs) {
         const b = await client.purchaseBatch.findUnique({ where: { id: a.batchId } });
         if (!b) continue;
+
+        // A SHORTAGE batch represents material that never existed. Adding
+        // its quantity back would manufacture phantom stock out of a
+        // cancelled posting, so it is removed rather than restored.
+        if (b.sourceType === 'SHORTAGE') {
+          shortageBatchIds.push(b.id);
+          continue;
+        }
+
         await client.purchaseBatch.update({
           where: { id: b.id },
           data: {
@@ -289,10 +377,22 @@ export class FifoCostingService {
           },
         });
       }
+
+      // Allocations first — they hold the FK to the batch.
       await (client as any).productionCostAllocation.deleteMany({
         where: { tenantId, dailyProductionId },
       });
-      return { restoredAllocations: allocs.length };
+
+      if (shortageBatchIds.length) {
+        await client.purchaseBatch.deleteMany({
+          where: { id: { in: shortageBatchIds }, sourceType: 'SHORTAGE' },
+        });
+      }
+
+      return {
+        restoredAllocations: allocs.length,
+        removedShortageBatches: shortageBatchIds.length,
+      };
     };
     return tx ? exec(tx) : this.prisma.$transaction((c) => exec(c));
   }

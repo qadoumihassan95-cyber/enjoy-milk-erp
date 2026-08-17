@@ -37,6 +37,8 @@ interface Store {
   dailyProductions: Row[];
   purchaseBatches: Row[];
   productionCostAllocations: Row[];
+  tenantSettings: Row[];
+  productionStockAudits: Row[];
 }
 
 function makeStore(seed: Partial<Store> = {}): Store {
@@ -46,6 +48,14 @@ function makeStore(seed: Partial<Store> = {}): Store {
     stockLevels: seed.stockLevels ?? [],
     stockMovements: seed.stockMovements ?? [],
     stockAdjustments: seed.stockAdjustments ?? [],
+    // Default to STRICT_MODE so every pre-existing expectation in this
+    // file keeps its original meaning: a shortage throws. The permissive
+    // WARNING/OVERRIDE behaviour is covered in
+    // daily-production.posting-modes.spec.ts.
+    tenantSettings: seed.tenantSettings ?? [
+      { id: 'ts-1', tenantId: TENANT, productionPostingMode: 'STRICT_MODE' },
+    ],
+    productionStockAudits: seed.productionStockAudits ?? [],
     dailyProductions: seed.dailyProductions ?? [],
     purchaseBatches: seed.purchaseBatches ?? [],
     productionCostAllocations: seed.productionCostAllocations ?? [],
@@ -154,7 +164,12 @@ function makePrismaMock(store: Store) {
   const tableApi = (rows: Row[]) => ({
     findFirst: async (args: any) => findFirst(rows)(args),
     findMany: findMany(rows),
-    findUnique: async (args: any) => rows.find((r) => r.id === args.where.id),
+    // Matches every key in `where`, not just `id` — TenantSetting is
+    // looked up by its unique `tenantId`, not by primary key.
+    findUnique: async (args: any) =>
+      rows.find((r) =>
+        Object.entries(args?.where ?? {}).every(([k, v]) => r[k] === v),
+      ),
     create: async (args: any) => {
       const row = { id: uuid(), ...args.data };
       rows.push(row);
@@ -222,6 +237,12 @@ function makePrismaMock(store: Store) {
     productionMilkUsage: tableApi([]),
     productionProducedItem: tableApi([]),
     productionWaste: tableApi([]),
+    // Added for production posting modes (2026-08-17). post() now reads
+    // TenantSetting.productionPostingMode and writes ProductionStockAudit
+    // rows. These specs assert STRICT semantics, so each one seeds a
+    // STRICT_MODE settings row.
+    tenantSetting: tableApi(store.tenantSettings),
+    productionStockAudit: tableApi(store.productionStockAudits),
     $transaction: async (fn: any) => {
       if (typeof fn === 'function') return fn(client);
       // array form not used here

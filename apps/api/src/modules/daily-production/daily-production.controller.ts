@@ -101,10 +101,43 @@ export class DailyProductionController {
     return this.service.saveAll(user.tenantId, id, body);
   }
 
-  /** ترحيل للمخزون */
+  /**
+   * ترحيل للمخزون
+   *
+   * A raw-material shortage no longer aborts with a 400 in WARNING_MODE /
+   * OVERRIDE_MODE. The first call returns 200 with
+   *   { success: false, requiresConfirmation: true, warnings: [...] }
+   * and writes NOTHING. The client shows the confirmation dialog and, on
+   * "تسجيل مع تحذير", re-sends with { allowShortage: true } to receive
+   *   { success: true, warnings: [...] }.
+   * STRICT_MODE keeps the original 400.
+   */
   @Post(':id/post')
-  post(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
-    return this.service.post(user.tenantId, user.id, id);
+  post(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: { allowShortage?: boolean } = {},
+  ) {
+    return this.service.post(user.tenantId, user.id, id, {
+      allowShortage: !!body?.allowShortage,
+      userRole: user.role,
+    });
+  }
+
+  /** إعدادات وضع الترحيل — القراءة متاحة للجميع */
+  @Get('settings/posting-mode')
+  getPostingMode(@CurrentUser() user: AuthenticatedUser) {
+    return this.service.readPostingMode(user.tenantId);
+  }
+
+  /** تغيير وضع الترحيل — للمدراء فقط */
+  @Roles('MANAGER')
+  @Post('settings/posting-mode')
+  setPostingMode(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: { mode?: string },
+  ) {
+    return this.service.writePostingMode(user.tenantId, user.id, body?.mode);
   }
 
   /** إلغاء الترحيل */

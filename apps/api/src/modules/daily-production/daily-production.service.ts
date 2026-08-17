@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../core/prisma/prisma.service';
@@ -280,7 +281,12 @@ export class DailyProductionService {
    * drift accumulated. We now throw. The FE must pick an item from
    * the ItemSelector; free-text-only rows are rejected at post time.
    */
-  async post(tenantId: string, userId: string, id: string) {
+  async post(
+    tenantId: string,
+    userId: string,
+    id: string,
+    opts: { allowShortage?: boolean; userRole?: string } = {},
+  ): Promise<any> {
     const dp = await this.get(tenantId, id);
     if (dp.status === 'POSTED') {
       throw new BadRequestException('تم الترحيل مسبقاً');
@@ -293,6 +299,47 @@ export class DailyProductionService {
         'لا يمكن ترحيل ورقة ملغاة. أنشئ ورقة جديدة بدلاً منها.',
       );
     }
+
+    const mode = await this.getPostingMode(tenantId);
+
+    // ─── PRE-FLIGHT SHORTAGE CHECK (no writes) ──────────────────────
+    // Every raw-material shortage is detected BEFORE the transaction
+    // opens, so the UI can ask the operator what to do instead of
+    // discovering the problem halfway through a rollback.
+    const shortages = await this.detectShortages(tenantId, dp);
+
+    if (shortages.length) {
+      if (mode === 'STRICT_MODE') {
+        // Unchanged behaviour — the posting is refused outright.
+        const first = shortages[0];
+        throw new BadRequestException(
+          `المخزون لا يكفي للصنف "${first.item}" (المتاح: ${first.availableQuantity}، المطلوب: ${first.requiredQuantity})`,
+        );
+      }
+
+      if (mode === 'OVERRIDE_MODE') {
+        const privileged = ['OWNER', 'ADMIN', 'MANAGER'];
+        if (!opts.userRole || !privileged.includes(String(opts.userRole).toUpperCase())) {
+          throw new ForbiddenException(
+            'وضع الترحيل الحالي (OVERRIDE) يسمح بالترحيل مع نقص المخزون للمدراء فقط.',
+          );
+        }
+      }
+
+      // WARNING_MODE / authorised OVERRIDE_MODE: do NOT write anything
+      // until the operator has seen the shortage and confirmed. The
+      // client re-sends with allowShortage=true.
+      if (!opts.allowShortage) {
+        return {
+          success: false,
+          requiresConfirmation: true,
+          mode,
+          warnings: shortages,
+        };
+      }
+    }
+
+    const allowShortage = shortages.length > 0 && !!opts.allowShortage;
 
     // Resolve the SINGLE operational warehouse. If MAIN doesn't exist
     // yet (fresh tenant), it is auto-created — matches the /inventory
@@ -361,7 +408,14 @@ export class DailyProductionService {
             performedById: userId,
           },
         });
-        await this.adjustStock(tx, tenantId, c.itemId, wh, -Number(c.quantity));
+        const eff_c = await this.adjustStock(tx, tenantId, c.itemId, wh, -Number(c.quantity), { allowNegative: allowShortage });
+        await this.recordStockAudit(tx, {
+          tenantId, dailyProductionId: dp.id, itemId: c.itemId,
+          itemName: c.itemName ?? '', section: 'كرتون',
+          quantityRequested: Number(c.quantity),
+          previousStock: eff_c.before, resultingStock: eff_c.after,
+          postingMode: mode, postedById: userId,
+        });
       }
 
       // ─── خصم الألمنيوم ───
@@ -383,7 +437,14 @@ export class DailyProductionService {
             performedById: userId,
           },
         });
-        await this.adjustStock(tx, tenantId, a.itemId, wh, -Number(a.quantity));
+        const eff_a = await this.adjustStock(tx, tenantId, a.itemId, wh, -Number(a.quantity), { allowNegative: allowShortage });
+        await this.recordStockAudit(tx, {
+          tenantId, dailyProductionId: dp.id, itemId: a.itemId,
+          itemName: a.itemName ?? '', section: 'ألمنيوم',
+          quantityRequested: Number(a.quantity),
+          previousStock: eff_a.before, resultingStock: eff_a.after,
+          postingMode: mode, postedById: userId,
+        });
       }
 
       // ─── خصم الحليب ───
@@ -405,7 +466,14 @@ export class DailyProductionService {
             performedById: userId,
           },
         });
-        await this.adjustStock(tx, tenantId, m.itemId, wh, -Number(m.quantity));
+        const eff_m = await this.adjustStock(tx, tenantId, m.itemId, wh, -Number(m.quantity), { allowNegative: allowShortage });
+        await this.recordStockAudit(tx, {
+          tenantId, dailyProductionId: dp.id, itemId: m.itemId,
+          itemName: m.itemName ?? '', section: 'حليب',
+          quantityRequested: Number(m.quantity),
+          previousStock: eff_m.before, resultingStock: eff_m.after,
+          postingMode: mode, postedById: userId,
+        });
       }
 
       // ─── حساب تكلفة الإنتاج للكرتون الواحد ───
@@ -434,7 +502,12 @@ export class DailyProductionService {
         // fifo service throws and the outer $transaction rolls back.
         const consumed = await this.fifo.consumeForProduction(
           tenantId,
-          { dailyProductionId: dp.id, rawItemId: r.itemId, quantity: r.qty },
+          {
+            dailyProductionId: dp.id,
+            rawItemId: r.itemId,
+            quantity: r.qty,
+            allowShortage,
+          },
           tx,
         );
         rawCostTotal += consumed.totalCost;
@@ -518,14 +591,28 @@ export class DailyProductionService {
             performedById: userId,
           },
         });
-        await this.adjustStock(tx, tenantId, w.itemId, wh, -Number(w.quantity));
+        const eff_w = await this.adjustStock(tx, tenantId, w.itemId, wh, -Number(w.quantity), { allowNegative: allowShortage });
+        await this.recordStockAudit(tx, {
+          tenantId, dailyProductionId: dp.id, itemId: w.itemId,
+          itemName: w.itemName ?? '', section: 'توالف',
+          quantityRequested: Number(w.quantity),
+          previousStock: eff_w.before, resultingStock: eff_w.after,
+          postingMode: mode, postedById: userId,
+        });
       }
 
       // Flip claim → final POSTED (postedAt/postedById already set by claim).
-      return tx.dailyProduction.update({
+      const record = await tx.dailyProduction.update({
         where: { id },
         data: { status: 'POSTED' },
       });
+
+      return {
+        success: true,
+        mode,
+        warnings: shortages,
+        production: record,
+      };
     });
   }
 
@@ -990,19 +1077,34 @@ export class DailyProductionService {
    * non-existent row we throw with the same shape (would produce a
    * negative balance if we created it).
    */
+  /**
+   * Apply a stock delta and report what it did.
+   *
+   * `allowNegative` is the WARNING_MODE / OVERRIDE_MODE switch: the
+   * balance is driven below zero instead of throwing, so a real factory
+   * can record production it has physically completed and correct the
+   * inventory afterwards. In STRICT_MODE the flag is false and this
+   * behaves exactly as it always has.
+   *
+   * Returns { before, after } so the caller can write an audit row
+   * without re-reading the balance.
+   */
   private async adjustStock(
     tx: any,
     tenantId: string,
     itemId: string,
     warehouseId: string,
     delta: number,
-  ) {
+    opts: { allowNegative?: boolean } = {},
+  ): Promise<{ before: number; after: number }> {
     const existing = await tx.stockLevel.findFirst({
       where: { itemId, warehouseId, batchId: null },
     });
+
     if (existing) {
-      const newQty = Number(existing.quantity) + delta;
-      if (newQty < 0) {
+      const before = Number(existing.quantity);
+      const newQty = before + delta;
+      if (newQty < 0 && !opts.allowNegative) {
         const item = await tx.item.findUnique({ where: { id: itemId } });
         throw new BadRequestException(
           `المخزون لا يكفي للصنف "${item?.name ?? itemId}" (المتاح: ${existing.quantity}، المطلوب سحبه: ${Math.abs(delta)})`,
@@ -1012,7 +1114,10 @@ export class DailyProductionService {
         where: { id: existing.id },
         data: { quantity: new Prisma.Decimal(newQty) },
       });
-    } else if (delta > 0) {
+      return { before, after: newQty };
+    }
+
+    if (delta > 0) {
       await tx.stockLevel.create({
         data: {
           tenantId,
@@ -1021,12 +1126,181 @@ export class DailyProductionService {
           quantity: new Prisma.Decimal(delta),
         },
       });
-    } else if (delta < 0) {
-      const item = await tx.item.findUnique({ where: { id: itemId } });
+      return { before: 0, after: delta };
+    }
+
+    if (delta < 0) {
+      if (!opts.allowNegative) {
+        const item = await tx.item.findUnique({ where: { id: itemId } });
+        throw new BadRequestException(
+          `المخزون لا يكفي للصنف "${item?.name ?? itemId}" (المتاح: 0، المطلوب سحبه: ${Math.abs(delta)})`,
+        );
+      }
+      // No row yet and we are permitted to go negative — materialise the
+      // deficit so it is visible on the balance screen.
+      await tx.stockLevel.create({
+        data: {
+          tenantId,
+          itemId,
+          warehouseId,
+          quantity: new Prisma.Decimal(delta),
+        },
+      });
+      return { before: 0, after: delta };
+    }
+
+    return { before: existing ? Number((existing as any).quantity) : 0, after: 0 };
+  }
+
+  // ─── Posting-mode helpers ─────────────────────────────────────────
+  /**
+   * STRICT_MODE | WARNING_MODE | OVERRIDE_MODE, from TenantSetting.
+   * Defaults to WARNING_MODE when the tenant has no settings row yet.
+   */
+  /** Public read for the settings screen. */
+  async readPostingMode(tenantId: string) {
+    return {
+      mode: await this.getPostingMode(tenantId),
+      availableModes: ['STRICT_MODE', 'WARNING_MODE', 'OVERRIDE_MODE'],
+      descriptions: {
+        STRICT_MODE: 'امنع الترحيل عند نقص المخزون',
+        WARNING_MODE: 'اسمح بالترحيل مع إنشاء عجز وتسجيل تحذير (الافتراضي)',
+        OVERRIDE_MODE: 'اسمح بالترحيل مع العجز للمدراء فقط',
+      },
+    };
+  }
+
+  /** Public write for the settings screen (MANAGER-guarded in the controller). */
+  async writePostingMode(tenantId: string, userId: string, mode?: string) {
+    const allowed = ['STRICT_MODE', 'WARNING_MODE', 'OVERRIDE_MODE'];
+    if (!mode || !allowed.includes(mode)) {
       throw new BadRequestException(
-        `المخزون لا يكفي للصنف "${item?.name ?? itemId}" (المتاح: 0، المطلوب سحبه: ${Math.abs(delta)})`,
+        `وضع ترحيل غير مدعوم. القيم المسموحة: ${allowed.join(' | ')}`,
       );
     }
+    await this.prisma.tenantSetting.upsert({
+      where: { tenantId },
+      create: { tenantId, productionPostingMode: mode, updatedById: userId } as any,
+      update: { productionPostingMode: mode, updatedById: userId } as any,
+    });
+    return this.readPostingMode(tenantId);
+  }
+
+  private async getPostingMode(tenantId: string): Promise<string> {
+    const s = await this.prisma.tenantSetting.findUnique({ where: { tenantId } });
+    const mode = (s as any)?.productionPostingMode ?? 'WARNING_MODE';
+    return ['STRICT_MODE', 'WARNING_MODE', 'OVERRIDE_MODE'].includes(mode)
+      ? mode
+      : 'WARNING_MODE';
+  }
+
+  /**
+   * Read-only pass over every raw-material row, reporting which ones the
+   * current balance cannot cover. Runs BEFORE the posting transaction so
+   * the operator is asked up front rather than after a rollback.
+   *
+   * Quantities are aggregated per item: two carton rows for the same SKU
+   * must be judged against the balance together, not independently.
+   */
+  private async detectShortages(
+    tenantId: string,
+    dp: any,
+  ): Promise<
+    Array<{
+      type: string;
+      item: string;
+      itemId: string;
+      section: string;
+      requiredQuantity: number;
+      availableQuantity: number;
+      shortageQuantity: number;
+    }>
+  > {
+    const needed = new Map<
+      string,
+      { itemId: string; itemName: string; section: string; qty: number }
+    >();
+
+    const collect = (rows: any[], section: string) => {
+      for (const r of rows ?? []) {
+        const qty = Number(r.quantity ?? 0);
+        if (!r.itemId || qty <= 0) continue;
+        const prev = needed.get(r.itemId);
+        if (prev) prev.qty += qty;
+        else
+          needed.set(r.itemId, {
+            itemId: r.itemId,
+            itemName: r.itemName ?? '',
+            section,
+            qty,
+          });
+      }
+    };
+
+    collect(dp.cartonUsage, 'كرتون');
+    collect(dp.aluminumUsage, 'ألمنيوم');
+    collect(dp.milkUsage, 'حليب');
+    collect(dp.wastages, 'توالف');
+
+    const out: any[] = [];
+    for (const n of needed.values()) {
+      const agg = await this.prisma.stockLevel.aggregate({
+        where: { tenantId, itemId: n.itemId, batchId: null },
+        _sum: { quantity: true },
+      });
+      const available = Number(agg._sum.quantity ?? 0);
+      if (available + 1e-9 < n.qty) {
+        out.push({
+          type: 'INSUFFICIENT_STOCK',
+          item: n.itemName,
+          itemId: n.itemId,
+          section: n.section,
+          requiredQuantity: n.qty,
+          availableQuantity: available,
+          shortageQuantity: Math.round((n.qty - available) * 10000) / 10000,
+        });
+      }
+    }
+    return out;
+  }
+
+  /** One audit row per item a posting touched. Never throws. */
+  private async recordStockAudit(
+    tx: any,
+    row: {
+      tenantId: string;
+      dailyProductionId: string;
+      itemId: string;
+      itemName: string;
+      section: string;
+      quantityRequested: number;
+      previousStock: number;
+      resultingStock: number;
+      postingMode: string;
+      postedById?: string;
+    },
+  ) {
+    const shortage = row.resultingStock < 0 ? Math.abs(row.resultingStock) : 0;
+    await (tx as any).productionStockAudit.create({
+      data: {
+        tenantId: row.tenantId,
+        dailyProductionId: row.dailyProductionId,
+        itemId: row.itemId,
+        itemName: row.itemName,
+        section: row.section,
+        quantityRequested: new Prisma.Decimal(row.quantityRequested),
+        previousStock: new Prisma.Decimal(row.previousStock),
+        resultingStock: new Prisma.Decimal(row.resultingStock),
+        shortageQuantity: new Prisma.Decimal(shortage),
+        warningType: shortage > 0 ? 'INSUFFICIENT_STOCK' : null,
+        postingMode: row.postingMode,
+        reason:
+          shortage > 0
+            ? `Negative stock created for item ${row.itemName} due to production posting`
+            : null,
+        postedById: row.postedById ?? null,
+      },
+    });
   }
 
   // Module-scoped rounder — mirrors `round` in fifo.service.ts.

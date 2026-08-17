@@ -1349,9 +1349,47 @@ model TenantSetting {
   // ─── العملة الأساسية للنظام (JOD | USD) ─────────
   baseCurrency          String   @default("JOD")
 
+  // ─── سلوك ترحيل الإنتاج عند نقص المواد الخام ─────
+  // STRICT_MODE   → امنع الترحيل عند نقص المخزون (السلوك القديم)
+  // WARNING_MODE  → اسمح بالترحيل مع إنشاء عجز وتسجيل تحذير (الافتراضي)
+  // OVERRIDE_MODE → اسمح بالترحيل مع العجز لمستخدمين مخوّلين فقط
+  //                 (OWNER / ADMIN / MANAGER)
+  productionPostingMode String   @default("WARNING_MODE")
+
   updatedById           String?
   updatedAt             DateTime @updatedAt
   createdAt             DateTime @default(now())
+}
+
+// ═════════════════════════════════════════════════════════════
+// PRODUCTION STOCK AUDIT — one row per item touched by a posting
+// ═════════════════════════════════════════════════════════════
+// Answers "who posted what, and what did it do to the balance" for
+// every raw material consumed by a DailyProduction posting, whether or
+// not a shortage occurred. When stock was insufficient the row also
+// carries the shortfall and warningType='INSUFFICIENT_STOCK', so the
+// warnings surfaced to the UI and the audit trail are one record, not
+// two things that can drift apart.
+model ProductionStockAudit {
+  id                String   @id @default(cuid())
+  tenantId          String
+  dailyProductionId String
+  itemId            String
+  itemName          String
+  section           String                              // كرتون | ألمنيوم | حليب | توالف
+  quantityRequested Decimal  @db.Decimal(18, 4)
+  previousStock     Decimal  @db.Decimal(18, 4)
+  resultingStock    Decimal  @db.Decimal(18, 4)         // قد يكون سالباً في WARNING/OVERRIDE
+  shortageQuantity  Decimal  @db.Decimal(18, 4) @default(0)
+  warningType       String?                             // INSUFFICIENT_STOCK
+  postingMode       String                              // STRICT_MODE | WARNING_MODE | OVERRIDE_MODE
+  reason            String?
+  postedById        String?
+  createdAt         DateTime @default(now())
+
+  @@index([tenantId, dailyProductionId])
+  @@index([tenantId, warningType, createdAt])
+  @@index([itemId])
 }
 
 // ═════════════════════════════════════════════════════════════
