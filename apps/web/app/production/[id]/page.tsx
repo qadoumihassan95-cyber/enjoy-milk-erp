@@ -117,6 +117,21 @@ export default function ProductionDetailPage() {
   const { raw_milk: milkItems, carton: cartonItems, aluminum: aluminumItems, finished: productItems } =
     splitItemsBySection(items ?? []);
 
+  // Per-item sack weight for the on-screen preview. The literal 25 that used
+  // to live here applied to every item regardless of its configuration and
+  // was the only conversion touching real inventory. It is now a display
+  // fallback only: the server converts authoritatively at save time using
+  // Item.bagWeightKg and records which factor it used on the row.
+  const LEGACY_BAG_KG = 25;
+  const bagWeightFor = (itemId?: string) => {
+    const it: any = (items ?? []).find((x: any) => x.id === itemId);
+    const w = Number(it?.bagWeightKg ?? 0);
+    return w > 0 ? w : LEGACY_BAG_KG;
+  };
+  const anyMilkItemUnconfigured = milkUsage.some(
+    (r: any) => r.itemId && !(Number((items ?? []).find((x: any) => x.id === r.itemId)?.bagWeightKg ?? 0) > 0),
+  );
+
   // إعادة جلب «أفضل جهد» — لا تؤثر على رسالة نجاح/فشل العملية
   const safeRefetch = async () => {
     try {
@@ -545,7 +560,7 @@ export default function ProductionDetailPage() {
             )}
           </section>
 
-          {/* الحليب — بالكيلوغرام (1 كيس = 25 كغ) */}
+          {/* الحليب — بالكيلوغرام (وزن الكيس من إعداد الصنف) */}
           <section>
             <SectionHeader
               icon={<Droplet className="h-4 w-4" />}
@@ -554,7 +569,14 @@ export default function ProductionDetailPage() {
               disabled={disabled}
             />
             <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded p-2 mb-2">
-              💡 عدد الأكياس × <b>25 كغ</b> = الكمية الإجمالية (تُحتسب تلقائياً). يمكنك تعديل الكمية يدوياً عند الحاجة.
+              💡 عدد الأكياس × وزن الكيس المُعرَّف على الصنف = الكمية الإجمالية.
+              الحساب النهائي يتم على الخادم وتُحفظ قيمة المعامل مع السطر.
+              {anyMilkItemUnconfigured && (
+                <span className="block mt-1 text-amber-800">
+                  ⚠ بعض الأصناف المختارة بلا «وزن الكيس» — يُستخدم {LEGACY_BAG_KG} كغ مؤقتاً.
+                  عرّف الوزن على الصنف ليصبح الحساب دقيقاً.
+                </span>
+              )}
             </p>
             {milkUsage.length === 0 ? (
               <Empty text="لا يوجد حليب مسحوب" />
@@ -589,7 +611,15 @@ export default function ProductionDetailPage() {
                         onChange={(e) => {
                           const bags = +e.target.value;
                           const v = [...milkUsage];
-                          v[i] = { ...v[i], count: bags, quantity: bags * 25, unit: 'KG' };
+                          // Preview only. The SERVER recomputes this from the
+                          // item's own bagWeightKg and records the factor it
+                          // used — this value is not what gets deducted.
+                          v[i] = {
+                            ...v[i],
+                            count: bags,
+                            quantity: bags * bagWeightFor(r.itemId),
+                            unit: 'KG',
+                          };
                           setMilkUsage(v);
                         }}
                         disabled={disabled}

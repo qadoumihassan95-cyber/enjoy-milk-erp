@@ -376,9 +376,13 @@ function AddItemModal({
     defaultSupplierId: '',
     notes: '',
     active: true,
-    // تحويلات
-    bagWeightKg: '25',
-    gramsPerUnit: '1000',
+    // تحويلات — بلا قيم افتراضية.
+    // كانت '25' و'1000' تُكتبان في قاعدة البيانات لكل صنف يُنشأ من هذه
+    // النافذة حتى لو لم ينظر المستخدم إلى الحقل، بينما نموذج الأصناف
+    // الآخر يرفض التخمين عمداً. حقل فارغ = «لا تحويل مُعرَّف»، وهو ما
+    // يظهر في تقرير المطابقة ليُضبط بقيمة حقيقية.
+    bagWeightKg: '',
+    gramsPerUnit: '',
     packsPerCarton: '',
   });
   const [saving, setSaving] = useState(false);

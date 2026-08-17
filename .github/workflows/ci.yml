@@ -280,6 +280,25 @@ jobs:
       # The seed must never plant demo stock over a live inventory. It is
       # gated on a virgin-inventory check; seed-safety.spec.ts enforces the
       # detail, this catches deletion of the guard itself.
+      # The bag→KG factor must come from item configuration, never from a
+      # literal. Exactly one named constant is allowed (LEGACY_BAG_KG, the
+      # labelled fallback); a bare `* 25` or a local BAG_KG is the defect
+      # this replaced and must not come back.
+      - name: No hardcoded bag conversion
+        run: |
+          hits=$(grep -rn --include='*.ts' --include='*.tsx' \
+                   -E '(const +BAG_KG *=|\* *25\b)' apps/ \
+                 | grep -v 'LEGACY_BAG_KG' \
+                 | grep -vE ':[0-9]+: *(//|\*|/\*)' \
+                 | grep -v '\.spec\.' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::Hardcoded bag conversion found:"
+            echo "$hits"
+            echo "Use resolveConversion() / Item.bagWeightKg instead."
+            exit 1
+          fi
+          echo "✅ No hardcoded bag conversion."
+
       - name: Seed retains its production guard
         run: |
           if ! grep -q 'inventoryIsVirgin' prisma/seed.ts ; then

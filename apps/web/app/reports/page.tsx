@@ -910,13 +910,14 @@ function CostWasteReport() {
   }, [items]);
 
   const rows = useMemo(() => filtered.flatMap((r: any) => {
-    const BAG_KG = 25;
-    // إجمالي حليب خام بالكغ (تحويل الأكياس)
+    // إجمالي حليب خام بالكغ.
+    // كان هنا `const BAG_KG = 25` ثالث نسخة مستقلة من نفس الثابت، تعيد
+    // الحساب من count وتتجاهل الكمية المخزَّنة. الكمية الآن محوّلة على
+    // الخادم بوحدة الصنف ومعامل التحويل محفوظ مع السطر، فهي مصدر الحقيقة
+    // الوحيد — وهي أيضاً ما خُصم فعلاً من المخزون.
     let milkKg = 0;
     (r.milkUsage ?? []).forEach((m: any) => {
-      const c = Number(m.count || 0);
-      const q = Number(m.quantity || 0);
-      milkKg += c > 0 ? c * BAG_KG : q;
+      milkKg += Number(m.quantity || 0);
     });
     const packaging = (r.cartonUsage ?? []).reduce((s: number, x: any) => s + Number(x.quantity || 0), 0)
       + (r.aluminumUsage ?? []).reduce((s: number, x: any) => s + Number(x.quantity || 0), 0);

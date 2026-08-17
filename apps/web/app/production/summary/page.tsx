@@ -181,7 +181,7 @@ export default function DailySummaryPage() {
                 value={formatNumber(totals.rawMilkKg ?? 0, 1)}
                 hint={
                   (totals.milkBags ?? 0) > 0
-                    ? `${totals.milkBags} كيس × ${totals.bagWeightKg ?? 25} كغ`
+                    ? `${totals.milkBags} كيس × ${totals.bagWeightKg ?? '—'} كغ`
                     : 'بلا أكياس'
                 }
               />

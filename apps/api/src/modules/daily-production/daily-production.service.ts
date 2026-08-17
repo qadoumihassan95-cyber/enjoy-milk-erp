@@ -1150,23 +1150,27 @@ export class DailyProductionService {
     const itemsProduced = new Set<string>();
     const notes: string[] = [];
 
-    // ─── تحويل الحليب: كل كيس = 25 كغ ─────────────────
-    // إذا احتوى السطر على count (عدد الأكياس) نُرجّح count*25، وإلا نستخدم quantity كما هو.
-    // (السطور القديمة بالوحدات القديمة كـ L أو KG تُحفظ كما هي؛ العبوات الجديدة تُعامل معاملة أكياس.)
-    const BAG_KG = 25;
+    // ─── إجمالي الحليب بالكيلو ─────────────────────────────────────
+    // كان هنا `const BAG_KG = 25` يعيد حساب الكمية من count ويتجاهل
+    // quantity المخزَّنة — أي أن التقرير كان يتجاهل ما خُصم فعلاً من
+    // المخزون، ولو عدّل المشغّل خانة الكيلو يدوياً لضاع تعديله.
+    //
+    // الآن: quantity هي مصدر الحقيقة (مخزَّنة بوحدة الصنف، محوّلة على
+    // الخادم مع لقطة المعامل). عدد الأكياس يُجمَع للعرض فقط، ومعامل
+    // التحويل يُقرأ من السطر نفسه لا من ثابت في الشيفرة.
     let totalMilkKg = 0;
     let totalMilkBags = 0;
+    const factorsSeen = new Set<number>();
+    let legacyFactorRows = 0;
     for (const r of records) {
       if (r.notes?.trim()) notes.push(`${r.shift || ''} — ${r.notes}`);
-      for (const m of r.milkUsage) {
+      for (const m of r.milkUsage as any[]) {
         const c = Number(m.count || 0);
         const q = Number(m.quantity || 0);
-        if (c > 0) {
-          totalMilkBags += c;
-          totalMilkKg += c * BAG_KG;
-        } else {
-          totalMilkKg += q; // مدخل بالكيلو مباشرة
-        }
+        totalMilkBags += c;
+        totalMilkKg += q;
+        if (m.unitFactor != null) factorsSeen.add(Number(m.unitFactor));
+        if (m.factorSource === 'LEGACY_DEFAULT') legacyFactorRows++;
         totalMilk += q; // للتوافق الرجعي (المجموع الخام)
       }
       totalAluminum += r.aluminumUsage.reduce((s, a) => s + Number(a.quantity || 0), 0);
@@ -1203,7 +1207,12 @@ export class DailyProductionService {
         // ─── جديد: إجمالي الحليب بالكيلو (1 كيس = 25 كغ) ─
         rawMilkKg: round(totalMilkKg, 2),
         milkBags: totalMilkBags,
-        bagWeightKg: BAG_KG,
+        // المعامل الفعلي المستخدم في السطور، لا رقم ثابت. null إذا اختلفت
+        // الأصناف في معاملها — عندها لا يوجد "وزن كيس" واحد يُعرض.
+        bagWeightKg: factorsSeen.size === 1 ? [...factorsSeen][0] : null,
+        // عدد السطور التي استُخدم فيها الافتراضي القديم (25) لأن الصنف
+        // غير مُعدّ. صفر = كل الأصناف مضبوطة.
+        legacyFactorRows,
         aluminum: round(totalAluminum, 2),
         cartonUsage: round(totalCartonUsage, 2),
         waste: round(totalWaste, 2),

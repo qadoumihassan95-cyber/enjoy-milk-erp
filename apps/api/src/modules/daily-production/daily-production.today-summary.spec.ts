@@ -168,7 +168,13 @@ describe('DailyProductionService.getTodayProductionSummary — Dashboard SoT', (
       {
         id: 'w', tenantId, productionDate: today, status: 'DRAFT',
         cartonUsage: [], aluminumUsage: [],
-        milkUsage: [{ count: 4, quantity: 0 }],   // 4 bags × 25kg = 100 kg raw
+        // 4 bags at 25 kg. `quantity` is now the authoritative stored value
+        // (converted server-side at save time, with the factor snapshotted).
+        // This fixture used to be `{ count: 4, quantity: 0 }`, which only
+        // worked because the report re-derived KG from `count` and threw the
+        // stored quantity away — the behaviour that silently overrode an
+        // operator's manual edit. The assertion below is unchanged.
+        milkUsage: [{ count: 4, quantity: 100, unitFactor: 25, factorSource: 'LEGACY_DEFAULT' }],
         wastages: [{ quantity: 5 }],              // 5 kg waste
         produced: [{ itemName: 'x', cartonsTotal: 100 }],
       },
