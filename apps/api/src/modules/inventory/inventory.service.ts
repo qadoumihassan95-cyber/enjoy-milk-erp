@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../core/prisma/prisma.service';
@@ -337,23 +338,47 @@ export class InventoryService {
         },
       });
 
-      // Update stock levels
+      // Update stock levels, and record the NET change to the item's total
+      // so the FIFO cost layer can be kept in step below.
+      let fifoDelta = 0;
+
       if (data.type === 'IN' || data.type === 'RETURN') {
         if (!data.toWarehouseId) throw new BadRequestException('toWarehouseId مطلوب');
         await this.upsertStockLevel(tx, tenantId, data.itemId, data.toWarehouseId, data.batchId, +data.quantity);
+        fifoDelta = +Number(data.quantity);
       } else if (data.type === 'OUT' || data.type === 'WASTE') {
         if (!data.fromWarehouseId) throw new BadRequestException('fromWarehouseId مطلوب');
         await this.upsertStockLevel(tx, tenantId, data.itemId, data.fromWarehouseId, data.batchId, -data.quantity);
+        fifoDelta = -Number(data.quantity);
       } else if (data.type === 'TRANSFER') {
         if (!data.fromWarehouseId || !data.toWarehouseId)
           throw new BadRequestException('fromWarehouseId و toWarehouseId مطلوبان');
         await this.upsertStockLevel(tx, tenantId, data.itemId, data.fromWarehouseId, data.batchId, -data.quantity);
         await this.upsertStockLevel(tx, tenantId, data.itemId, data.toWarehouseId, data.batchId, +data.quantity);
+        // Net zero for the item. PurchaseBatch has no warehouseId
+        // (schema.prisma:1263) — batches are (tenantId, itemId)-scoped — so a
+        // transfer must NOT touch the cost layer. Σ remaining still matches
+        // Σ StockLevel afterwards.
+        fifoDelta = 0;
       } else if (data.type === 'ADJUSTMENT') {
         const wh = data.toWarehouseId || data.fromWarehouseId;
         if (!wh) throw new BadRequestException('warehouseId مطلوب');
         await this.upsertStockLevel(tx, tenantId, data.itemId, wh, data.batchId, +data.quantity);
+        fifoDelta = +Number(data.quantity);
       }
+
+      // ── FIFO synchronisation ──────────────────────────────────────
+      // This endpoint moved the balance and wrote the ledger but never
+      // touched PurchaseBatch, so every call widened the gap between what
+      // the balance screen shows and what production/sales can actually
+      // consume. That divergence is the root cause behind "there is stock
+      // but ترحيل fails".
+      await this.syncFifoForAdjustment(tx, tenantId, data.itemId, fifoDelta, {
+        userId,
+        reason: data.reasonCode ?? data.notes ?? 'حركة مخزون',
+        sourceType: 'MOVEMENT',
+        sourceRefId: movement.id,
+      });
 
       return movement;
     });
@@ -388,7 +413,14 @@ export class InventoryService {
     tenantId: string,
     itemId: string,
     delta: number,
-    opts: { unitCost?: number | string | null; userId?: string; reason?: string },
+    opts: {
+      unitCost?: number | string | null;
+      userId?: string;
+      reason?: string;
+      /** What produced this delta — lets an ADJUSTMENT batch be traced back. */
+      sourceType?: string;
+      sourceRefId?: string | null;
+    },
   ) {
     if (!delta) return;
 
@@ -412,7 +444,12 @@ export class InventoryService {
           quantity: new Prisma.Decimal(delta),
           remaining: new Prisma.Decimal(delta),
           unitCost: new Prisma.Decimal(unitCost),
-          sourceType: 'ADJUSTMENT',
+          // Traceable back to whatever created it. Previously always
+          // 'ADJUSTMENT' with a null ref, so a batch could not be linked to
+          // the StockAdjustment / InventoryCount / StockMovement that caused
+          // it — unlike receiveStock, which sets sourceRefId at :1061.
+          sourceType: opts.sourceType ?? 'ADJUSTMENT',
+          sourceRefId: opts.sourceRefId ?? null,
           createdById: opts.userId ?? null,
         },
       });
@@ -420,20 +457,48 @@ export class InventoryService {
     }
 
     // delta < 0 — retire oldest batches first.
+    //
+    // ── Concurrency ──────────────────────────────────────────────────
+    // This used to read `remaining`, compute `avail - take` in JS, and
+    // write that absolute value back — the same lost-update pattern that
+    // was removed from fifo.service.ts. Two concurrent deductions on one
+    // item both read 100 and both wrote 40. The same two defences apply
+    // here: a row lock taken in the SAME total order FIFO uses
+    // (purchaseDate, createdAt, id — `id` included so ties cannot be
+    // acquired in opposite orders by the two code paths), then a guarded
+    // relative decrement the database evaluates against the current row.
     let need = Math.abs(delta);
+
+    await tx.$queryRaw`
+      SELECT id
+      FROM "PurchaseBatch"
+      WHERE "tenantId" = ${tenantId}
+        AND "itemId"   = ${itemId}
+        AND remaining  > 0
+      ORDER BY "purchaseDate" ASC, "createdAt" ASC, id ASC
+      FOR UPDATE
+    `;
+
     const batches = await tx.purchaseBatch.findMany({
       where: { tenantId, itemId, remaining: { gt: 0 } },
-      orderBy: [{ purchaseDate: 'asc' }, { createdAt: 'asc' }],
+      orderBy: [{ purchaseDate: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
     });
 
     for (const b of batches) {
       if (need <= 0) break;
       const avail = Number(b.remaining);
       const take = Math.min(avail, need);
-      await tx.purchaseBatch.update({
-        where: { id: b.id },
-        data: { remaining: new Prisma.Decimal(avail - take) },
+      if (take <= 0) continue;
+
+      const res = await tx.purchaseBatch.updateMany({
+        where: { id: b.id, remaining: { gte: new Prisma.Decimal(take) } },
+        data: { remaining: { decrement: new Prisma.Decimal(take) } },
       });
+      if (res.count !== 1) {
+        throw new ConflictException(
+          'تعذّر خصم الدفعة بسبب تعديل متزامن — أعد المحاولة',
+        );
+      }
       need -= take;
     }
 
@@ -1437,6 +1502,26 @@ export class InventoryService {
 
         // حدّث الرصيد
         await this.upsertStockLevel(tx, tenantId, line.itemId, line.warehouseId, null, delta);
+
+        // ── FIFO synchronisation ────────────────────────────────────
+        // The physical count is the one place the business asserts what
+        // stock actually exists. Applying the variance to StockLevel while
+        // leaving PurchaseBatch untouched made this flow the largest
+        // generator of StockLevel↔FIFO drift in the system: a count that
+        // found MORE stock added balance nothing could consume, and a count
+        // that found LESS left cost layers backing material that is not
+        // there.
+        //
+        // A count surplus is genuinely uncosted — there is no purchase
+        // behind it — so the batch it creates carries the item's avgCost
+        // fallback and is tagged COUNT_SURPLUS to stay findable in the
+        // reconciliation report.
+        await this.syncFifoForAdjustment(tx, tenantId, line.itemId, delta, {
+          userId,
+          reason: `جرد ${c.number}`,
+          sourceType: delta > 0 ? 'COUNT_SURPLUS' : 'COUNT_SHORTAGE',
+          sourceRefId: c.id,
+        });
 
         // StockMovement
         await tx.stockMovement.create({

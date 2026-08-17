@@ -100,11 +100,34 @@ function makeDb() {
         row.remaining = Number(data.remaining);
         return row;
       },
+      // Stage 4.1: syncFifoForAdjustment now uses a guarded relative
+      // decrement instead of writing an absolute value computed in JS.
+      // The mock honours the `remaining >= take` predicate so a broken
+      // guard cannot pass this suite.
+      updateMany: async ({ where, data }: any) => {
+        const hit = state.purchaseBatches.filter((b) => {
+          if (where.id !== undefined && b.id !== where.id) return false;
+          if (where.remaining?.gte !== undefined && Number(b.remaining) < Number(where.remaining.gte)) return false;
+          return true;
+        });
+        for (const r of hit) {
+          if (data.remaining?.decrement !== undefined) {
+            r.remaining = Number(r.remaining) - Number(data.remaining.decrement);
+          } else if (data.remaining?.increment !== undefined) {
+            r.remaining = Number(r.remaining) + Number(data.remaining.increment);
+          }
+        }
+        return { count: hit.length };
+      },
     },
     stockMovement: { create: async ({ data }: any) => { state.stockMovements.push(data); return data; } },
     stockAdjustment: { create: async ({ data }: any) => { const r = { id: id('adj'), ...data }; state.stockAdjustments.push(r); return r; } },
   };
 
+  // SELECT … FOR UPDATE row lock. A JS mock has no rows to lock, so this is
+  // a no-op passthrough — the real locking behaviour is proved against
+  // actual PostgreSQL in apps/api/test/fifo-concurrency.int.js.
+  client.$queryRaw = async () => [];
   client.$transaction = async (fn: any) => fn(client);
   return { state, client };
 }
