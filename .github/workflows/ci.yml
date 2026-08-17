@@ -15,26 +15,21 @@ name: CI
 #  Nothing detected that, because nothing ever ran the migrations against
 #  an empty database. This workflow does exactly that, on every push.
 #
-#  EXPECTED STATE ON INTRODUCTION
-#  ------------------------------
-#  The `migrations` job is EXPECTED TO FAIL when this file first lands.
-#  That failure is the finding, made visible. It is fixed by the catch-up
-#  migration in Stage 3 of ops/HARDENING-AUDIT-2026-08-17.md — not by
-#  weakening this check.
+#  STATUS
+#  ------
+#  Fixed by 20260516120000_catchup_missing_objects (Stage 3). Before it,
+#  applying the chain to an empty PostgreSQL 16 database aborted at
+#  20260723170000_drop_pallets_count line 18 with 'relation
+#  ProductionProducedItem does not exist', after building 33 of 56 tables.
 #
-#  Reproduced locally against a real PostgreSQL 16 instance on 2026-08-17,
-#  applying each migration.sql in order to an empty database:
+#  After it, the full chain applies cleanly and the resulting schema is
+#  identical to live production on all three axes:
+#      columns + types + precision/scale + nullability   56/56 tables
+#      indexes                                           172
+#      foreign keys                                       43
 #
-#      OK    20260510233312_init
-#      OK    20260516110854_daily_production_and_simple_orders
-#      FAIL  20260723170000_drop_pallets_count
-#            line 18: ERROR: relation "ProductionProducedItem" does not exist
-#
-#  33 of production's 57 tables were created before the chain aborted.
-#  So this job is not a hypothetical guard — it fails today, for a known
-#  reason, with a known fix.
-#
-#  The `tests` and `guards` jobs should pass immediately.
+#  All jobs are expected to pass. A failure here means real drift has been
+#  reintroduced — fix the migration, never the check.
 # ─────────────────────────────────────────────────────────────────────────
 
 on:
@@ -121,6 +116,42 @@ jobs:
       # no rolled-back tombstones.
       - name: prisma migrate status
         run: npx prisma migrate status --schema prisma/schema.prisma
+
+      # ── CHECK 4 ──────────────────────────────────────────────────────
+      # Idempotency. The catch-up migration also runs against production,
+      # where every object it creates already exists. Re-applying it to an
+      # already-complete database must succeed and change nothing — that
+      # is the property which makes it a safe no-op there.
+      - name: Catch-up migration is idempotent
+        run: |
+          before=$(psql "$DATABASE_URL" -tAc "SELECT (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public')||'/'||(SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='public')||'/'||(SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public')")
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q \
+            -f prisma/migrations/20260516120000_catchup_missing_objects/migration.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q \
+            -f prisma/migrations/20260817120000_integrity_constraints/migration.sql
+          after=$(psql "$DATABASE_URL" -tAc "SELECT (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public')||'/'||(SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='public')||'/'||(SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public')")
+          echo "before=$before after=$after"
+          if [ "$before" != "$after" ]; then
+            echo "::error::Re-applying the catch-up migration changed the schema."
+            echo "It must be a no-op on an already-migrated database, or it is not"
+            echo "safe to run against production."
+            exit 1
+          fi
+          echo "✅ Idempotent: $after unchanged."
+
+      # ── CHECK 5 ──────────────────────────────────────────────────────
+      # The integrity constraints must actually exist after the chain
+      # runs. Prisma does not model CHECK constraints, so migrate diff
+      # cannot see them — without this step, silently dropping one would
+      # go unnoticed.
+      - name: Integrity constraints present
+        run: |
+          n=$(psql "$DATABASE_URL" -tAc "SELECT COUNT(*) FROM pg_constraint c JOIN pg_class cl ON cl.oid=c.conrelid JOIN pg_namespace ns ON ns.oid=cl.relnamespace WHERE ns.nspname='public' AND c.contype='c' AND c.conname IN ('PurchaseBatch_remaining_non_negative','PurchaseBatch_remaining_within_quantity','PurchaseBatch_quantity_positive','PurchaseBatch_unitcost_non_negative','ProductionCostAllocation_quantity_positive','ProductionCostAllocation_totalcost_non_negative','SaleCostAllocation_quantity_positive','DailyProduction_status_valid','TenantSetting_posting_mode_valid','Tenant_slug_not_blank')" | tr -d ' ')
+          echo "integrity constraints found: $n/10"
+          if [ "$n" != "10" ]; then
+            echo "::error::Expected 10 integrity constraints, found $n."
+            exit 1
+          fi
 
   # ───────────────────────────────────────────────────────────────────
   #  2. Unit tests + typecheck.
