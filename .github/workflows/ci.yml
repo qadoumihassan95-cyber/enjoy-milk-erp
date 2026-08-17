@@ -1,0 +1,214 @@
+name: CI
+
+# ─────────────────────────────────────────────────────────────────────────
+#  Enjoy Milk ERP — continuous integration
+#
+#  WHY THIS EXISTS
+#  ---------------
+#  The production database was originally provisioned with
+#  `prisma db push --accept-data-loss`, not by the migration chain. That
+#  hid a large drift: 21 models in schema.prisma have no CREATE TABLE in
+#  any migration, and two migrations reference tables the chain never
+#  creates. Production works only because db push built the schema
+#  directly — a fresh database cannot be built from this repo today.
+#
+#  Nothing detected that, because nothing ever ran the migrations against
+#  an empty database. This workflow does exactly that, on every push.
+#
+#  EXPECTED STATE ON INTRODUCTION
+#  ------------------------------
+#  The `migrations` job is EXPECTED TO FAIL when this file first lands.
+#  That failure is the finding, made visible. It is fixed by the catch-up
+#  migration in Stage 3 of ops/HARDENING-AUDIT-2026-08-17.md — not by
+#  weakening this check.
+#
+#  Reproduced locally against a real PostgreSQL 16 instance on 2026-08-17,
+#  applying each migration.sql in order to an empty database:
+#
+#      OK    20260510233312_init
+#      OK    20260516110854_daily_production_and_simple_orders
+#      FAIL  20260723170000_drop_pallets_count
+#            line 18: ERROR: relation "ProductionProducedItem" does not exist
+#
+#  33 of production's 57 tables were created before the chain aborted.
+#  So this job is not a hypothetical guard — it fails today, for a known
+#  reason, with a known fix.
+#
+#  The `tests` and `guards` jobs should pass immediately.
+# ─────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────
+  #  1. Migration chain must build a database from nothing.
+  # ───────────────────────────────────────────────────────────────────
+  migrations:
+    name: Migration chain (fresh database)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: enjoymilk_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Scratch database. Created empty by the service above, thrown away
+      # with the runner. No production credentials are used anywhere in CI.
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/enjoymilk_ci?schema=public
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Prisma CLI
+        run: npm install --no-save prisma@5.22.0 @prisma/client@5.22.0
+
+      # ── CHECK 1 ──────────────────────────────────────────────────────
+      # Every migration must apply cleanly, in order, to an empty database.
+      # This is what a brand-new tenant environment or a disaster-recovery
+      # restore would do.
+      - name: prisma migrate deploy (fresh database)
+        run: npx prisma migrate deploy --schema prisma/schema.prisma
+
+      # ── CHECK 2 ──────────────────────────────────────────────────────
+      # After the chain has run, the resulting database must match
+      # schema.prisma exactly. --exit-code makes a non-empty diff fail the
+      # build: exit 0 = no drift, exit 2 = drift found.
+      #
+      # This is the check that catches "someone edited schema.prisma and
+      # forgot to generate a migration" — the exact way the current drift
+      # accumulated.
+      - name: prisma migrate diff --exit-code (drift detection)
+        run: |
+          npx prisma migrate diff \
+            --from-url "$DATABASE_URL" \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code \
+            --script > /tmp/drift.sql || DRIFT=$?
+          if [ "${DRIFT:-0}" != "0" ]; then
+            echo "::error::schema.prisma does not match the migration chain."
+            echo "The following SQL would be required to close the gap:"
+            echo '--------------------------------------------------------'
+            cat /tmp/drift.sql
+            echo '--------------------------------------------------------'
+            echo "Fix: npx prisma migrate dev --name <describe_the_change>"
+            exit 1
+          fi
+          echo "✅ No drift: migration chain and schema.prisma agree."
+
+      # ── CHECK 3 ──────────────────────────────────────────────────────
+      # migrate status must report a clean history — no failed migrations,
+      # no rolled-back tombstones.
+      - name: prisma migrate status
+        run: npx prisma migrate status --schema prisma/schema.prisma
+
+  # ───────────────────────────────────────────────────────────────────
+  #  2. Unit tests + typecheck.
+  # ───────────────────────────────────────────────────────────────────
+  tests:
+    name: Tests and typecheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: npx prisma generate --schema prisma/schema.prisma
+
+      - name: Typecheck (API)
+        run: npx tsc -p apps/api/tsconfig.json --noEmit
+
+      - name: Unit tests (API)
+        run: npx jest --config apps/api/jest.config.js --ci
+
+      - name: Unit tests (erp-ai-core)
+        run: npx jest --config packages/erp-ai-core/jest.config.js --ci
+
+  # ───────────────────────────────────────────────────────────────────
+  #  3. Regression guards — cheap greps for defects already fixed once.
+  # ───────────────────────────────────────────────────────────────────
+  guards:
+    name: Regression guards
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The production container previously ran
+      # `prisma db push --accept-data-loss` at startup, which can drop
+      # columns holding live data and writes nothing to _prisma_migrations.
+      # It was replaced with `prisma migrate deploy`. This stops it coming
+      # back through a merge.
+      - name: No destructive db push in runtime startup
+        run: |
+          if grep -rn --include=Dockerfile --include='*.yml' --include='*.yaml' \
+               --include='*.json' --include='*.sh' \
+               -- '--accept-data-loss' . \
+             | grep -v '^\./\.github/' \
+             | grep -v '^\s*#' \
+             | grep -vE '^[^:]+:[0-9]+:\s*(#|//|--)' ; then
+            echo "::error::'--accept-data-loss' found in a runtime/deploy file."
+            echo "Production startup must use 'prisma migrate deploy'."
+            exit 1
+          fi
+          echo "✅ No destructive db push in deploy configuration."
+
+      # The JWT signing secret must never have an inline fallback. Both the
+      # signer and the verifier resolve it through core/config/jwt-secret.ts,
+      # which refuses to start in production without a real secret.
+      - name: No hardcoded JWT secret fallback
+        run: |
+          # Comment lines are stripped first — core/config/jwt-secret.ts
+          # documents the old pattern in its root-cause note, and that
+          # prose must not trip the guard.
+          if grep -rn --include='*.ts' 'process\.env\.JWT_SECRET[[:space:]]*||' apps/ \
+             | grep -vE ':[0-9]+:[[:space:]]*(\*|//|/\*)' ; then
+            echo "::error::Inline JWT_SECRET fallback found."
+            echo "Use resolveJwtSecret() from core/config/jwt-secret.ts."
+            exit 1
+          fi
+          echo "✅ No inline JWT secret fallback."
+
+      # The seed must never plant demo stock over a live inventory. It is
+      # gated on a virgin-inventory check; seed-safety.spec.ts enforces the
+      # detail, this catches deletion of the guard itself.
+      - name: Seed retains its production guard
+        run: |
+          if ! grep -q 'inventoryIsVirgin' prisma/seed.ts ; then
+            echo "::error::prisma/seed.ts lost its inventoryIsVirgin guard."
+            echo "Without it, deploying can overwrite live stock levels."
+            exit 1
+          fi
+          echo "✅ Seed production guard present."
