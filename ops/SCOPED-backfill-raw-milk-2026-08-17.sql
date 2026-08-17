@@ -87,7 +87,7 @@ BEGIN;
 --  ⬇⬇⬇  SET THE COST PER KG HERE — THE ONLY LINE TO EDIT  ⬇⬇⬇
 -- ─────────────────────────────────────────────────────────────────────
 CREATE TEMP TABLE _raw_milk_cost ON COMMIT DROP AS
-  SELECT 0.000000::numeric AS unit_cost;   -- ⬅ REPLACE 0.000000
+  SELECT 0.350000::numeric AS unit_cost;   -- confirmed by Hassan 2026-08-17: 0.35 JOD per KG
 -- ─────────────────────────────────────────────────────────────────────
 
 -- Guard 1 — refuse to run with the placeholder still at zero.
