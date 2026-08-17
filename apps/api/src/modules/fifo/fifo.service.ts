@@ -370,6 +370,13 @@ export class FifoCostingService {
       rawItemId: string;
       quantity: number | string;
       allowShortage?: boolean;
+      /**
+       * Tag written to ProductionCostAllocation.method. Lets waste
+       * consumption be told apart from production consumption when the
+       * cost report sums allocations, so waste cost comes from what was
+       * actually consumed instead of being re-derived from carton counts.
+       */
+      allocationMethod?: string;
     },
     tx?: Prisma.TransactionClient,
   ): Promise<{
@@ -430,7 +437,7 @@ export class FifoCostingService {
             quantity: new Prisma.Decimal(take),
             unitCost: new Prisma.Decimal(Number(b.unitCost)),
             totalCost: new Prisma.Decimal(lineCost),
-            method: 'FIFO',
+            method: dto.allocationMethod ?? 'FIFO',
           },
         });
         allocations.push(alloc);
@@ -471,7 +478,7 @@ export class FifoCostingService {
             quantity: new Prisma.Decimal(shortageQuantity),
             unitCost: new Prisma.Decimal(unitCost),
             totalCost: new Prisma.Decimal(lineCost),
-            method: 'FIFO_SHORTAGE',
+            method: (dto.allocationMethod ?? 'FIFO') + '_SHORTAGE',
           },
         });
         allocations.push(alloc);

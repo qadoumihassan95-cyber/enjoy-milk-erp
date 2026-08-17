@@ -6,6 +6,11 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import {
+  resolveConversion,
+  normaliseUnit,
+  type FactorSource,
+} from '../inventory/unit-conversion';
 import { FifoCostingService } from '../fifo/fifo.service';
 
 /**
@@ -28,6 +33,85 @@ import { FifoCostingService } from '../fifo/fifo.service';
  */
 @Injectable()
 export class DailyProductionService {
+  // ═══════════════════════════════════════════════════════════════════
+  // وحدات القياس — التحويل يحدث هنا، لا في المتصفح
+  // ═══════════════════════════════════════════════════════════════════
+  /**
+   * Load the items referenced by a set of usage rows, keyed by id.
+   * One query instead of one per row.
+   */
+  private async loadItems(tx: any, tenantId: string, rows: any[]) {
+    const ids = Array.from(
+      new Set(rows.flatMap((r) => (r?.itemId ? [r.itemId] : []))),
+    );
+    if (!ids.length) return new Map<string, any>();
+    const items = await tx.item.findMany({
+      where: { tenantId, id: { in: ids } },
+      select: {
+        id: true, unit: true, bagWeightKg: true,
+        packsPerCarton: true, gramsPerUnit: true,
+      },
+    });
+    return new Map<string, any>(items.map((i: any) => [i.id, i]));
+  }
+
+  /**
+   * Express `qty` (given in `fromUnit`) in the item's own unit, and report
+   * how it was derived so the caller can persist the snapshot.
+   *
+   * An unsupported pair does NOT throw. A waste row of 300 "L" against a
+   * PCS item exists in live data, and refusing to post a sheet because a
+   * historical unit label is nonsense would block real work. The quantity
+   * passes through unchanged and is tagged UNCONVERTIBLE so the
+   * reconciliation report lists it for correction. Silence would be the
+   * bug; a labelled passthrough is not.
+   */
+  private convertToItemUnit(
+    item: any | undefined,
+    qty: number,
+    fromUnit: string | null | undefined,
+  ): { quantity: number; unitFactor: number | null; factorSource: FactorSource; unit: string } {
+    const itemUnit = normaliseUnit(item?.unit);
+    if (!item) {
+      return { quantity: qty, unitFactor: null, factorSource: 'MANUAL', unit: normaliseUnit(fromUnit) };
+    }
+    const from = normaliseUnit(fromUnit ?? item.unit);
+    try {
+      const r = resolveConversion(item, qty, from);
+      return {
+        quantity: r.quantity,
+        unitFactor: r.factor,
+        factorSource: r.factorSource,
+        unit: itemUnit,
+      };
+    } catch {
+      return { quantity: qty, unitFactor: null, factorSource: 'UNCONVERTIBLE', unit: itemUnit };
+    }
+  }
+
+  /**
+   * Milk is entered as a bag COUNT. The browser used to multiply by a
+   * hardcoded 25 and send the result; the server now owns that conversion
+   * so the factor can be recorded and per-item weights honoured.
+   *
+   * When `count` is 0 the operator typed the weight directly — taken as
+   * given and tagged MANUAL rather than reverse-engineered.
+   */
+  private resolveMilkRow(item: any | undefined, row: any) {
+    const count = Number(row.count ?? 0);
+    if (count > 0 && item) {
+      const c = this.convertToItemUnit(item, count, 'BAG');
+      return { ...c, count };
+    }
+    return {
+      quantity: Number(row.quantity ?? 0),
+      unitFactor: null,
+      factorSource: 'MANUAL' as FactorSource,
+      unit: normaliseUnit(item?.unit ?? row.unit),
+      count,
+    };
+  }
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly fifo: FifoCostingService,
@@ -136,8 +220,8 @@ export class DailyProductionService {
       operatorName?: string;
       machineNumber?: number;
       notes?: string;
-      cartonUsage?: Array<{ itemId?: string; itemName: string; quantity: number; warehouseId?: string }>;
-      aluminumUsage?: Array<{ itemId?: string; itemName: string; quantity: number; warehouseId?: string }>;
+      cartonUsage?: Array<{ itemId?: string; itemName: string; quantity: number; unit?: string; warehouseId?: string }>;
+      aluminumUsage?: Array<{ itemId?: string; itemName: string; quantity: number; unit?: string; warehouseId?: string }>;
       milkUsage?: Array<{ itemId?: string; itemName?: string; count?: number; quantity: number; unit?: string; warehouseId?: string }>;
       produced?: Array<{ itemId?: string; itemName: string; cartonsTotal: number; warehouseId?: string; notes?: string }>;
       wastages?: Array<{ itemId?: string; itemName: string; quantity: number; unit?: string; warehouseId?: string; reason?: string }>;
@@ -167,47 +251,81 @@ export class DailyProductionService {
       await tx.productionProducedItem.deleteMany({ where: { dailyProductionId: id } });
       await tx.productionWaste.deleteMany({ where: { dailyProductionId: id } });
 
+      // ─── تطبيع الوحدات قبل الحفظ ───────────────────────────────
+      // التحويل صار هنا بدل المتصفح: الواجهة كانت تضرب عدد الأكياس × 25
+      // ثابتة، والخادم يخزّن الناتج دون أن يعرف أن تحويلاً حدث. الآن
+      // يُحسب التحويل من إعداد الصنف نفسه، وتُحفظ لقطة المعامل مع كل سطر
+      // حتى تبقى الورقة قابلة لإعادة الإنتاج بعد أي تعديل على الصنف.
+      const allRows = [
+        ...(data.cartonUsage ?? []),
+        ...(data.aluminumUsage ?? []),
+        ...(data.milkUsage ?? []),
+        ...(data.wastages ?? []),
+      ];
+      const itemsById = await this.loadItems(tx, tenantId, allRows);
+
       // الكرتون
       if (data.cartonUsage?.length) {
         await tx.productionCartonUsage.createMany({
-          data: data.cartonUsage.map((r) => ({
-            tenantId,
-            dailyProductionId: id,
-            itemId: r.itemId ?? null,
-            itemName: r.itemName,
-            quantity: new Prisma.Decimal(r.quantity),
-            warehouseId: r.warehouseId ?? null,
-          })),
+          data: data.cartonUsage.map((r) => {
+            const c = this.convertToItemUnit(
+              itemsById.get(r.itemId ?? ''), Number(r.quantity ?? 0), r.unit,
+            );
+            return {
+              tenantId,
+              dailyProductionId: id,
+              itemId: r.itemId ?? null,
+              itemName: r.itemName,
+              quantity: new Prisma.Decimal(c.quantity),
+              unit: c.unit,
+              unitFactor: c.unitFactor === null ? null : new Prisma.Decimal(c.unitFactor),
+              factorSource: c.factorSource,
+              warehouseId: r.warehouseId ?? null,
+            };
+          }),
         });
       }
 
       // الألمنيوم
       if (data.aluminumUsage?.length) {
         await tx.productionAluminumUsage.createMany({
-          data: data.aluminumUsage.map((r) => ({
-            tenantId,
-            dailyProductionId: id,
-            itemId: r.itemId ?? null,
-            itemName: r.itemName,
-            quantity: new Prisma.Decimal(r.quantity),
-            warehouseId: r.warehouseId ?? null,
-          })),
+          data: data.aluminumUsage.map((r) => {
+            const c = this.convertToItemUnit(
+              itemsById.get(r.itemId ?? ''), Number(r.quantity ?? 0), r.unit,
+            );
+            return {
+              tenantId,
+              dailyProductionId: id,
+              itemId: r.itemId ?? null,
+              itemName: r.itemName,
+              quantity: new Prisma.Decimal(c.quantity),
+              unit: c.unit,
+              unitFactor: c.unitFactor === null ? null : new Prisma.Decimal(c.unitFactor),
+              factorSource: c.factorSource,
+              warehouseId: r.warehouseId ?? null,
+            };
+          }),
         });
       }
 
-      // الحليب
+      // الحليب — يُدخَل بعدد الأكياس، والخادم يحوّله
       if (data.milkUsage?.length) {
         await tx.productionMilkUsage.createMany({
-          data: data.milkUsage.map((r) => ({
-            tenantId,
-            dailyProductionId: id,
-            itemId: r.itemId ?? null,
-            itemName: r.itemName ?? null,
-            count: r.count ?? 0,
-            quantity: new Prisma.Decimal(r.quantity),
-            unit: r.unit ?? 'L',
-            warehouseId: r.warehouseId ?? null,
-          })),
+          data: data.milkUsage.map((r) => {
+            const c = this.resolveMilkRow(itemsById.get(r.itemId ?? ''), r);
+            return {
+              tenantId,
+              dailyProductionId: id,
+              itemId: r.itemId ?? null,
+              itemName: r.itemName ?? null,
+              count: c.count,
+              quantity: new Prisma.Decimal(c.quantity),
+              unit: c.unit,
+              unitFactor: c.unitFactor === null ? null : new Prisma.Decimal(c.unitFactor),
+              factorSource: c.factorSource,
+              warehouseId: r.warehouseId ?? null,
+            };
+          }),
         });
       }
 
@@ -233,16 +351,27 @@ export class DailyProductionService {
       // التوالف
       if (data.wastages?.length) {
         await tx.productionWaste.createMany({
-          data: data.wastages.map((w) => ({
-            tenantId,
-            dailyProductionId: id,
-            itemId: w.itemId ?? null,
-            itemName: w.itemName,
-            quantity: new Prisma.Decimal(w.quantity),
-            unit: w.unit ?? 'PCS',
-            warehouseId: w.warehouseId ?? null,
-            reason: w.reason ?? null,
-          })),
+          data: data.wastages.map((w) => {
+            // نفس التطبيع المطبَّق على المواد الخام. سطر توالف بوحدة لا
+            // تُحوَّل إلى وحدة الصنف (موجود فعلاً في البيانات: 300 "L"
+            // على صنف PCS) يمرّ كما هو ويُوسَم UNCONVERTIBLE ليظهر في
+            // تقرير المطابقة، بدل أن يمنع الترحيل أو يمرّ بصمت.
+            const c = this.convertToItemUnit(
+              itemsById.get(w.itemId ?? ''), Number(w.quantity ?? 0), w.unit,
+            );
+            return {
+              tenantId,
+              dailyProductionId: id,
+              itemId: w.itemId ?? null,
+              itemName: w.itemName,
+              quantity: new Prisma.Decimal(c.quantity),
+              unit: c.unit,
+              unitFactor: c.unitFactor === null ? null : new Prisma.Decimal(c.unitFactor),
+              factorSource: c.factorSource,
+              warehouseId: w.warehouseId ?? null,
+              reason: w.reason ?? null,
+            };
+          }),
         });
       }
 
@@ -503,6 +632,27 @@ export class DailyProductionService {
       // التسلسل، فيستحيل تكوّن دورة انتظار.
       rawRows.sort((a, b) => (a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0));
 
+      // ═══════════════════════════════════════════════════════════
+      //  تصنيف التوالف (القرار المحاسبي المعتمد)
+      // ═══════════════════════════════════════════════════════════
+      //  توالف مواد خام  → تستهلك دفعات المادة الخام نفسها، وتكلفتها
+      //                     تُحمَّل على تكلفة الإنتاج (هدر طبيعي: المادة
+      //                     دخلت العملية فعلاً ولم تخرج منتجاً).
+      //  توالف منتج تام → تستهلك دفعات المنتج التام، وتُسجَّل خسارة
+      //                     منفصلة ولا تُحمَّل على تكلفة باقي الكراتين —
+      //                     الكرتون التالف كُلِّف مرة واحدة عند إنتاجه،
+      //                     وتحميله ثانية على إخوته ازدواج في الاحتساب.
+      const producedItemIds = new Set<string>(
+        dp.produced.map((p: any) => p.itemId).filter(Boolean),
+      );
+      const wasteRows: any[] = dp.wastages ?? [];
+      const finishedWaste = wasteRows.filter(
+        (w: any) => w.itemId && producedItemIds.has(w.itemId),
+      );
+      const rawWaste = wasteRows.filter(
+        (w: any) => w.itemId && !producedItemIds.has(w.itemId),
+      );
+
       let rawCostTotal = 0;
       for (const r of rawRows) {
         // If FIFO batches are insufficient (which shouldn't happen —
@@ -520,6 +670,30 @@ export class DailyProductionService {
         );
         rawCostTotal += consumed.totalCost;
       }
+      // توالف المواد الخام — تُستهلك من دفعات المادة نفسها وتدخل في
+      // أساس التكلفة. لا بد أن تسبق حساب perCartonCost أدناه.
+      let rawWasteCost = 0;
+      const rawWasteSorted = [...rawWaste].sort((a, b) =>
+        a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0,
+      );
+      for (const w of rawWasteSorted) {
+        const qty = Number(w.quantity ?? 0);
+        if (!(qty > 0)) continue;
+        const consumed = await this.fifo.consumeForProduction(
+          tenantId,
+          {
+            dailyProductionId: dp.id,
+            rawItemId: w.itemId,
+            quantity: qty,
+            allowShortage,
+            allocationMethod: 'FIFO_WASTE_RAW',
+          },
+          tx,
+        );
+        rawWasteCost += consumed.totalCost;
+      }
+      rawCostTotal += rawWasteCost;
+
       const perCartonCost = totalCartons > 0 && rawCostTotal > 0
         ? rawCostTotal / totalCartons
         : null; // fallback per item below
@@ -580,7 +754,12 @@ export class DailyProductionService {
         }
       }
 
-      // ─── خصم التوالف ───
+      // ─── خصم التوالف من الرصيد + استهلاك دفعات المنتج التام ───
+      // الرصيد يُخصم لكل التوالف هنا كما كان. الجديد: توالف المنتج التام
+      // تستهلك أيضاً دفعات FIFO الخاصة به — وهي أُنشئت للتو في حلقة
+      // الإنتاج أعلاه، ولهذا يأتي هذا الجزء بعدها وليس قبلها.
+      let finishedWasteCost = 0;
+      const finishedWasteIds = new Set(finishedWaste.map((w: any) => w.id));
       for (const w of dp.wastages) {
         requireItem(w, 'توالف');
         if (!w.itemId) continue;
@@ -607,6 +786,27 @@ export class DailyProductionService {
           previousStock: eff_w.before, resultingStock: eff_w.after,
           postingMode: mode, postedById: userId,
         });
+
+        // منتج تام تالف → استهلك دفعته الخاصة بتكلفتها هي، وسجّلها خسارة
+        // مستقلة. لا تُضاف إلى rawCostTotal: الكرتون كُلِّف عند إنتاجه،
+        // وإعادة تحميله على باقي الكراتين ازدواج في الاحتساب.
+        if (finishedWasteIds.has(w.id)) {
+          const qty = Number(w.quantity ?? 0);
+          if (qty > 0) {
+            const consumed = await this.fifo.consumeForProduction(
+              tenantId,
+              {
+                dailyProductionId: dp.id,
+                rawItemId: w.itemId,
+                quantity: qty,
+                allowShortage,
+                allocationMethod: 'FIFO_WASTE_FINISHED',
+              },
+              tx,
+            );
+            finishedWasteCost += consumed.totalCost;
+          }
+        }
       }
 
       // Flip claim → final POSTED (postedAt/postedById already set by claim).
@@ -1440,15 +1640,41 @@ export class DailyProductionService {
     const allocations: Array<{ dailyProductionId: string; totalCost: any }> =
       await (this.prisma as any).productionCostAllocation.findMany({
         where: { tenantId, dailyProductionId: { in: dpIds } },
-        select: { dailyProductionId: true, totalCost: true },
+        select: { dailyProductionId: true, totalCost: true, method: true },
       });
+
+    // ── تكلفة التوالف من ما استُهلك فعلاً ────────────────────────────
+    // كانت تُحسب: wasteQty × (تكلفة الإنتاج ÷ عدد الكراتين) — أي أن كل
+    // توالف يُقيَّم بسعر كرتون تام. البيانات الحية تقول إن 8 من 13 سطر
+    // توالف مواد خام (رولات ألمنيوم، كراتين)، فكان التقييم خاطئاً بالبُعد
+    // نفسه: كمية بالكيلو أو بالحبة مضروبة بسعر كرتون.
+    //
+    // الآن تُجمع من ProductionCostAllocation حسب method:
+    //   FIFO / FIFO_SHORTAGE                    → تكلفة الإنتاج
+    //   FIFO_WASTE_RAW / ..._SHORTAGE           → توالف مواد خام (محمَّلة
+    //                                             على تكلفة الإنتاج أيضاً)
+    //   FIFO_WASTE_FINISHED / ..._SHORTAGE      → خسارة منتج تام مستقلة
+    const isRawWaste = (m: string) => (m ?? '').startsWith('FIFO_WASTE_RAW');
+    const isFinishedWaste = (m: string) => (m ?? '').startsWith('FIFO_WASTE_FINISHED');
+
     const costByDp = new Map<string, number>();
-    for (const a of allocations) {
-      const s = costByDp.get(a.dailyProductionId) ?? 0;
-      costByDp.set(a.dailyProductionId, s + Number(a.totalCost));
+    const rawWasteByDp = new Map<string, number>();
+    const finishedWasteByDp = new Map<string, number>();
+    for (const a of allocations as any[]) {
+      const v = Number(a.totalCost);
+      const add = (m: Map<string, number>) =>
+        m.set(a.dailyProductionId, (m.get(a.dailyProductionId) ?? 0) + v);
+      if (isFinishedWaste(a.method)) {
+        // خسارة مستقلة — لا تدخل تكلفة الإنتاج (منع الازدواج)
+        add(finishedWasteByDp);
+      } else {
+        add(costByDp);
+        if (isRawWaste(a.method)) add(rawWasteByDp);
+      }
     }
 
     let totalCost = 0, totalCartons = 0, totalWasteQty = 0, totalWasteCost = 0;
+    let totalRawWasteCost = 0, totalFinishedWasteCost = 0, estimatedWasteRows = 0;
     let legacyCount = 0;
     const rows = productions.map((p: any) => {
       const productionCost = costByDp.get(p.id) ?? 0;
@@ -1459,13 +1685,26 @@ export class DailyProductionService {
         (s: number, x: any) => s + Number(x.quantity ?? 0), 0,
       );
       const unitCost = producedCartons > 0 ? productionCost / producedCartons : 0;
-      const wasteCost = wasteQty * unitCost;
+
+      const rawWasteCost = rawWasteByDp.get(p.id) ?? 0;
+      const finishedWasteCost = finishedWasteByDp.get(p.id) ?? 0;
+      const measuredWasteCost = rawWasteCost + finishedWasteCost;
+
+      // Sheets posted before waste consumed FIFO have no waste allocations.
+      // Falling back to the old carton-cost approximation for those keeps
+      // history readable, but it is flagged rather than presented as fact.
+      const wasteCostIsMeasured = measuredWasteCost > 0 || wasteQty === 0;
+      const wasteCost = wasteCostIsMeasured ? measuredWasteCost : wasteQty * unitCost;
+
       const legacy = productionCost === 0 && producedCartons > 0;
       if (legacy) legacyCount++;
       totalCost += productionCost;
       totalCartons += producedCartons;
       totalWasteQty += wasteQty;
       totalWasteCost += wasteCost;
+      totalRawWasteCost += rawWasteCost;
+      totalFinishedWasteCost += finishedWasteCost;
+      if (!wasteCostIsMeasured) estimatedWasteRows++;
       return {
         productionId: p.id,
         productionDate: p.productionDate,
@@ -1473,6 +1712,9 @@ export class DailyProductionService {
         producedCartons,
         wasteQty,
         wasteCost,
+        rawWasteCost,
+        finishedWasteCost,
+        wasteCostIsMeasured,
         unitCost,
         legacy, // true => posted before Blocker B1; no FIFO cost recorded
       };
@@ -1491,8 +1733,12 @@ export class DailyProductionService {
         producedCartons: totalCartons,
         wasteQty: totalWasteQty,
         wasteCost: r4(totalWasteCost),
+        rawWasteCost: r4(totalRawWasteCost),
+        finishedWasteCost: r4(totalFinishedWasteCost),
         wastePct: r2(wastePct),
         legacyProductions: legacyCount,
+        // Sheets whose waste cost is still the old carton-cost estimate.
+        estimatedWasteRows,
       },
       rows,
     };

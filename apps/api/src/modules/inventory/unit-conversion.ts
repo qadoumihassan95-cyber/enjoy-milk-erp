@@ -62,7 +62,16 @@ export type FactorSource =
   /** LEGACY_BAG_KG was used because the item is not configured. */
   | 'LEGACY_DEFAULT'
   /** Operator typed the target quantity directly; no factor applied. */
-  | 'MANUAL';
+  | 'MANUAL'
+  /**
+   * The row's unit and the item's unit disagree and no conversion between
+   * them exists (e.g. a waste row of 300 "L" against a PCS item — real
+   * live data). The quantity passes through unchanged and is labelled so
+   * the reconciliation report can list it. Never produced by
+   * resolveConversion itself, only by callers that choose to degrade
+   * rather than refuse a posting.
+   */
+  | 'UNCONVERTIBLE';
 
 export interface ResolvedConversion {
   /** Quantity expressed in the item's own unit. */

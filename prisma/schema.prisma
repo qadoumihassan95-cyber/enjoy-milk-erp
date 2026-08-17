@@ -981,7 +981,16 @@ model ProductionCartonUsage {
   itemId            String?            // ربط بصنف من المخزون (اختياري)
   itemName          String             // اسم الصنف (نص حر)
   quantity          Decimal @db.Decimal(18, 4)
+  unit              String?                     // وحدة الإدخال — كانت مفقودة تماماً
   warehouseId       String?
+  // ─── لقطة التحويل وقت الترحيل (Stage 4) ───────────────────────────
+  // الكمية أعلاه مخزّنة بوحدة الصنف نفسها. هذه الحقول تسجّل كيف وصلنا
+  // إليها، حتى تبقى الورقة التاريخية قابلة لإعادة الإنتاج حتى لو تغيّر
+  // إعداد الصنف لاحقاً. factorSource: ITEM | LEGACY_DEFAULT | PHYSICAL |
+  // IDENTITY | MANUAL | UNCONVERTIBLE
+  unitFactor        Decimal? @db.Decimal(18, 6)
+  factorSource      String?
+
 
   dailyProduction DailyProduction @relation(fields: [dailyProductionId], references: [id], onDelete: Cascade)
 
@@ -997,7 +1006,16 @@ model ProductionAluminumUsage {
   itemId            String?
   itemName          String
   quantity          Decimal @db.Decimal(18, 4)
+  unit              String?                     // وحدة الإدخال — كانت مفقودة تماماً
   warehouseId       String?
+  // ─── لقطة التحويل وقت الترحيل (Stage 4) ───────────────────────────
+  // الكمية أعلاه مخزّنة بوحدة الصنف نفسها. هذه الحقول تسجّل كيف وصلنا
+  // إليها، حتى تبقى الورقة التاريخية قابلة لإعادة الإنتاج حتى لو تغيّر
+  // إعداد الصنف لاحقاً. factorSource: ITEM | LEGACY_DEFAULT | PHYSICAL |
+  // IDENTITY | MANUAL | UNCONVERTIBLE
+  unitFactor        Decimal? @db.Decimal(18, 6)
+  factorSource      String?
+
 
   dailyProduction DailyProduction @relation(fields: [dailyProductionId], references: [id], onDelete: Cascade)
 
@@ -1016,6 +1034,14 @@ model ProductionMilkUsage {
   quantity          Decimal @db.Decimal(18, 4)  // الكمية (لتر / كغ)
   unit              String  @default("L")
   warehouseId       String?
+  // ─── لقطة التحويل وقت الترحيل (Stage 4) ───────────────────────────
+  // الكمية أعلاه مخزّنة بوحدة الصنف نفسها. هذه الحقول تسجّل كيف وصلنا
+  // إليها، حتى تبقى الورقة التاريخية قابلة لإعادة الإنتاج حتى لو تغيّر
+  // إعداد الصنف لاحقاً. factorSource: ITEM | LEGACY_DEFAULT | PHYSICAL |
+  // IDENTITY | MANUAL | UNCONVERTIBLE
+  unitFactor        Decimal? @db.Decimal(18, 6)
+  factorSource      String?
+
 
   dailyProduction DailyProduction @relation(fields: [dailyProductionId], references: [id], onDelete: Cascade)
 
@@ -1055,6 +1081,14 @@ model ProductionWaste {
   quantity          Decimal @db.Decimal(18, 4)  // العدد / الوزن
   unit              String  @default("PCS")    // PCS | KG | L
   warehouseId       String?
+  // ─── لقطة التحويل وقت الترحيل (Stage 4) ───────────────────────────
+  // الكمية أعلاه مخزّنة بوحدة الصنف نفسها. هذه الحقول تسجّل كيف وصلنا
+  // إليها، حتى تبقى الورقة التاريخية قابلة لإعادة الإنتاج حتى لو تغيّر
+  // إعداد الصنف لاحقاً. factorSource: ITEM | LEGACY_DEFAULT | PHYSICAL |
+  // IDENTITY | MANUAL | UNCONVERTIBLE
+  unitFactor        Decimal? @db.Decimal(18, 6)
+  factorSource      String?
+
   reason            String?
 
   dailyProduction DailyProduction @relation(fields: [dailyProductionId], references: [id], onDelete: Cascade)
