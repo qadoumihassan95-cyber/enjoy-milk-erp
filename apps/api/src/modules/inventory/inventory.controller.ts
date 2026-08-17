@@ -17,13 +17,37 @@ import { CurrentUser } from '../../core/auth/current-user.decorator';
 import { Roles } from '../../core/auth/roles.decorator';
 import type { AuthenticatedUser } from '../../core/auth/jwt.strategy';
 import { InventoryService } from './inventory.service';
+import { StockReconciliationService } from './stock-reconciliation.service';
 import { XLSX_CONTENT_TYPE } from '../../lib/xlsx-export';
 
 @ApiTags('inventory')
 @ApiBearerAuth()
 @Controller('inventory')
 export class InventoryController {
-  constructor(private readonly service: InventoryService) {}
+  constructor(
+    private readonly service: InventoryService,
+    private readonly reconciliation: StockReconciliationService,
+  ) {}
+
+  // ─── Stock model reconciliation (READ-ONLY) ──────
+  /**
+   * Audits StockLevel against the FIFO cost layer and reports every
+   * divergence. Diagnostic only — it writes nothing and repairs nothing,
+   * because deciding which layer is authoritative is a business call,
+   * not something a report should make silently.
+   *
+   * MANAGER-only: the output enumerates full inventory positions.
+   */
+  @Get('reconciliation')
+  @Roles('MANAGER')
+  stockReconciliation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('includeInactive') includeInactive?: string,
+  ) {
+    return this.reconciliation.reconcile(user.tenantId, {
+      includeInactive: includeInactive === '1' || includeInactive === 'true',
+    });
+  }
 
   // ─── Dashboard + Alerts ──────────────────────────
   @Get('dashboard')
