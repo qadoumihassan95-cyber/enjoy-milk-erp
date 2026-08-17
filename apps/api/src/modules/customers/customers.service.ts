@@ -213,8 +213,11 @@ export class CustomersService {
 
     const totals = await Promise.all(
       customers.map(async (c) => {
+        // الطلبات الملغاة لا تُحتسب في المديونية: العميل لا يدين بقيمة طلب
+        // ألغي. بدون هذا الفلتر يظهر رصيد مستحق وهمي في كشف حسابه.
+        // نفس الفلتر المستخدم في تقرير الطلبات (simple-orders.service.ts).
         const orders = await this.prisma.salesOrder.aggregate({
-          where: { tenantId, customerId: c.id },
+          where: { tenantId, customerId: c.id, status: { not: 'CANCELLED' } },
           _sum: { total: true, paid: true },
         });
         return {

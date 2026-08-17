@@ -831,8 +831,18 @@ export class DailyProductionService {
     start.setHours(0, 0, 0, 0);
     const end = new Date(start.getTime() + 86400000);
 
+    // الملغاة (CANCELLED) مستبعدة: عند الإلغاء تُعكس حركات المخزون ودفعات
+    // FIFO بالكامل (راجع cancel())، فاحتسابها هنا يضخّم إنتاج اليوم والهدر
+    // بكميات لم تعد موجودة فعلياً. نفس الفلتر المستخدم في
+    // getCostAndWasteReport و getCogsProfit.
+    // المسودات (DRAFT) تبقى محتسبة عمداً — هذه شاشة تشغيلية تعرض عمل اليوم
+    // الجاري؛ التوزيع حسب الحالة مرفق في counts أدناه.
     const records = await this.prisma.dailyProduction.findMany({
-      where: { tenantId, productionDate: { gte: start, lt: end } },
+      where: {
+        tenantId,
+        productionDate: { gte: start, lt: end },
+        status: { not: 'CANCELLED' },
+      },
       include: {
         cartonUsage: true,
         aluminumUsage: true,
@@ -868,6 +878,12 @@ export class DailyProductionService {
     return {
       date: start.toISOString().slice(0, 10),
       recordsCount: records.length,
+      // توزيع الحالات — يوضّح للمستخدم أن الأرقام تشمل مسودات لم تُرحَّل بعد،
+      // بدل أن يخمّن. الملغاة غير محتسبة أصلاً في records.
+      counts: {
+        draft: records.filter((r) => r.status === 'DRAFT').length,
+        posted: records.filter((r) => r.status === 'POSTED').length,
+      },
       records,
       summary: {
         totalCartons,
@@ -896,8 +912,14 @@ export class DailyProductionService {
     const round = (n: number, d = 2) =>
       Math.round(n * Math.pow(10, d)) / Math.pow(10, d);
 
+    // انظر التعليق في dailyReport: الملغاة مستبعدة لأن حركاتها معكوسة،
+    // والمسودات تبقى ظاهرة لأن هذه بطاقة تشغيلية ليوم العمل الجاري.
     const records = await this.prisma.dailyProduction.findMany({
-      where: { tenantId, productionDate: { gte: start, lt: end } },
+      where: {
+        tenantId,
+        productionDate: { gte: start, lt: end },
+        status: { not: 'CANCELLED' },
+      },
       include: {
         cartonUsage: true,
         aluminumUsage: true,
@@ -961,6 +983,11 @@ export class DailyProductionService {
       date: start.toISOString().slice(0, 10),
       filter: { itemName: opts.itemName ?? null },
       recordsCount: records.length,
+      // انظر dailyReport: الملغاة مستبعدة، والمسودات محتسبة ومعلَنة هنا.
+      counts: {
+        draft: records.filter((r) => r.status === 'DRAFT').length,
+        posted: records.filter((r) => r.status === 'POSTED').length,
+      },
       itemsProduced: Array.from(itemsProduced).sort(),
       totals: {
         cartons: totalCartons,
