@@ -7,8 +7,71 @@ import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
+/**
+ * SEED MODE — the difference between a demo install and a live customer.
+ * ─────────────────────────────────────────────────────────────────────
+ * The seed runs on EVERY container start (see apps/api/Dockerfile CMD).
+ * That is fine while the database is a demo, and dangerous the moment it
+ * is not: after a go-live reset the inventory tables are empty, which is
+ * exactly the condition the old `inventoryIsVirgin` guard used to decide
+ * it was safe to plant demo stock. The guard that protected real data
+ * would have become the mechanism that destroyed a clean go-live.
+ *
+ *   provision  ensure ONLY what the application needs in order to boot:
+ *              the tenant and the warehouses. No demo users, items,
+ *              stock, customers, employees, machines or licences.
+ *              DEFAULT when NODE_ENV=production.
+ *
+ *   demo       the original behaviour — full demo dataset. DEFAULT
+ *              outside production, so local development is unchanged.
+ *
+ * Override explicitly with SEED_MODE=demo|provision.
+ */
+type SeedMode = 'demo' | 'provision';
+
+function resolveSeedMode(env: NodeJS.ProcessEnv = process.env): SeedMode {
+  const raw = (env.SEED_MODE ?? '').trim().toLowerCase();
+  if (raw === 'demo') return 'demo';
+  if (raw === 'provision') return 'provision';
+  return env.NODE_ENV === 'production' ? 'provision' : 'demo';
+}
+
+/**
+ * In provision mode a database with NO users at all cannot be logged into.
+ * One OWNER is created from the environment, and ONLY when the table is
+ * empty — so it can never overwrite or resurrect a real account. The
+ * password is read from the environment and never logged.
+ */
+async function ensureBootstrapAdmin(tenantId: string) {
+  const existing = await prisma.user.count();
+  if (existing > 0) {
+    console.log(`[seed] provision: ${existing} user(s) already exist — no bootstrap needed.`);
+    return;
+  }
+  const email = (process.env.BOOTSTRAP_ADMIN_EMAIL ?? '').trim().toLowerCase();
+  const password = process.env.BOOTSTRAP_ADMIN_PASSWORD ?? '';
+  if (!email || !password) {
+    console.warn(
+      '[seed] provision: no users exist and BOOTSTRAP_ADMIN_EMAIL / ' +
+      'BOOTSTRAP_ADMIN_PASSWORD are not set. Nobody can log in. Set both and redeploy.',
+    );
+    return;
+  }
+  await prisma.user.create({
+    data: {
+      tenantId,
+      email,
+      fullName: 'Owner',
+      passwordHash: await bcrypt.hash(password, 10),
+      role: 'OWNER' as any,
+    },
+  });
+  console.log(`[seed] provision: bootstrap OWNER created for ${email}.`);
+}
+
 async function main() {
-  console.log('🌱 Seeding...');
+  const mode = resolveSeedMode();
+  console.log(`🌱 Seeding... (mode=${mode})`);
 
   // ── Tenant ──────────────────────────────────────
   const tenant = await prisma.tenant.upsert({
@@ -23,6 +86,11 @@ async function main() {
   });
 
   // ── Users ───────────────────────────────────────
+  // Demo accounts only. In provision mode the real accounts are whatever
+  // the customer already has; this must never recreate a deleted one.
+  if (mode === 'provision') {
+    await ensureBootstrapAdmin(tenant.id);
+  } else {
   const passwordHash = await bcrypt.hash('Admin@123', 10);
 
   const users = [
@@ -48,7 +116,12 @@ async function main() {
     });
   }
 
+  } // end demo users
+
   // ── Warehouses ──────────────────────────────────
+  // Always ensured: the application resolves MAIN on every posting, so a
+  // database without it cannot operate. Upserts use `update: {}`, so an
+  // existing warehouse is never modified.
   // SINGLE-WAREHOUSE MODEL: the factory operates from MAIN. The legacy
   // codes are still provisioned (historical StockMovement rows reference
   // them) but INACTIVE — matching the state that
@@ -81,6 +154,19 @@ async function main() {
   }
 
   const mainWh = await prisma.warehouse.findFirst({ where: { tenantId: tenant.id, code: 'MAIN' } });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  PROVISION MODE STOPS HERE.
+  //  Everything below is demo business data: items, opening stock,
+  //  production lines, machines, customers, cashboxes, employees and
+  //  licences. None of it may be created on a live customer database,
+  //  and none of it may come back after a go-live reset.
+  // ═══════════════════════════════════════════════════════════════════
+  if (mode === 'provision') {
+    console.log('[seed] provision: tenant and warehouses ensured. No demo data created.');
+    console.log('✅ Seed complete (provision).');
+    return;
+  }
 
   // ── Items ───────────────────────────────────────
   // المخزون الخام: حليب + كرتون + ألمنيوم
@@ -414,13 +500,11 @@ async function main() {
     });
   }
 
-  console.log('✅ Seed complete!');
-  console.log('');
-  console.log('🔐 Login credentials:');
-  console.log('   admin@enjoymilk.local / Admin@123');
-  console.log('   owner@enjoymilk.local / Admin@123');
-  console.log('   manager@enjoymilk.local / Admin@123');
-  console.log('   operator@enjoymilk.local / Admin@123');
+  // Credentials are deliberately NOT printed. They were being written to
+  // the Render deploy log on every container start, which put a working
+  // password for six accounts into log storage anyone with dashboard
+  // access could read.
+  console.log('✅ Seed complete (demo).');
 }
 
 main()
