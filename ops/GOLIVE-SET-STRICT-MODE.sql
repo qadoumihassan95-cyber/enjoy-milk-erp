@@ -1,15 +1,21 @@
 -- =====================================================================
---  GO-LIVE — SET PRODUCTION POSTING MODE TO STRICT_MODE
+--  GO-LIVE - SET PRODUCTION POSTING MODE TO STRICT_MODE
 -- =====================================================================
 --  Run this BEFORE ops/GOLIVE-RESET-APPLY.sql.
+--
+--  NOTE ON ENCODING: this file is deliberately pure 7-bit ASCII. An
+--  earlier revision carried box-drawing characters, em-dashes and an
+--  Arabic word in its comments; pasted through a web terminal those
+--  multi-byte sequences did not survive intact and the SHA-256 check
+--  failed. Nothing here depends on non-ASCII, so nothing here uses it.
 --
 --  WHY
 --  ---
 --  The reset empties StockLevel and PurchaseBatch. Under WARNING_MODE a
---  ترحيل against an item with no FIFO cover is allowed and posts the
---  balance negative. Under STRICT_MODE it is refused. Until real opening
---  inventory has been entered and verified, refusing is the correct
---  behaviour, so the mode is pinned before the data disappears.
+--  production posting against an item with no FIFO cover is allowed and
+--  drives the balance negative. Under STRICT_MODE it is refused. Until
+--  real opening inventory has been entered and verified, refusing is the
+--  correct behaviour, so the mode is pinned before the data disappears.
 --
 --  Production was switched to WARNING_MODE by a deliberate operator
 --  action on 2026-08-17 00:51:46Z (POST /api/daily-production/settings/
@@ -21,22 +27,23 @@
 --  Exactly one column on exactly one row:
 --      TenantSetting."productionPostingMode" := 'STRICT_MODE'
 --
---  Guard 3 proves no other column of that row changed — it compares the
+--  Guard 3 proves no other column of that row changed - it compares the
 --  whole row as JSON, minus that one key, before and after. "updatedAt"
 --  is deliberately NOT touched, so it is covered by that comparison too.
 --
---  IDEMPOTENT — guarded by <> 'STRICT_MODE'; a second run writes 0 rows.
---  REVERSIBLE — POST /api/daily-production/settings/posting-mode, or
+--  IDEMPOTENT - guarded by <> 'STRICT_MODE'; a second run writes 0 rows.
+--  REVERSIBLE - POST /api/daily-production/settings/posting-mode, or
 --               the same UPDATE with 'WARNING_MODE'.
 --
 --  HOW TO RUN
---    Render Dashboard → enjoymilk-api → Shell:
---      npx prisma db execute --url "$DATABASE_URL" --file <this file>
+--    Render Dashboard -> enjoymilk-api -> Shell:
+--      node /app/node_modules/prisma/build/index.js db execute \
+--           --url "$DATABASE_URL" --file <this file>
 -- =====================================================================
 
 BEGIN;
 
--- ── Guard 1: exactly one tenant, and it is the expected one ─────────
+-- -- Guard 1: exactly one tenant, and it is the expected one ----------
 DO $$
 DECLARE n INT; tid TEXT;
 BEGIN
@@ -50,7 +57,7 @@ BEGIN
   END IF;
 END $$;
 
--- ── Guard 2: exactly one TenantSetting row for the target tenant ────
+-- -- Guard 2: exactly one TenantSetting row for the target tenant -----
 DO $$
 DECLARE n INT;
 BEGIN
@@ -60,7 +67,7 @@ BEGIN
   END IF;
 END $$;
 
--- ── The write, plus proof that nothing else on the row moved ────────
+-- -- The write, plus proof that nothing else on the row moved ---------
 DO $$
 DECLARE before_row JSONB; after_row JSONB; mode TEXT;
 BEGIN
