@@ -87,10 +87,21 @@ WHERE n.nspname='public' AND c.contype='c'
                     'SaleCostAllocation_quantity_positive','DailyProduction_status_valid',
                     'TenantSetting_posting_mode_valid','Tenant_slug_not_blank');
 
-\echo '=== 7. MIGRATION HISTORY intact — 8 applied, 0 rolled back ==='
+\echo '=== 7. MIGRATION HISTORY intact — 11 applied, 0 rolled back ==='
 SELECT COUNT(*) FILTER (WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL)::text AS applied,
        COUNT(*) FILTER (WHERE rolled_back_at IS NOT NULL)::text AS rolled_back
 FROM "_prisma_migrations";
 
 \echo '=== 8. POSTING CONFIG — production can operate ==='
 SELECT "productionPostingMode", "costingMethod", "baseCurrency" FROM "TenantSetting";
+
+\echo '=== 9. AMBIGUOUS ROWS deliberately KEPT — both MUST still be present ==='
+-- Created on seed day but typed by a person, not part of the seed dataset.
+-- A date-based rule would have deleted them; the identifier-based rule keeps
+-- them. This check exists so their survival is proven, not assumed.
+SELECT 'Item'     AS tbl, sku  AS identifier, name, active::text FROM "Item"
+ WHERE "tenantId" = 'cmpejojr80000uef0dx69ve2q' AND sku = 'rts'
+UNION ALL
+SELECT 'Customer', code, name, active::text FROM "Customer"
+ WHERE "tenantId" = 'cmpejojr80000uef0dx69ve2q' AND code = 'C-MPEL2IMH';
+-- Expect exactly 2 rows: item 'rts' (name enjoy) and customer 'C-MPEL2IMH' (name احمد).
