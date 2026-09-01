@@ -8,6 +8,7 @@ import { AppShell } from '@/components/app-shell';
 import { Card, CardHeader, CardTitle, CardContent, Button, Badge } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
+import { extractApiMessage } from '@/lib/api-errors';
 
 /**
  * Inventory Costing Method — الأسلوب الحسابي للمخزون
@@ -42,7 +43,7 @@ export default function CostingSettingsPage() {
       toast.success('تم حفظ الإعدادات');
       qc.invalidateQueries({ queryKey: ['fifo', 'settings'] });
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الحفظ'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر الحفظ'),
   });
 
   const AVAILABLE = [

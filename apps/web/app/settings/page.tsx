@@ -6,6 +6,7 @@ import { AppShell } from '@/components/app-shell';
 import { Card, Button, Input } from '@/components/ui';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
+import { extractApiMessage } from '@/lib/api-errors';
 
 const ROLE_LABELS: Record<string, string> = {
   OWNER: 'المالك',
@@ -46,7 +47,7 @@ export default function SettingsPage() {
     } catch (err: any) {
       setMsg({
         type: 'err',
-        text: err?.response?.data?.message || 'تعذّر تغيير كلمة المرور',
+        text: extractApiMessage(err) || 'تعذّر تغيير كلمة المرور',
       });
     } finally {
       setSaving(false);

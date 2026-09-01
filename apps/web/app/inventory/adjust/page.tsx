@@ -8,6 +8,7 @@ import { AppShell } from '@/components/app-shell';
 import { Card, CardHeader, CardTitle, CardContent, Button, Input } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
+import { extractApiMessage } from '@/lib/api-errors';
 
 const ADJUST_TYPES = [
   { value: 'ADD', label: 'إضافة كمية', color: 'emerald' },
@@ -44,7 +45,7 @@ export default function AdjustStockPage() {
       toast.success(`تم التعديل — الرصيد الحالي: ${res.after}`);
       setForm({ itemId: '', type: 'ADD', quantity: '', reason: '', notes: '', imageUrl: '' });
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر التعديل'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر التعديل'),
   });
 
   const handle = (e: React.FormEvent) => {

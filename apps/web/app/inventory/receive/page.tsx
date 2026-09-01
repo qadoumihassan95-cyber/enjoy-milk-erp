@@ -8,6 +8,7 @@ import { AppShell } from '@/components/app-shell';
 import { Card, CardHeader, CardTitle, CardContent, Button, Input, Badge } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
+import { extractApiMessage } from '@/lib/api-errors';
 
 /* ─────────────────────────────────────────────
    الوحدات المدعومة في نافذة "إضافة مادة"
@@ -98,7 +99,7 @@ export default function ReceiveStockPage() {
       setNewSupplier({ show: false, name: '', phone: '', code: '' });
       qc.invalidateQueries({ queryKey: ['suppliers'] });
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر إضافة المورد'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر إضافة المورد'),
   });
 
   const submit = useMutation({
@@ -114,7 +115,7 @@ export default function ReceiveStockPage() {
       qc.invalidateQueries({ queryKey: ['inv-items'] });
       qc.invalidateQueries({ queryKey: ['items-all'] });
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الاستلام'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر الاستلام'),
   });
 
   const handle = (e: React.FormEvent) => {
@@ -418,7 +419,7 @@ function AddItemModal({
       const created = await api.post('/inventory/items', body).then((r) => r.data);
       onCreated(created);
     } catch (e: any) {
-      toast.error(e?.response?.data?.message || 'تعذّر حفظ المادة');
+      toast.error(extractApiMessage(e) || 'تعذّر حفظ المادة');
     } finally {
       setSaving(false);
     }

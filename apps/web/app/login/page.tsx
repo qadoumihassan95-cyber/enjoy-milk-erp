@@ -6,6 +6,7 @@ import { Lock, Mail, AlertCircle } from 'lucide-react';
 import { Button, Input, Card } from '@/components/ui';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
+import { extractApiMessage } from '@/lib/api-errors';
 
 export default function LoginPage() {
   // useSearchParams must be inside Suspense per Next 14 App Router.
@@ -51,8 +52,7 @@ function LoginInner() {
         setError('بيانات الدخول غير صحيحة');
       } else {
         const message =
-          err?.response?.data?.message?.message ||
-          err?.response?.data?.message ||
+          extractApiMessage(err) ||
           err?.message ||
           'فشل تسجيل الدخول';
         setError(typeof message === 'string' ? message : JSON.stringify(message));

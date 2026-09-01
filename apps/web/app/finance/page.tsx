@@ -23,6 +23,7 @@ import { AppShell } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle, Stat, Badge } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatNumber, formatCurrency, formatDate } from '@/lib/utils';
+import { extractApiMessage } from '@/lib/api-errors';
 
 export default function FinancePage() {
   const qc = useQueryClient();
@@ -58,7 +59,7 @@ export default function FinancePage() {
       invalidateFinance();
       setExpForm({ amount: '', category: EXPENSE_CATEGORIES[0], description: '', cashboxId: '' });
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّرت إضافة المصروف'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّرت إضافة المصروف'),
   });
 
   const submitExpense = (e: React.FormEvent) => {
@@ -81,7 +82,7 @@ export default function FinancePage() {
       invalidateFinance();
       setTransferForm({ fromCashboxId: '', toCashboxId: '', amount: '', description: '' });
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر التحويل'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر التحويل'),
   });
 
   const submitTransfer = (e: React.FormEvent) => {
@@ -101,7 +102,7 @@ export default function FinancePage() {
       invalidateFinance();
       setMoveForm({ cashboxId: '', type: 'IN', amount: '', description: '' });
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّرت الحركة النقدية'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّرت الحركة النقدية'),
   });
 
   const submitMovement = (e: React.FormEvent) => {

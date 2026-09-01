@@ -9,6 +9,7 @@ import { Card, CardHeader, CardTitle, CardContent, Button, Input, Badge, Stat } 
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatNumber, formatDate } from '@/lib/utils';
+import { extractApiMessage } from '@/lib/api-errors';
 
 const TYPE_LABEL: Record<string, string> = {
   POWDER_BULK: 'بودرة بالجملة',
@@ -62,7 +63,7 @@ export default function ItemDetailPage() {
       qc.invalidateQueries({ queryKey: ['item-analytics', id] });
       qc.invalidateQueries({ queryKey: ['inv-dashboard'] });
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الحفظ'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر الحفظ'),
   });
 
   if (!analytics) {

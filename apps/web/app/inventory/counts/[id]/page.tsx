@@ -9,6 +9,7 @@ import { Card, CardHeader, CardTitle, CardContent, Button, Badge, Stat } from '@
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatNumber, formatDate, cn } from '@/lib/utils';
+import { extractApiMessage } from '@/lib/api-errors';
 
 const STATUS_LABEL: Record<string, { label: string; variant: 'default' | 'warning' | 'success' | 'danger' }> = {
   DRAFT:       { label: 'مسودة', variant: 'default' },
@@ -36,7 +37,7 @@ export default function CountDetailPage() {
     mutationFn: ({ lineId, actualQty, notes }: any) =>
       api.patch(`/inventory/counts/lines/${lineId}`, { actualQty, notes }).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['inv-count', id] }),
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر التحديث'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر التحديث'),
   });
 
   const close = useMutation({
@@ -46,7 +47,7 @@ export default function CountDetailPage() {
       qc.invalidateQueries({ queryKey: ['inv-count', id] });
       qc.invalidateQueries({ queryKey: ['inv-dashboard'] });
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الاعتماد'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر الاعتماد'),
   });
 
   const cancel = useMutation({
@@ -55,7 +56,7 @@ export default function CountDetailPage() {
       toast.success('تم الإلغاء');
       qc.invalidateQueries({ queryKey: ['inv-count', id] });
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الإلغاء'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر الإلغاء'),
   });
 
   const filteredLines = useMemo(() => {

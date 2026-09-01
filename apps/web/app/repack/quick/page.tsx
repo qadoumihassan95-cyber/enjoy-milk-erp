@@ -8,6 +8,7 @@ import { AppShell } from '@/components/app-shell';
 import { Button, Card, CardContent, Badge } from '@/components/ui';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { extractApiMessage } from '@/lib/api-errors';
 
 type Field = 'output' | 'waste' | 'downtime';
 
@@ -44,7 +45,7 @@ export default function QuickEntryPage() {
       }, 1500);
     },
     onError: (err: any) => {
-      setError(err?.response?.data?.message || 'فشل التسجيل');
+      setError(extractApiMessage(err) || 'فشل التسجيل');
     },
   });
 

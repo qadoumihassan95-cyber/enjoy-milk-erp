@@ -239,7 +239,7 @@ export function classifyError(
     kind: 'unknown',
     retriable: false,
     retryAfterMs: 0,
-    message: err?.response?.data?.message || MSGS.unknown,
+    message: extractApiMessage(err) || MSGS.unknown,
     status,
     url,
     isAuthEndpoint,
@@ -273,4 +273,35 @@ export function logApiError(
   try {
     (window as any).__apiErrorBus?.emit?.(entry);
   } catch { /* no-op */ }
+}
+
+
+/**
+ * Pull a human-readable string out of an axios error, whatever shape the API
+ * used. ALWAYS returns a string (possibly empty) — never an object, never an
+ * array, so the result is always safe to render.
+ *
+ * The API's exception filter now normalises `message` to a string, but this
+ * stays defensive: older deployed clients, proxies and third-party errors can
+ * still produce the nested shape that caused the crash.
+ */
+export function extractApiMessage(err: any): string {
+  const data = err?.response?.data;
+  const seen = new Set<unknown>();
+  const walk = (v: unknown, depth: number): string => {
+    if (depth > 4 || v === null || v === undefined) return '';
+    if (typeof v === 'string') return v.trim();
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+    if (Array.isArray(v)) {
+      return v.map((x) => walk(x, depth + 1)).filter(Boolean).join('، ');
+    }
+    if (typeof v === 'object') {
+      if (seen.has(v)) return '';
+      seen.add(v);
+      const o = v as Record<string, unknown>;
+      return walk(o.message, depth + 1) || walk(o.error, depth + 1);
+    }
+    return '';
+  };
+  return walk(data?.message, 0) || walk(data?.error, 0) || '';
 }

@@ -22,6 +22,7 @@ import { Card, CardHeader, CardTitle, CardContent, Button, Input, Stat, Badge } 
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { extractApiMessage } from '@/lib/api-errors';
 
 const ROLES = [
   { value: 'ADMIN', label: 'مدير عام (كل الصلاحيات)' },
@@ -90,7 +91,7 @@ export default function TelegramPage() {
       refresh();
       refreshLogs();
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'فشلت العملية'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'فشلت العملية'),
   });
 
   const del = useMutation({
@@ -100,7 +101,7 @@ export default function TelegramPage() {
       refresh();
       refreshLogs();
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الحذف'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر الحذف'),
   });
 
   const filtered = useMemo(() => {
@@ -300,7 +301,7 @@ function AccountForm({ account, onClose, onSaved }: { account: any; onClose: () 
       }
       onSaved();
     } catch (err: any) {
-      toast.error(err?.response?.data?.message || 'تعذّر الحفظ');
+      toast.error(extractApiMessage(err) || 'تعذّر الحفظ');
     } finally {
       setSaving(false);
     }

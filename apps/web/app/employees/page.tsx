@@ -8,6 +8,7 @@ import { Card, CardHeader, CardTitle, CardContent, Button, Input, Stat } from '@
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatNumber } from '@/lib/utils';
+import { extractApiMessage } from '@/lib/api-errors';
 
 export default function EmployeesPage() {
   const qc = useQueryClient();
@@ -39,7 +40,7 @@ export default function EmployeesPage() {
       toast.success('تم تسجيل الحضور');
       invalidate();
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر تسجيل الحضور'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر تسجيل الحضور'),
   });
 
   // غياب / تأخير
@@ -50,7 +51,7 @@ export default function EmployeesPage() {
       toast.success(vars.status === 'ABSENT' ? 'تم تسجيل الغياب' : 'تم تسجيل التأخير');
       invalidate();
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر تسجيل الحالة'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر تسجيل الحالة'),
   });
 
   return (
@@ -266,7 +267,7 @@ function NewEmployeeForm({ onClose, onSaved }: { onClose: () => void; onSaved: (
       onSaved();
       onClose();
     } catch (err: any) {
-      toast.error(err?.response?.data?.message || 'فشل حفظ الموظف');
+      toast.error(extractApiMessage(err) || 'فشل حفظ الموظف');
     } finally {
       setSaving(false);
     }
@@ -371,7 +372,7 @@ function EditEmployeeForm({
       });
       onSaved();
     } catch (err: any) {
-      const msg = err?.response?.data?.message || 'فشل حفظ التعديلات — حاول مرة أخرى';
+      const msg = extractApiMessage(err) || 'فشل حفظ التعديلات — حاول مرة أخرى';
       setError(msg);
       onError?.(msg);
     } finally {
@@ -479,7 +480,7 @@ function OvertimeModal({
       setNotes('');
       refresh();
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر حفظ الساعات'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر حفظ الساعات'),
   });
 
   const update = useMutation({
@@ -489,7 +490,7 @@ function OvertimeModal({
       toast.success('تم تعديل الساعات');
       refresh();
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر التعديل'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر التعديل'),
   });
 
   const remove = useMutation({
@@ -498,7 +499,7 @@ function OvertimeModal({
       toast.success('تم حذف العمل الإضافي');
       refresh();
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الحذف'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر الحذف'),
   });
 
   const submit = (e: React.FormEvent) => {
@@ -703,7 +704,7 @@ function ExtraPaymentModal({
       });
       onSaved();
     } catch (err: any) {
-      toast.error(err?.response?.data?.message || 'تعذّر الحفظ');
+      toast.error(extractApiMessage(err) || 'تعذّر الحفظ');
     } finally {
       setSaving(false);
     }

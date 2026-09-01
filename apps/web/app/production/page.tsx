@@ -17,6 +17,7 @@ import { AppShell } from '@/components/app-shell';
 import { Card, Button, Input, Badge } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatDate, cn } from '@/lib/utils';
+import { extractApiMessage } from '@/lib/api-errors';
 
 /**
  * جدول أيام الإنتاج — احترافي وقابل للنقر.
@@ -466,7 +467,7 @@ function NewProductionDayForm({
       onCreated(res.data.id);
       onClose();
     } catch (e: any) {
-      setErr(e?.response?.data?.message || 'فشل الإنشاء');
+      setErr(extractApiMessage(e) || 'فشل الإنشاء');
     } finally {
       setSaving(false);
     }

@@ -25,6 +25,7 @@ import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { splitItemsBySection } from '@/lib/production-sections';
 import { formatDate, cn } from '@/lib/utils';
+import { extractApiMessage } from '@/lib/api-errors';
 
 type Row = Record<string, any>;
 
@@ -179,7 +180,7 @@ export default function ProductionDetailPage() {
       });
     } catch (e: any) {
       setSaving(false);
-      toast.error(e?.response?.data?.message || 'تعذّر الحفظ — تحقق من الاتصال');
+      toast.error(extractApiMessage(e) || 'تعذّر الحفظ — تحقق من الاتصال');
       return;
     }
     await safeRefetch();
@@ -220,7 +221,7 @@ export default function ProductionDetailPage() {
       // STRICT_MODE، أو صلاحيات غير كافية في OVERRIDE_MODE، أو أي خطأ آخر:
       // رسالة واضحة بدل صفحة الخطأ العامة.
       setShortages(null);
-      toast.error(e?.response?.data?.message || 'تعذّر الترحيل');
+      toast.error(extractApiMessage(e) || 'تعذّر الترحيل');
     } finally {
       setPosting(false);
     }
@@ -236,7 +237,7 @@ export default function ProductionDetailPage() {
     try {
       await api.post(`/daily-production/${id}/cancel`);
     } catch (e: any) {
-      toast.error(e?.response?.data?.message || 'تعذّر الإلغاء');
+      toast.error(extractApiMessage(e) || 'تعذّر الإلغاء');
       return;
     }
     await safeRefetch();

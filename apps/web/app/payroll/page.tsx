@@ -12,6 +12,7 @@ import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { FACTORY_NAME } from '@/lib/branding';
 import { computePayrollRow, computePayrollTotals } from '@/lib/payroll-calc';
+import { extractApiMessage } from '@/lib/api-errors';
 
 /**
  * الصفحة الرئيسية للرواتب (Payroll) — واجهة محاسبية تفاعلية.
@@ -89,7 +90,7 @@ export default function PayrollPage() {
       setDirty((d) => { const c = { ...d }; delete c[row.employeeId]; return c; });
       refetch();
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الحفظ'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر الحفظ'),
   });
 
   const saveAll = useMutation({
@@ -121,7 +122,7 @@ export default function PayrollPage() {
       setDirty({});
       refetch();
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الحفظ'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر الحفظ'),
   });
 
   const dirtyCount = Object.keys(dirty).length;

@@ -6,6 +6,7 @@ import { ArrowRight } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { Button, Card, CardContent, CardHeader, CardTitle, Input } from '@/components/ui';
 import { api } from '@/lib/api';
+import { extractApiMessage } from '@/lib/api-errors';
 
 export default function NewItemPage() {
   const router = useRouter();
@@ -47,7 +48,7 @@ export default function NewItemPage() {
       });
       router.push('/inventory');
     } catch (err: any) {
-      setError(err?.response?.data?.message || 'فشل الحفظ');
+      setError(extractApiMessage(err) || 'فشل الحفظ');
     } finally {
       setLoading(false);
     }

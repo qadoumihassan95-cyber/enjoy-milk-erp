@@ -8,6 +8,7 @@ import { AppShell } from '@/components/app-shell';
 import { Card, CardHeader, CardTitle, CardContent, Button, Badge } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
+import { extractApiMessage } from '@/lib/api-errors';
 
 const SAMPLE = `sku,name,type,unit,barcode,costPrice,sellPrice,minStock,reorderPoint
 SKU-001,حليب كامل الدسم 400 جم,POWDER_RETAIL,PCS,6291000000001,2.50,4.00,100,150
@@ -58,7 +59,7 @@ export default function ImportPage() {
   const preview = useMutation({
     mutationFn: (r: any[]) => api.post('/inventory/items/import', { rows: r, dryRun: true }).then((r) => r.data),
     onSuccess: (res) => { setDryRun(res); toast.success('تم التحقق — راجع النتائج قبل التنفيذ'); },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّرت المعاينة'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّرت المعاينة'),
   });
 
   const commit = useMutation({
@@ -69,7 +70,7 @@ export default function ImportPage() {
       qc.invalidateQueries({ queryKey: ['inv-dashboard'] });
       setText(''); setDryRun(null);
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الاستيراد'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر الاستيراد'),
   });
 
   const handleFile = (f: File) => {

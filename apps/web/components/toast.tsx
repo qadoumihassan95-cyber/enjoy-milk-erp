@@ -34,6 +34,27 @@ export function useToast(): ToastCtx {
   return ctx;
 }
 
+/**
+ * Coerce anything into safe display text. Arrays join, objects fall back to
+ * their own `.message` when present, everything else degrades to a generic
+ * Arabic string rather than throwing inside React's render.
+ */
+function toDisplayText(v: unknown): string {
+  if (typeof v === 'string') return v;
+  if (v === null || v === undefined) return 'حدث خطأ';
+  if (Array.isArray(v)) {
+    const parts = v.map((x) => toDisplayText(x)).filter(Boolean);
+    return parts.length ? parts.join('، ') : 'حدث خطأ';
+  }
+  if (typeof v === 'object') {
+    const m = (v as Record<string, unknown>).message;
+    if (typeof m === 'string' && m.trim()) return m;
+    if (Array.isArray(m)) return toDisplayText(m);
+    return 'حدث خطأ';
+  }
+  return String(v);
+}
+
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
@@ -44,7 +65,13 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const toast = useCallback(
     (message: string, type: ToastType = 'info') => {
       const id = Date.now() + Math.random();
-      setToasts((t) => [...t, { id, type, message }]);
+      // Coerce defensively. `message` is TYPED as string, but it is fed from
+      // `err?.response?.data?.message` all over the app, and an API that
+      // returns an object or array there would otherwise reach React as a
+      // child and throw "Objects are not valid as a React child" — escaping
+      // the component and tripping the global error boundary. A toast must
+      // never be able to take the page down.
+      setToasts((t) => [...t, { id, type, message: toDisplayText(message) }]);
       setTimeout(() => remove(id), 4000);
     },
     [remove],

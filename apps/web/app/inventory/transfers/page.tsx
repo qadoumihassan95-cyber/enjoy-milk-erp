@@ -9,6 +9,7 @@ import { Card, CardHeader, CardTitle, CardContent, Button, Input, Badge, Stat } 
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatNumber, formatDate } from '@/lib/utils';
+import { extractApiMessage } from '@/lib/api-errors';
 
 const STATUS_LABEL: Record<string, { label: string; variant: 'default' | 'warning' | 'success' | 'danger' }> = {
   PENDING:   { label: 'بانتظار الاعتماد', variant: 'warning' },
@@ -42,7 +43,7 @@ export default function TransfersPage() {
       qc.invalidateQueries({ queryKey: ['inv-transfers'] });
       qc.invalidateQueries({ queryKey: ['inv-dashboard'] });
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّرت العملية'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّرت العملية'),
   });
 
   const stats = useMemo(() => {
@@ -182,7 +183,7 @@ function NewTransferForm({ onClose, onSaved }: { onClose: () => void; onSaved: (
   const submit = useMutation({
     mutationFn: (body: any) => api.post('/inventory/transfers', body).then((r) => r.data),
     onSuccess: () => { toast.success('تم إنشاء طلب التحويل'); onSaved(); },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الإنشاء'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر الإنشاء'),
   });
 
   const handle = (e: React.FormEvent) => {

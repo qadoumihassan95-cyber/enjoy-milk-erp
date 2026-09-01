@@ -9,6 +9,7 @@ import { Card, Button, Input, Badge, Stat } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDate, cn } from '@/lib/utils';
+import { extractApiMessage } from '@/lib/api-errors';
 
 const PAYMENT_METHODS = [
   { value: 'CASH', label: 'كاش' },
@@ -69,7 +70,7 @@ export default function OrdersPage() {
     try {
       await api.delete(`/orders/${orderId}`);
     } catch (e: any) {
-      toast.error(e?.response?.data?.message || 'تعذّر الحذف');
+      toast.error(extractApiMessage(e) || 'تعذّر الحذف');
       return;
     }
     await safeRefresh();
@@ -1015,7 +1016,7 @@ function EditOrderMetaModal({
       toast.success('تم تحديث بيانات الطلبية');
       onSaved();
     } catch (err: any) {
-      toast.error(err?.response?.data?.message || 'فشل الحفظ');
+      toast.error(extractApiMessage(err) || 'فشل الحفظ');
     } finally {
       setSaving(false);
     }
@@ -1115,7 +1116,7 @@ function PaymentsModal({
       setAllowOverpay(false);
       refreshAll();
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر تسجيل الدفعة'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر تسجيل الدفعة'),
   });
 
   const del = useMutation({
@@ -1125,7 +1126,7 @@ function PaymentsModal({
       toast.success('تم حذف الدفعة');
       refreshAll();
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الحذف'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر الحذف'),
   });
 
   const submit = (e: React.FormEvent) => {
@@ -1377,7 +1378,7 @@ function NewOrderForm({
       onSaved();
       onClose();
     } catch (e: any) {
-      setErr(e?.response?.data?.message || 'فشل الحفظ');
+      setErr(extractApiMessage(e) || 'فشل الحفظ');
     } finally {
       setSaving(false);
     }

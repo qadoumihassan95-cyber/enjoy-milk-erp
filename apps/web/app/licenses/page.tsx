@@ -8,6 +8,7 @@ import { Card, CardHeader, CardTitle, CardContent, Button, Input, Stat, Badge } 
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { extractApiMessage } from '@/lib/api-errors';
 
 /**
  * صفحة الرخص — الآن تدعم:
@@ -49,7 +50,7 @@ export default function LicensesPage() {
       toast.success('تم حذف الرخصة');
       invalidateAll();
     } catch (e: any) {
-      toast.error(e?.response?.data?.message || 'تعذّر الحذف');
+      toast.error(extractApiMessage(e) || 'تعذّر الحذف');
     }
   };
 
@@ -304,7 +305,7 @@ function LicenseForm({
       setDirty(false);
       onSaved();
     } catch (e: any) {
-      const msg = e?.response?.data?.message || 'تعذّر الحفظ';
+      const msg = extractApiMessage(e) || 'تعذّر الحفظ';
       setError(Array.isArray(msg) ? msg.join(' · ') : msg);
     } finally {
       setSaving(false);

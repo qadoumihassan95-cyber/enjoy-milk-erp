@@ -21,6 +21,7 @@ import { AppShell } from '@/components/app-shell';
 import { api } from '@/lib/api';
 import { useToast } from '@/components/toast';
 import { FACTORY_NAME, FACTORY_SUB } from '@/lib/branding';
+import { extractApiMessage } from '@/lib/api-errors';
 
 type PaymentMethod = 'cash' | 'check' | 'debit' | '';
 
@@ -205,7 +206,7 @@ export function InvoiceForm({
       }
       return { id: res.data.id };
     } catch (e: any) {
-      const msg = e?.response?.data?.message?.message || e?.response?.data?.message || 'تعذر حفظ الفاتورة';
+      const msg = extractApiMessage(e) || 'تعذر حفظ الفاتورة';
       toast.error(String(msg));
       return null;
     } finally {

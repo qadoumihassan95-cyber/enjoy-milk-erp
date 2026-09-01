@@ -10,6 +10,7 @@ import { Card, Button, Badge } from '@/components/ui';
 import { api } from '@/lib/api';
 import { useToast } from '@/components/toast';
 import { formatDate } from '@/lib/utils';
+import { extractApiMessage } from '@/lib/api-errors';
 
 export default function InvoicesListPage() {
   const router = useRouter();
@@ -39,7 +40,7 @@ export default function InvoicesListPage() {
       toast.success('تم الحذف');
       qc.invalidateQueries({ queryKey: ['invoices'] });
     } catch (e: any) {
-      const msg = e?.response?.data?.message?.message || e?.response?.data?.message || 'تعذر الحذف';
+      const msg = extractApiMessage(e) || 'تعذر الحذف';
       toast.error(String(msg));
     }
   };

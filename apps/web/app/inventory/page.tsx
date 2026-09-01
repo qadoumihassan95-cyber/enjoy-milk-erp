@@ -34,6 +34,8 @@ import { AppShell } from '@/components/app-shell';
 import { Card, CardHeader, CardTitle, CardContent, Button, Stat, Badge, TableSkeleton, Skeleton } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
+import { extractApiMessage } from '@/lib/api-errors';
+import { sanitizeNumericInput, toOptionalNumber, blurOnWheel, NUMERIC_INPUT_PROPS } from '@/lib/numeric';
 import { formatNumber, formatDate, cn } from '@/lib/utils';
 
 const SAVED_FILTERS_KEY = 'inv-saved-filters-v1';
@@ -137,7 +139,7 @@ export default function InventoryDashboardPage() {
       qc.invalidateQueries({ queryKey: ['inv-items-paginated'] });
       qc.invalidateQueries({ queryKey: ['inv-dashboard'] });
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّرت العملية'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّرت العملية'),
   });
 
   // Barcode scan
@@ -1361,31 +1363,29 @@ function NewItemModal({
           barcode: form.barcode.trim() || undefined,
           type: form.type,
           unit: form.unit,
-          costPrice: form.costPrice ? +form.costPrice : undefined,
-          minStock: form.minStock ? +form.minStock : undefined,
-          reorderLevel: form.reorderLevel ? +form.reorderLevel : undefined,
-          productionReorderLevel: form.productionReorderLevel ? +form.productionReorderLevel : undefined,
+          costPrice: toOptionalNumber(form.costPrice),
+          minStock: toOptionalNumber(form.minStock),
+          reorderLevel: toOptionalNumber(form.reorderLevel),
+          productionReorderLevel: toOptionalNumber(form.productionReorderLevel),
           notes: form.notes.trim() || undefined,
           active: form.active,
           // Per-item sack weight. Sent only when unit=BAG; blank field
           // means "no conversion configured" and the item transacts in
           // its declared unit. NO global "assume 25" fallback.
           bagWeightKg:
-            form.unit === 'BAG' && form.kgPerSack
-              ? +form.kgPerSack
-              : undefined,
+            form.unit === 'BAG' ? toOptionalNumber(form.kgPerSack) : undefined,
         })
         .then((r) => r.data);
 
       // إذا أدخل المستخدم كمية أولية، سجّل استلاماً على "المخزن الرئيسي" تلقائياً
-      const qty = parseFloat(form.initialQty);
+      const qty = toOptionalNumber(form.initialQty) ?? 0;
       if (qty > 0) {
         try {
           await api.post('/inventory/receive', {
             itemId: created.id,
             source: 'MANUAL',
             quantity: qty,
-            unitCost: form.costPrice ? +form.costPrice : undefined,
+            unitCost: toOptionalNumber(form.costPrice),
             notes: 'كمية ابتدائية عند إنشاء الصنف',
           });
         } catch {
@@ -1394,7 +1394,12 @@ function NewItemModal({
       }
       onCreated();
     } catch (err: any) {
-      const msg = err?.response?.data?.message || 'تعذّر إنشاء الصنف';
+      // extractApiMessage ALWAYS returns a string. Previously this read
+      // `extractApiMessage(err)` raw, and the API returned an object
+      // there ({ message, error, statusCode }); that object was handed to
+      // toast.error and rendered as a React child, which throws and trips
+      // the global error boundary. A rejected save must stay on the page.
+      const msg = extractApiMessage(err) || 'تعذّر إنشاء الصنف';
       if (/مكرر|موجود/.test(msg)) {
         setDuplicate({ message: msg });
       } else {
@@ -1509,13 +1514,14 @@ function NewItemModal({
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-zinc-700">وزن الشوال الواحد (كغ)</label>
                 <input
-                  type="number"
-                  step="0.001"
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                   min="0"
                   value={form.kgPerSack}
-                  onChange={(e) => setForm({ ...form, kgPerSack: e.target.value })}
-                  placeholder="مثال: 25"
+                  onChange={(e) => setForm({ ...form, kgPerSack: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} placeholder="مثال: 25"
                   className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+                onWheel={blurOnWheel}
                 />
                 <div className="text-[11px] text-zinc-500">
                   يُستخدم في التحويل بين الشوال والكيلوغرام أثناء الإنتاج.
@@ -1525,53 +1531,58 @@ function NewItemModal({
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-700">الكمية الابتدائية</label>
               <input
-                type="number"
-                step="0.001"
+                type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                 value={form.initialQty}
-                onChange={(e) => setForm({ ...form, initialQty: e.target.value })}
-                className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+                onChange={(e) => setForm({ ...form, initialQty: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
                 placeholder="اختياري — يُسجَّل استلام يدوي على المخزن الرئيسي"
-              />
+              onWheel={blurOnWheel}
+                />
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-700">سعر الشراء / التكلفة</label>
               <input
-                type="number"
-                step="0.01"
+                type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                 value={form.costPrice}
-                onChange={(e) => setForm({ ...form, costPrice: e.target.value })}
-                className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
-              />
+                onChange={(e) => setForm({ ...form, costPrice: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+              onWheel={blurOnWheel}
+                />
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-700">الحد الأدنى للمخزون</label>
               <input
-                type="number"
-                step="0.01"
+                type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                 value={form.minStock}
-                onChange={(e) => setForm({ ...form, minStock: e.target.value })}
-                className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
-              />
+                onChange={(e) => setForm({ ...form, minStock: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+              onWheel={blurOnWheel}
+                />
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-700">نقطة إعادة الطلب</label>
               <input
-                type="number"
-                step="0.01"
+                type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                 value={form.reorderLevel}
-                onChange={(e) => setForm({ ...form, reorderLevel: e.target.value })}
-                className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
-              />
+                onChange={(e) => setForm({ ...form, reorderLevel: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+              onWheel={blurOnWheel}
+                />
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-700">نقطة إعادة الإنتاج</label>
               <input
-                type="number"
-                step="0.01"
+                type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                 value={form.productionReorderLevel}
-                onChange={(e) => setForm({ ...form, productionReorderLevel: e.target.value })}
-                className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
-              />
+                onChange={(e) => setForm({ ...form, productionReorderLevel: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+              onWheel={blurOnWheel}
+                />
             </div>
             <div className="space-y-1.5 md:col-span-2">
               <label className="text-xs font-bold text-zinc-700">ملاحظات / وصف اختياري</label>
@@ -1684,7 +1695,7 @@ function EditItemModal({
       }
       onSaved();
     } catch (err: any) {
-      toast.error(err?.response?.data?.message || 'تعذّر التعديل');
+      toast.error(extractApiMessage(err) || 'تعذّر التعديل');
     } finally {
       setSaving(false);
     }
@@ -1736,13 +1747,14 @@ function EditItemModal({
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-zinc-700">وزن الشوال الواحد (كغ)</label>
                 <input
-                  type="number"
-                  step="0.001"
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                   min="0"
                   value={form.kgPerSack}
-                  onChange={(e) => setForm({ ...form, kgPerSack: e.target.value })}
-                  placeholder="مثال: 25"
+                  onChange={(e) => setForm({ ...form, kgPerSack: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} placeholder="مثال: 25"
                   className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+                onWheel={blurOnWheel}
                 />
                 <div className="text-[11px] text-zinc-500">
                   يُستخدم في التحويل بين الشوال والكيلوغرام أثناء الإنتاج.
@@ -1751,19 +1763,31 @@ function EditItemModal({
             )}
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-700">التكلفة</label>
-              <input type="number" step="0.01" value={form.costPrice} onChange={(e) => setForm({ ...form, costPrice: e.target.value })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" />
+              <input type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={form.costPrice} onChange={(e) => setForm({ ...form, costPrice: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" onWheel={blurOnWheel}
+                />
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-700">الحد الأدنى</label>
-              <input type="number" step="0.01" value={form.minStock} onChange={(e) => setForm({ ...form, minStock: e.target.value })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" />
+              <input type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={form.minStock} onChange={(e) => setForm({ ...form, minStock: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" onWheel={blurOnWheel}
+                />
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-700">نقطة إعادة الطلب</label>
-              <input type="number" step="0.01" value={form.reorderLevel} onChange={(e) => setForm({ ...form, reorderLevel: e.target.value })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" />
+              <input type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={form.reorderLevel} onChange={(e) => setForm({ ...form, reorderLevel: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" onWheel={blurOnWheel}
+                />
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-700">نقطة إعادة الإنتاج</label>
-              <input type="number" step="0.01" value={form.productionReorderLevel} onChange={(e) => setForm({ ...form, productionReorderLevel: e.target.value })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" />
+              <input type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={form.productionReorderLevel} onChange={(e) => setForm({ ...form, productionReorderLevel: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" onWheel={blurOnWheel}
+                />
             </div>
           </div>
 
@@ -1777,7 +1801,10 @@ function EditItemModal({
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-zinc-700">الكمية الجديدة</label>
-                <input type="number" step="0.001" value={form.newQty} onChange={(e) => setForm({ ...form, newQty: e.target.value })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" />
+                <input type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={form.newQty} onChange={(e) => setForm({ ...form, newQty: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" onWheel={blurOnWheel}
+                />
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-zinc-700">الفارق (Δ)</label>

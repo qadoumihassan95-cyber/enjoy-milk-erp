@@ -12,6 +12,7 @@ import { Card, CardHeader, CardTitle, CardContent, Button, Input, Badge } from '
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { extractApiMessage } from '@/lib/api-errors';
 
 const DOC_TYPES = [
   { value: 'WARNING',    label: 'تنبيه خطي',       Icon: ShieldAlert,   color: 'red' },
@@ -51,7 +52,7 @@ export default function EmployeeDocumentsPage() {
       toast.success('تم حذف الوثيقة');
       qc.invalidateQueries({ queryKey: ['employee-docs', id] });
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'تعذّر الحذف'),
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّر الحذف'),
   });
 
   const view = async (docId: string) => {
@@ -259,7 +260,7 @@ function UploadDocModal({
       await api.post(`/employees/${employeeId}/documents`, payload);
       onSaved();
     } catch (err: any) {
-      toast.error(err?.response?.data?.message || 'تعذّر الرفع');
+      toast.error(extractApiMessage(err) || 'تعذّر الرفع');
     } finally {
       setSaving(false);
     }
