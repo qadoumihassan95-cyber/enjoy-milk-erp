@@ -42,7 +42,16 @@ export interface ErrorEnvelope {
   errors?: string[];
   /** Short label, e.g. "Bad Request". */
   error?: string;
+  /**
+   * Any additional keys the thrown exception carried (e.g. a machine-readable
+   * `code` and a `conflict` descriptor). `message` stays a plain string for
+   * rendering; callers that want to branch read `details`.
+   */
+  details?: Record<string, unknown>;
 }
+
+/** Keys the envelope owns; everything else on the payload becomes `details`. */
+const RESERVED = new Set(['message', 'error', 'statusCode']);
 
 const FALLBACK = 'حدث خطأ في الخادم';
 
@@ -50,7 +59,7 @@ const FALLBACK = 'حدث خطأ في الخادم';
 export function normaliseExceptionResponse(
   raw: unknown,
   status: number,
-): { message: string; errors?: string[]; error?: string } {
+): { message: string; errors?: string[]; error?: string; details?: Record<string, unknown> } {
   // Plain string response — already correct.
   if (typeof raw === 'string' && raw.trim()) {
     return { message: raw };
@@ -60,6 +69,10 @@ export function normaliseExceptionResponse(
     const obj = raw as Record<string, unknown>;
     const inner = obj.message;
     const error = typeof obj.error === 'string' ? obj.error : undefined;
+    const extra = Object.keys(obj).filter((k) => !RESERVED.has(k));
+    const details = extra.length
+      ? Object.fromEntries(extra.map((k) => [k, obj[k]]))
+      : undefined;
 
     // ValidationPipe: message is a string[].
     if (Array.isArray(inner)) {
@@ -68,28 +81,29 @@ export function normaliseExceptionResponse(
         message: list.length ? list.join('، ') : FALLBACK,
         errors: list.length ? list : undefined,
         error,
+        details,
       };
     }
 
     if (typeof inner === 'string' && inner.trim()) {
-      return { message: inner, error };
+      return { message: inner, error, details };
     }
 
     // Nested one more level ({ message: { message: '…' } }) — be tolerant.
     if (inner && typeof inner === 'object') {
       const deep = (inner as Record<string, unknown>).message;
       if (typeof deep === 'string' && deep.trim()) {
-        return { message: deep, error };
+        return { message: deep, error, details };
       }
       if (Array.isArray(deep)) {
         const list = deep.map((m) => String(m)).filter(Boolean);
         if (list.length) {
-          return { message: list.join('، '), errors: list, error };
+          return { message: list.join('، '), errors: list, error, details };
         }
       }
     }
 
-    if (error) return { message: error, error };
+    if (error) return { message: error, error, details };
   }
 
   return {
@@ -116,7 +130,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         ? exception.getResponse()
         : FALLBACK;
 
-    const { message, errors, error } = normaliseExceptionResponse(raw, status);
+    const { message, errors, error, details } = normaliseExceptionResponse(raw, status);
 
     if (status >= 500) {
       this.logger.error(
@@ -133,6 +147,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     };
     if (errors) body.errors = errors;
     if (error) body.error = error;
+    if (details) body.details = details;
 
     response.status(status).json(body);
   }

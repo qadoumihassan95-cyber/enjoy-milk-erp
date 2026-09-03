@@ -25,6 +25,7 @@ import {
   PowerOff,
   Filter as FilterIcon,
   X,
+  RotateCcw,
 } from 'lucide-react';
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip,
@@ -89,6 +90,9 @@ export default function InventoryDashboardPage() {
   const [page, setPage] = useState(0);
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([]);
   const [showNewItem, setShowNewItem] = useState(false);
+  // 'active' | 'archived' — which shelf of the inventory is on screen.
+  // Archived items were previously unreachable from the UI entirely.
+  const [status, setStatus] = useState<'active' | 'archived'>('active');
   const [editingItem, setEditingItem] = useState<any>(null);
 
   // تحميل الفلاتر المحفوظة من localStorage
@@ -106,7 +110,7 @@ export default function InventoryDashboardPage() {
   };
 
   // reset selection when filters change
-  useEffect(() => { setSelectedIds(new Set()); setPage(0); }, [search, typeFilter]);
+  useEffect(() => { setSelectedIds(new Set()); setPage(0); }, [search, typeFilter, status]);
 
   const { data: dashboard, isLoading: dashLoading } = useQuery({
     queryKey: ['inv-dashboard'],
@@ -115,11 +119,12 @@ export default function InventoryDashboardPage() {
   });
 
   const { data: page_, isLoading: itemsLoading } = useQuery({
-    queryKey: ['inv-items-paginated', search, typeFilter, page],
+    queryKey: ['inv-items-paginated', search, typeFilter, page, status],
     queryFn: () => api.get('/inventory/items/paginated', {
       params: {
         search: search || undefined,
         type: typeFilter || undefined,
+        status,
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
       },
@@ -134,12 +139,30 @@ export default function InventoryDashboardPage() {
     mutationFn: ({ op, ids }: { op: string; ids: string[] }) =>
       api.post(`/inventory/items/${op}`, { ids }).then((r) => r.data),
     onSuccess: (res, vars) => {
-      toast.success(`تم ${vars.op === 'bulk-activate' ? 'تفعيل' : 'تعطيل'} ${res.updated} صنف`);
+      toast.success(
+        vars.op === 'bulk-activate'
+          ? `تمت استعادة ${res.updated} صنف`
+          : `تمت أرشفة ${res.updated} صنف — يمكن استعادته من «الأصناف المؤرشفة»`,
+      );
       setSelectedIds(new Set());
       qc.invalidateQueries({ queryKey: ['inv-items-paginated'] });
       qc.invalidateQueries({ queryKey: ['inv-dashboard'] });
     },
     onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّرت العملية'),
+  });
+
+  // Restore an archived item — same row, same ID, same history.
+  const restore = useMutation({
+    mutationFn: (id: string) =>
+      api.post(`/inventory/items/${id}/restore`).then((r) => r.data),
+    onSuccess: () => {
+      toast.success('تمت استعادة الصنف');
+      qc.invalidateQueries({ queryKey: ['inv-items-paginated'] });
+      qc.invalidateQueries({ queryKey: ['inv-dashboard'] });
+      qc.invalidateQueries({ queryKey: ['items-all'] });
+      qc.invalidateQueries({ queryKey: ['items-active'] });
+    },
+    onError: (e: any) => toast.error(extractApiMessage(e) || 'تعذّرت الاستعادة'),
   });
 
   // Barcode scan
@@ -226,6 +249,13 @@ export default function InventoryDashboardPage() {
             </Button>
           </div>
         </header>
+
+        <StatusTabs status={status} onStatus={setStatus} />
+        {status === 'archived' && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900">
+            الأصناف المؤرشفة محفوظة مع كامل تاريخها ورموزها (SKU) محجوزة. يمكن تعديل الاسم أو استعادة الصنف.
+          </div>
+        )}
 
         {/* Barcode scan bar (يعمل مع الماسحات USB — تسجيل Enter بعد المسح) */}
         <div className="rounded-xl bg-white border border-zinc-200 p-3 flex items-center gap-3">
@@ -510,10 +540,10 @@ export default function InventoryDashboardPage() {
                   </Button>
                   <Button size="sm" variant="outline" className="bg-transparent text-white border-white/30 hover:bg-white/10"
                     onClick={() => {
-                      if (!confirm(`تعطيل ${selectedIds.size} صنف؟`)) return;
+                      if (!confirm(`سيتم نقل ${selectedIds.size} صنف إلى الأصناف المؤرشفة ويمكن استعادته لاحقاً. متابعة؟`)) return;
                       bulk.mutate({ op: 'bulk-deactivate', ids: Array.from(selectedIds) });
                     }}>
-                    <PowerOff className="h-3 w-3" /> تعطيل
+                    <PowerOff className="h-3 w-3" /> أرشفة الصنف
                   </Button>
                   <Button size="sm" variant="ghost" className="text-white hover:bg-white/10"
                     onClick={() => setSelectedIds(new Set())}>
@@ -595,6 +625,16 @@ export default function InventoryDashboardPage() {
                             >
                               <Wrench className="h-3 w-3" /> تعديل
                             </button>
+                            {it.active === false && (
+                              <button
+                                onClick={() => restore.mutate(it.id)}
+                                disabled={restore.isPending}
+                                className="ms-1.5 text-xs px-2 py-1 rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-bold inline-flex items-center gap-1 disabled:opacity-50"
+                                title="إعادة الصنف إلى الأصناف النشطة"
+                              >
+                                <RotateCcw className="h-3 w-3" /> استعادة الصنف
+                              </button>
+                            )}
                           </td>
                         </tr>
                       );
@@ -628,6 +668,9 @@ export default function InventoryDashboardPage() {
       ═══════════════════════════════════════════════ */}
       <MobileInventory
         kpi={kpi}
+        status={status}
+        onStatus={setStatus}
+        onRestore={(id: string) => restore.mutate(id)}
         dashboard={dashboard}
         items={items}
         total={total}
@@ -646,7 +689,7 @@ export default function InventoryDashboardPage() {
         onSelected={setSelectedIds}
         onBulkActivate={() => bulk.mutate({ op: 'bulk-activate', ids: Array.from(selectedIds) })}
         onBulkDeactivate={() => {
-          if (!confirm(`تعطيل ${selectedIds.size} صنف؟`)) return;
+          if (!confirm(`سيتم نقل ${selectedIds.size} صنف إلى الأصناف المؤرشفة ويمكن استعادته لاحقاً. متابعة؟`)) return;
           bulk.mutate({ op: 'bulk-deactivate', ids: Array.from(selectedIds) });
         }}
         bulkPending={bulk.isPending}
@@ -667,6 +710,8 @@ export default function InventoryDashboardPage() {
       {/* ─── Modal: إضافة صنف جديد (منفصل عن "إضافة كمية للمخزون") ─── */}
       {showNewItem && (
         <NewItemModal
+          onShowArchived={() => setStatus('archived')}
+          onRestoreConflict={(id: string) => { setStatus('archived'); restore.mutate(id); }}
           onClose={() => setShowNewItem(false)}
           onCreated={() => {
             toast.success('تم إضافة الصنف بنجاح');
@@ -705,6 +750,7 @@ export default function InventoryDashboardPage() {
 ════════════════════════════════════════════════════════════════════ */
 function MobileInventory({
   kpi, dashboard, items, total, page, totalPages, hasMore, onPage,
+  status, onStatus, onRestore,
   search, onSearch, typeFilter, onTypeFilter,
   barcode, onBarcode, onScan,
   selectedIds, onSelected, onBulkActivate, onBulkDeactivate, bulkPending,
@@ -758,6 +804,8 @@ function MobileInventory({
             </button>
           </div>
         </div>
+
+        <StatusTabs status={status} onStatus={onStatus} className="mb-2" />
 
         {/* Scan bar — always visible for warehouse workflow */}
         <div className="flex items-center gap-2 bg-white border border-zinc-200 rounded-xl px-2.5 h-10 mb-2">
@@ -997,6 +1045,15 @@ function MobileInventory({
                       >
                         <Wrench className="h-3.5 w-3.5" /> تعديل
                       </button>
+                      {it.active === false && (
+                        <button
+                          type="button"
+                          onClick={() => onRestore?.(it.id)}
+                          className="flex-1 min-h-[34px] rounded-lg bg-emerald-50 text-emerald-800 text-[11px] font-bold flex items-center justify-center gap-1 active:bg-emerald-100"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" /> استعادة
+                        </button>
+                      )}
                       <Link
                         href={`/inventory/items/${it.id}`}
                         className="flex-1 min-h-[34px] rounded-lg bg-zinc-100 text-zinc-800 text-[11px] font-bold flex items-center justify-center gap-1 active:bg-zinc-200"
@@ -1059,7 +1116,7 @@ function MobileInventory({
               disabled={bulkPending}
               className="border border-white/30 text-white text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-1 disabled:opacity-60"
             >
-              <PowerOff className="h-3.5 w-3.5" /> تعطيل
+              <PowerOff className="h-3.5 w-3.5" /> أرشفة
             </button>
           </div>
         </div>
@@ -1304,6 +1361,41 @@ function SheetRow({
   );
 }
 
+/**
+ * Active / Archived shelf switch. Archived items previously had no route into
+ * the UI at all, so a reserved SKU could block a create with nothing on screen
+ * to explain it.
+ */
+function StatusTabs({
+  status, onStatus, activeCount, className = '',
+}: {
+  status: 'active' | 'archived';
+  onStatus: (s: 'active' | 'archived') => void;
+  activeCount?: number;
+  className?: string;
+}) {
+  const Tab = ({ id, label }: { id: 'active' | 'archived'; label: string }) => (
+    <button
+      type="button"
+      onClick={() => onStatus(id)}
+      aria-pressed={status === id}
+      className={`flex-1 md:flex-none px-3 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap ${
+        status === id
+          ? 'bg-zinc-900 text-white'
+          : 'bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50'
+      }`}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className={`flex items-center gap-1.5 ${className}`} role="group" aria-label="حالة الأصناف">
+      <Tab id="active" label="الأصناف النشطة" />
+      <Tab id="archived" label="الأصناف المؤرشفة" />
+    </div>
+  );
+}
+
 function FilterPill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
     <button
@@ -1325,9 +1417,13 @@ function FilterPill({ label, active, onClick }: { label: string; active: boolean
 function NewItemModal({
   onClose,
   onCreated,
+  onShowArchived,
+  onRestoreConflict,
 }: {
   onClose: () => void;
   onCreated: () => void;
+  onShowArchived?: () => void;
+  onRestoreConflict?: (id: string) => void;
 }) {
   const toast = useToast();
   const [form, setForm] = useState({
@@ -1400,7 +1496,13 @@ function NewItemModal({
       // toast.error and rendered as a React child, which throws and trips
       // the global error boundary. A rejected save must stay on the page.
       const msg = extractApiMessage(err) || 'تعذّر إنشاء الصنف';
-      if (/مكرر|موجود/.test(msg)) {
+      // The API now says WHICH field clashed, whether that item is archived,
+      // and identifies it — so an archived clash can offer a way out instead
+      // of a dead-end "SKU مكرر".
+      const details = err?.response?.data?.details;
+      if (details?.conflict) {
+        setDuplicate({ message: msg, ...details });
+      } else if (/مكرر|موجود/.test(msg)) {
         setDuplicate({ message: msg });
       } else {
         toast.error(msg);
@@ -1433,15 +1535,39 @@ function NewItemModal({
         <form onSubmit={submit} className="p-5 space-y-4">
           {duplicate && (
             <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-900">
-              <b>⚠️ صنف مكرر:</b> {duplicate.message}
-              <div className="mt-2 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => { setDuplicate(null); onClose(); }}
-                  className="text-xs px-2 py-1 rounded bg-amber-600 text-white"
-                >
-                  فتح المخزون
-                </button>
+              <b>⚠️ {duplicate.archived ? 'صنف مؤرشف' : 'صنف مكرر'}:</b> {duplicate.message}
+              {duplicate.conflict && (
+                <div className="mt-1 text-xs text-amber-800">
+                  «{duplicate.conflict.name}» — {duplicate.conflict.sku}
+                </div>
+              )}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {duplicate.conflict?.archived ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => { setDuplicate(null); onClose(); onShowArchived?.(); }}
+                      className="text-xs px-2 py-1 rounded bg-amber-600 text-white font-bold"
+                    >
+                      عرض الصنف المؤرشف
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { const id = duplicate.conflict.id; setDuplicate(null); onClose(); onRestoreConflict?.(id); }}
+                      className="text-xs px-2 py-1 rounded bg-emerald-600 text-white font-bold"
+                    >
+                      استعادة الصنف
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => { setDuplicate(null); onClose(); }}
+                    className="text-xs px-2 py-1 rounded bg-amber-600 text-white"
+                  >
+                    فتح المخزون
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setDuplicate(null)}
@@ -1663,7 +1789,9 @@ function EditItemModal({
         name: form.name.trim(),
         barcode: form.barcode.trim() || undefined,
         unit: form.unit,
-        active: form.active,
+        // `active` is deliberately NOT sent. Editing must never change the
+        // archive state — restoring is an explicit, separate action. The API
+        // strips it too, so this is belt and braces.
         costPrice: form.costPrice ? +form.costPrice : null,
         // 1 sack = X kg. Only relevant when unit=BAG (شوال). Sent as
         // null when empty so the BE clears the stored value.
@@ -1712,13 +1840,25 @@ function EditItemModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sticky top-0 bg-white flex items-center justify-between p-5 border-b border-zinc-100 z-10">
-          <h3 className="font-bold text-lg">تعديل الصنف: {item.name}</h3>
+          <h3 className="font-bold text-lg">
+            تعديل الصنف: {item.name}
+            {item.active === false && (
+              <span className="ms-2 align-middle text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                مؤرشف
+              </span>
+            )}
+          </h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-900">
             <X className="h-5 w-5" />
           </button>
         </div>
 
         <form onSubmit={submit} className="p-5 space-y-4">
+          {item.active === false && (
+            <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900">
+              هذا الصنف مؤرشف. الحفظ يُبقيه مؤرشفاً — لإعادته إلى الأصناف النشطة استخدم «استعادة الصنف».
+            </div>
+          )}
           <div className="grid md:grid-cols-2 gap-4">
             <div className="space-y-1.5 md:col-span-2">
               <label className="text-xs font-bold text-zinc-700">الاسم *</label>

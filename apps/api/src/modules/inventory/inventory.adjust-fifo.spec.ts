@@ -141,7 +141,7 @@ describe('adjustStock keeps StockLevel and FIFO batches synchronised', () => {
 
   beforeEach(() => {
     db = makeDb();
-    svc = new InventoryService(db.client as any);
+    svc = new InventoryService(db.client as any, { log: async () => undefined } as any);
   });
 
   const adjust = (type: string, quantity: number, extra: any = {}) =>

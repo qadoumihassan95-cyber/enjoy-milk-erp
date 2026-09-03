@@ -66,8 +66,9 @@ export class InventoryController {
     @CurrentUser() user: AuthenticatedUser,
     @Query('search') search?: string,
     @Query('type') type?: string,
+    @Query('status') status?: 'active' | 'archived' | 'all',
   ) {
-    return this.service.listItems(user.tenantId, { search, type });
+    return this.service.listItems(user.tenantId, { search, type, status });
   }
 
   /** قائمة مُصفَّحة مع pagination — تدعم limit/offset */
@@ -79,9 +80,10 @@ export class InventoryController {
     @Query('barcode') barcode?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
+    @Query('status') status?: 'active' | 'archived' | 'all',
   ) {
     return this.service.listItemsPaginated(user.tenantId, {
-      search, type, barcode,
+      search, type, barcode, status,
       limit: limit ? +limit : undefined,
       offset: offset ? +offset : undefined,
     });
@@ -148,13 +150,25 @@ export class InventoryController {
     @Param('id') id: string,
     @Body() body: any,
   ) {
-    return this.service.updateItem(user.tenantId, id, body);
+    return this.service.updateItem(user.tenantId, id, body, user.id);
   }
 
+  /**
+   * Archives the item (soft). Kept on DELETE for backward compatibility with
+   * existing clients; the UI now calls it "أرشفة الصنف" so nobody expects a
+   * permanent removal that never happened.
+   */
   @Roles('MANAGER')
   @Delete('items/:id')
   deleteItem(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
-    return this.service.deleteItem(user.tenantId, id);
+    return this.service.archiveItem(user.tenantId, id, user.id);
+  }
+
+  /** Restore an archived item — same row, same ID, same history. */
+  @Roles('MANAGER')
+  @Post('items/:id/restore')
+  restoreItem(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.service.restoreItem(user.tenantId, id, user.id);
   }
 
   // Warehouses

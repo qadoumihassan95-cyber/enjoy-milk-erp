@@ -110,7 +110,7 @@ function makeDb(seed: { items?: Row[]; levels?: Row[]; batches?: Row[]; counts?:
   };
   client.$transaction = async (fn: any) => fn(client);
 
-  return { state, client, service: new InventoryService(client) as any };
+  return { state, client, service: new InventoryService(client, { log: async () => undefined } as any) as any };
 }
 
 const batch = (id: string, remaining: number, day = '2026-01-01') => ({

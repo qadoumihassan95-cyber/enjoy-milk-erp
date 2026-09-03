@@ -12,6 +12,10 @@ export interface AuditEntry {
   method?: string;
   path?: string;
   status?: number | null;
+  /** Snapshot BEFORE the change (master-data fields only, never secrets). */
+  before?: unknown;
+  /** Snapshot AFTER the change. */
+  after?: unknown;
 }
 
 /**
@@ -40,6 +44,8 @@ export class AuditService {
           method: entry.method ?? null,
           path: entry.path ?? null,
           status: entry.status ?? null,
+          before: (entry.before ?? undefined) as any,
+          after: (entry.after ?? undefined) as any,
         },
       });
     } catch (err) {

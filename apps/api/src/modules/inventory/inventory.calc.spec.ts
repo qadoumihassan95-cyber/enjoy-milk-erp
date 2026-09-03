@@ -395,7 +395,7 @@ describe('InventoryService — item edit + set-quantity', () => {
     const item = seedItem(store, { name: 'Aluminum', unit: 'KG' });
     seedStockLevel(store, item.id, 'wh-main', 60);
 
-    const svc = new InventoryService(makePrismaMock(store));
+    const svc = new InventoryService(makePrismaMock(store), { log: async () => undefined } as any);
     await svc.updateItem(TENANT, item.id, { name: 'Aluminum Foil' });
 
     expect(item.name).toBe('Aluminum Foil');
@@ -410,7 +410,7 @@ describe('InventoryService — item edit + set-quantity', () => {
     const item = seedItem(store, { name: 'X', unit: 'KG' });
     seedStockLevel(store, item.id, 'wh-main', 10);
 
-    const svc = new InventoryService(makePrismaMock(store));
+    const svc = new InventoryService(makePrismaMock(store), { log: async () => undefined } as any);
     for (let i = 0; i < 5; i++) {
       await svc.updateItem(TENANT, item.id, { name: 'X', barcode: 'BAR' });
     }
@@ -425,7 +425,7 @@ describe('InventoryService — item edit + set-quantity', () => {
     const item = seedItem(store, { unit: 'KG' });
     seedStockLevel(store, item.id, 'wh-main', 50);
 
-    const svc = new InventoryService(makePrismaMock(store));
+    const svc = new InventoryService(makePrismaMock(store), { log: async () => undefined } as any);
     const res = await svc.adjustStock(TENANT, USER, {
       itemId: item.id, type: 'COUNT', quantity: 80, reason: 'جرد',
     });
@@ -443,7 +443,7 @@ describe('InventoryService — item edit + set-quantity', () => {
     const item = seedItem(store, { unit: 'KG' });
     seedStockLevel(store, item.id, 'wh-main', 80);
 
-    const svc = new InventoryService(makePrismaMock(store));
+    const svc = new InventoryService(makePrismaMock(store), { log: async () => undefined } as any);
     const res = await svc.adjustStock(TENANT, USER, {
       itemId: item.id, type: 'COUNT', quantity: 60, reason: 'جرد',
     });
@@ -461,7 +461,7 @@ describe('InventoryService — item edit + set-quantity', () => {
     seedStockLevel(store, item.id, 'wh-main', 50);
     seedStockLevel(store, item.id, 'wh-legacy', 20); // residual — real customer data
 
-    const svc = new InventoryService(makePrismaMock(store));
+    const svc = new InventoryService(makePrismaMock(store), { log: async () => undefined } as any);
     const res = await svc.adjustStock(TENANT, USER, {
       itemId: item.id, type: 'COUNT', quantity: 60, reason: 'جرد',
     });

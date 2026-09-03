@@ -6,11 +6,44 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import { AuditService } from '../../core/audit/audit.service';
 import { weightedAverageCost } from './costing';
+
+/**
+ * Archive state selector for item listings.
+ *   active   — active = true   (the default everywhere, unchanged behaviour)
+ *   archived — active = false  ("الأصناف المؤرشفة")
+ *   all      — no filter
+ */
+export type ItemStatus = 'active' | 'archived' | 'all';
+
+/** Translate a status selector into a Prisma `active` filter fragment. */
+export function activeFilter(status: ItemStatus = 'active') {
+  if (status === 'all') return {};
+  return { active: status === 'active' };
+}
+
+/** Master-data fields captured in AuditLog before/after snapshots. */
+const AUDITED_FIELDS = [
+  'name', 'nameEn', 'sku', 'barcode', 'type', 'unit', 'category',
+  'minStock', 'reorderLevel', 'costPrice', 'sellPrice', 'active', 'notes',
+] as const;
+
+export function auditSnapshot(item: any): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const f of AUDITED_FIELDS) {
+    const v = item?.[f];
+    out[f] = v === null || v === undefined ? null : typeof v === 'object' && typeof v.toString === 'function' ? v.toString() : v;
+  }
+  return out;
+}
 
 @Injectable()
 export class InventoryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   // ─── Items CRUD ──────────────────────────────────
   /**
@@ -19,13 +52,15 @@ export class InventoryService {
    */
   async listItemsPaginated(
     tenantId: string,
-    opts: { search?: string; type?: string; barcode?: string; limit?: number; offset?: number } = {},
+    opts: { search?: string; type?: string; barcode?: string; limit?: number; offset?: number; status?: ItemStatus } = {},
   ) {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
     const offset = Math.max(opts.offset ?? 0, 0);
     const where: any = {
       tenantId,
-      active: true,
+      // Default stays `active` so every existing caller is unchanged; the
+      // archived screen ("الأصناف المؤرشفة") passes status='archived'.
+      ...activeFilter(opts.status ?? 'active'),
       ...(opts.type && { type: opts.type as any }),
       ...(opts.barcode ? { barcode: opts.barcode } : {}),
       ...(opts.search && {
@@ -74,11 +109,11 @@ export class InventoryService {
     return { ...item, totalStock };
   }
 
-  async listItems(tenantId: string, opts: { search?: string; type?: string } = {}) {
+  async listItems(tenantId: string, opts: { search?: string; type?: string; status?: ItemStatus } = {}) {
     const items = await this.prisma.item.findMany({
       where: {
         tenantId,
-        active: true,
+        ...activeFilter(opts.status ?? 'active'),
         ...(opts.type && { type: opts.type as any }),
         ...(opts.search && {
           OR: [
@@ -142,9 +177,34 @@ export class InventoryService {
       },
     });
     if (dup) {
-      if (dup.name === trimmedName) throw new BadRequestException('يوجد مادة بنفس الاسم');
-      if (sku && dup.sku === sku) throw new BadRequestException('SKU مكرر');
-      if (barcode && dup.barcode === barcode) throw new BadRequestException('الباركود مكرر');
+      // A conflict used to surface as a bare "SKU مكرر", which was baffling
+      // when the clashing item was ARCHIVED — invisible in every list, so the
+      // user could not find, rename or restore it. The response now says
+      // which field clashed, whether that item is archived, and identifies it
+      // so the UI can offer "عرض الصنف المؤرشف" / "استعادة الصنف".
+      const archived = dup.active === false;
+      const conflict = {
+        id: dup.id,
+        sku: dup.sku,
+        name: dup.name,
+        active: dup.active,
+        archived,
+      };
+      const field =
+        dup.name === trimmedName ? 'name'
+        : sku && dup.sku === sku ? 'sku'
+        : 'barcode';
+      const label =
+        field === 'name' ? 'الاسم' : field === 'sku' ? 'الرمز (SKU)' : 'الباركود';
+      const message = archived
+        ? `هذا الصنف موجود في الأصناف المؤرشفة (تعارض في ${label}).`
+        : `يوجد صنف نشط بهذا ${label} بالفعل.`;
+      throw new BadRequestException({
+        message,
+        code: archived ? 'DUPLICATE_ARCHIVED' : 'DUPLICATE_ACTIVE',
+        field,
+        conflict,
+      });
     }
 
     return this.prisma.item.create({
@@ -193,8 +253,48 @@ export class InventoryService {
    * fields accept null/empty-string to explicitly clear, otherwise are
    * coerced through `Prisma.Decimal`.
    */
-  async updateItem(tenantId: string, id: string, data: any) {
-    await this.getItem(tenantId, id);
+  async updateItem(tenantId: string, id: string, data: any, actorUserId?: string) {
+    const before = await this.getItem(tenantId, id);
+    // Snapshot NOW, not after the write. Capturing lazily would depend on the
+    // ORM handing back a detached object; taking the values up front is
+    // correct regardless of identity semantics.
+    const beforeSnap = auditSnapshot(before);
+
+    // ARCHIVE STATE IS NOT EDITABLE HERE. Editing an archived item must keep
+    // it archived — restoring is a separate, explicit action
+    // (POST /inventory/items/:id/restore). Without this, opening an archived
+    // item and pressing Save would silently resurrect it.
+    if (data && 'active' in data) delete data.active;
+
+    // Name is required if supplied — renaming to blank would make the item
+    // unfindable. Renaming is always allowed, even with historical activity:
+    // history references the Item ID, not the display name.
+    if (data.name !== undefined && !String(data.name).trim()) {
+      throw new BadRequestException('اسم الصنف مطلوب');
+    }
+
+    // SKU may be edited, but uniqueness is enforced per tenant across BOTH
+    // active and archived items, so an edit can never create the duplicate
+    // the create path refuses.
+    const nextSku = data.sku !== undefined ? String(data.sku).trim() : undefined;
+    if (nextSku !== undefined) {
+      if (!nextSku) throw new BadRequestException('الرمز (SKU) مطلوب');
+      if (nextSku !== before.sku) {
+        const clash = await this.prisma.item.findFirst({
+          where: { tenantId, sku: nextSku, NOT: { id } },
+        });
+        if (clash) {
+          throw new BadRequestException({
+            message: clash.active === false
+              ? 'الرمز (SKU) مستخدم في صنف مؤرشف.'
+              : 'يوجد صنف نشط بهذا الرمز (SKU) بالفعل.',
+            code: clash.active === false ? 'DUPLICATE_ARCHIVED' : 'DUPLICATE_ACTIVE',
+            field: 'sku',
+            conflict: { id: clash.id, sku: clash.sku, name: clash.name, active: clash.active, archived: clash.active === false },
+          });
+        }
+      }
+    }
     const dec = (v: any) =>
       v === undefined ? undefined
       : v === null || v === '' ? null
@@ -208,14 +308,15 @@ export class InventoryService {
       : v === null || v === '' ? null
       : String(v).trim();
 
-    return this.prisma.item.update({
+    const updated = await this.prisma.item.update({
       where: { id },
       data: {
         name: data.name !== undefined ? String(data.name).trim() : undefined,
+        sku: nextSku,
         barcode: str(data.barcode),
         type: data.type ?? undefined,
         unit: data.unit ?? undefined,
-        active: data.active === undefined ? undefined : Boolean(data.active),
+        // `active` deliberately absent — see the guard above.
         netWeightGrams: int(data.netWeightGrams),
         packagingFormat: data.packagingFormat ?? undefined,
         packsPerCarton: int(data.packsPerCarton),
@@ -233,6 +334,18 @@ export class InventoryService {
         defaultSupplierId: data.defaultSupplierId ?? undefined,
       },
     });
+
+    await this.audit.log({
+      tenantId,
+      actorUserId,
+      action: 'ITEM_UPDATED',
+      resource: 'Item',
+      resourceId: id,
+      before: beforeSnap,
+      after: auditSnapshot(updated),
+    });
+
+    return updated;
   }
 
   /** تحديث إعدادات المخزون فقط (min/max/reorder/safety/leadTime) — قابل لاستدعاء منفصل */
@@ -258,13 +371,65 @@ export class InventoryService {
     });
   }
 
-  async deleteItem(tenantId: string, id: string) {
-    await this.getItem(tenantId, id);
-    await this.prisma.item.update({
+  /**
+   * ARCHIVE (not destroy). The item keeps its ID and every historical
+   * reference — StockMovement, PurchaseBatch/FIFO layers, production and
+   * sales rows all keep pointing at it. It leaves the active lists and
+   * appears under "الأصناف المؤرشفة", from where it can be renamed or
+   * restored. Its SKU stays reserved, which is why the create path now
+   * explains an archived clash instead of just saying "SKU مكرر".
+   */
+  async archiveItem(tenantId: string, id: string, actorUserId?: string) {
+    const before = await this.getItem(tenantId, id);
+    if (before.active === false) {
+      return { ok: true, alreadyArchived: true, item: before };
+    }
+    const beforeSnap = auditSnapshot(before);
+    const item = await this.prisma.item.update({
       where: { id },
       data: { active: false },
     });
-    return { ok: true };
+    await this.audit.log({
+      tenantId,
+      actorUserId,
+      action: 'ITEM_ARCHIVED',
+      resource: 'Item',
+      resourceId: id,
+      before: beforeSnap,
+      after: auditSnapshot(item),
+    });
+    return { ok: true, archived: true, item };
+  }
+
+  /** Back-compat alias — DELETE /inventory/items/:id has always archived. */
+  async deleteItem(tenantId: string, id: string, actorUserId?: string) {
+    return this.archiveItem(tenantId, id, actorUserId);
+  }
+
+  /**
+   * RESTORE — archived → active, same row, same ID. No new item is created,
+   * so every historical relationship survives untouched.
+   */
+  async restoreItem(tenantId: string, id: string, actorUserId?: string) {
+    const before = await this.getItem(tenantId, id);
+    if (before.active === true) {
+      return { ok: true, alreadyActive: true, item: before };
+    }
+    const beforeSnap = auditSnapshot(before);
+    const item = await this.prisma.item.update({
+      where: { id },
+      data: { active: true },
+    });
+    await this.audit.log({
+      tenantId,
+      actorUserId,
+      action: 'ITEM_RESTORED',
+      resource: 'Item',
+      resourceId: id,
+      before: beforeSnap,
+      after: auditSnapshot(item),
+    });
+    return { ok: true, restored: true, item };
   }
 
   // ─── Warehouses ──────────────────────────────────
