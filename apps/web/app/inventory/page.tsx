@@ -612,7 +612,11 @@ export default function InventoryDashboardPage() {
                           </td>
                           <td className="p-3 font-mono text-xs cursor-pointer" onClick={() => router.push(`/inventory/items/${it.id}`)}>{it.sku}</td>
                           <td className="p-3 font-medium cursor-pointer" onClick={() => router.push(`/inventory/items/${it.id}`)}>{it.name}</td>
-                          <td className="p-3 text-zinc-600 text-xs cursor-pointer" onClick={() => router.push(`/inventory/items/${it.id}`)}>{TYPE_LABEL[it.type] ?? it.type}</td>
+                          <td className="p-3 cursor-pointer" onClick={() => router.push(`/inventory/items/${it.id}`)}>
+                            <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-700 whitespace-nowrap">
+                              {TYPE_LABEL[it.type] ?? it.type}
+                            </span>
+                          </td>
                           <td className="p-3 font-bold cursor-pointer" data-numeric onClick={() => router.push(`/inventory/items/${it.id}`)}>{formatNumber(stock, 0)} {it.unit}</td>
                           <td className="p-3 text-zinc-600 cursor-pointer" data-numeric onClick={() => router.push(`/inventory/items/${it.id}`)}>{cost > 0 ? formatNumber(cost, 2) : '—'}</td>
                           <td className="p-3 font-bold text-emerald-700 cursor-pointer" data-numeric onClick={() => router.push(`/inventory/items/${it.id}`)}>{formatNumber(value, 0)}</td>
@@ -1789,6 +1793,8 @@ function EditItemModal({
         name: form.name.trim(),
         barcode: form.barcode.trim() || undefined,
         unit: form.unit,
+        // Classification — server validates it against the ItemType enum.
+        type: form.type,
         // `active` is deliberately NOT sent. Editing must never change the
         // archive state — restoring is an explicit, separate action. The API
         // strips it too, so this is belt and braces.
@@ -1871,6 +1877,22 @@ function EditItemModal({
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-700">الباركود</label>
               <input value={form.barcode} onChange={(e) => setForm({ ...form, barcode: e.target.value })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-zinc-700">نوع الصنف *</label>
+              <select
+                value={form.type}
+                onChange={(e) => setForm({ ...form, type: e.target.value })}
+                className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+              >
+                <option value="POWDER_BULK">بودرة بالجملة (مواد إنتاج)</option>
+                <option value="PACKAGING">مواد تغليف (مواد إنتاج)</option>
+                <option value="POWDER_RETAIL">منتج نهائي</option>
+                <option value="CONSUMABLE">مستهلكات</option>
+              </select>
+              <p className="text-[10px] text-zinc-500">
+                يحدّد أين يظهر الصنف في شاشات الإنتاج. لا يغيّر أي حركة أو كمية أو تكلفة سابقة.
+              </p>
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-700">الوحدة</label>

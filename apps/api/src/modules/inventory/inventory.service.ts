@@ -17,6 +17,43 @@ import { weightedAverageCost } from './costing';
  */
 export type ItemStatus = 'active' | 'archived' | 'all';
 
+/**
+ * The ERP's item classification. These are the four values of the Prisma
+ * `ItemType` enum and the ONLY accepted values — there is no second
+ * classification system.
+ *
+ *   POWDER_BULK   بودرة بالجملة   imported bulk powder — a production input
+ *   PACKAGING     مواد تغليف      cartons, rolls, tins — a production input
+ *   POWDER_RETAIL منتج نهائي      the finished packed product
+ *   CONSUMABLE    مستهلكات        consumables
+ *
+ * The customer speaks of three concepts (مستهلكات / مواد إنتاج / منتج نهائي);
+ * "مواد إنتاج" is represented by TWO enum values here (POWDER_BULK and
+ * PACKAGING) because production splits raw ingredients from packaging. Both
+ * are preserved — collapsing them would break the production selectors,
+ * which route POWDER_BULK to raw-milk and PACKAGING to carton/aluminium.
+ */
+export const ITEM_TYPES = ['POWDER_BULK', 'PACKAGING', 'POWDER_RETAIL', 'CONSUMABLE'] as const;
+export type ItemTypeValue = (typeof ITEM_TYPES)[number];
+
+/**
+ * Reject anything that is not one of the four enum values. Without this the
+ * raw string went straight to Prisma, which fails with an opaque 500 instead
+ * of a controlled 400.
+ */
+export function assertValidItemType(v: unknown): ItemTypeValue {
+  const s = String(v ?? '').trim().toUpperCase();
+  if (!(ITEM_TYPES as readonly string[]).includes(s)) {
+    throw new BadRequestException({
+      message: `نوع الصنف غير صالح. القيم المسموحة: ${ITEM_TYPES.join('، ')}`,
+      code: 'INVALID_ITEM_TYPE',
+      field: 'type',
+      allowed: ITEM_TYPES,
+    });
+  }
+  return s as ItemTypeValue;
+}
+
 /** Translate a status selector into a Prisma `active` filter fragment. */
 export function activeFilter(status: ItemStatus = 'active') {
   if (status === 'all') return {};
@@ -214,7 +251,9 @@ export class InventoryService {
         sku: sku ?? `ITM-${Date.now().toString(36).toUpperCase()}`,
         barcode,
         name: trimmedName,
-        type: data.type ?? 'CONSUMABLE',
+        type: data.type === undefined || data.type === null || data.type === ''
+          ? 'CONSUMABLE'
+          : assertValidItemType(data.type),
         unit: data.unit ?? 'PCS',
         netWeightGrams: data.netWeightGrams,
         packagingFormat: data.packagingFormat,
@@ -276,6 +315,15 @@ export class InventoryService {
     // SKU may be edited, but uniqueness is enforced per tenant across BOTH
     // active and archived items, so an edit can never create the duplicate
     // the create path refuses.
+    // Classification is editable master data. It is validated against the
+    // enum rather than passed through, and it never touches history: no
+    // historical table stores ItemType (verified across StockMovement,
+    // PurchaseBatch, every Production* table, allocations and formulas —
+    // they all reference the Item by ID), so a reclassification changes only
+    // the item's CURRENT and FUTURE behaviour.
+    const nextType =
+      data.type === undefined ? undefined : assertValidItemType(data.type);
+
     const nextSku = data.sku !== undefined ? String(data.sku).trim() : undefined;
     if (nextSku !== undefined) {
       if (!nextSku) throw new BadRequestException('الرمز (SKU) مطلوب');
@@ -314,7 +362,7 @@ export class InventoryService {
         name: data.name !== undefined ? String(data.name).trim() : undefined,
         sku: nextSku,
         barcode: str(data.barcode),
-        type: data.type ?? undefined,
+        type: nextType,
         unit: data.unit ?? undefined,
         // `active` deliberately absent — see the guard above.
         netWeightGrams: int(data.netWeightGrams),
