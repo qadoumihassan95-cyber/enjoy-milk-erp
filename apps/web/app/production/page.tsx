@@ -259,17 +259,22 @@ export default function DailyProductionListPage() {
                         </td>
                         <td className="p-3">
                           {r.status === 'POSTED' ? (
-                            <Badge variant="success" dot>
-                              مُرحَّل
-                            </Badge>
+                            <>
+                              <Badge variant="success" dot>مُرحَّل</Badge>
+                              <div className="text-[10px] text-emerald-700 mt-0.5">تم تحديث المخزون</div>
+                            </>
                           ) : r.status === 'CANCELLED' ? (
-                            <Badge variant="danger" dot>
-                              ملغي
-                            </Badge>
+                            <>
+                              <Badge variant="danger" dot>ملغي</Badge>
+                              <div className="text-[10px] text-zinc-500 mt-0.5">أُرجعت الكميات</div>
+                            </>
                           ) : (
-                            <Badge variant="warning" dot>
-                              مسودة
-                            </Badge>
+                            <>
+                              <Badge variant="warning" dot>مسودة</Badge>
+                              {/* the distinction the customer needed: a saved
+                                  sheet has NOT touched inventory. */}
+                              <div className="text-[10px] text-amber-700 mt-0.5">لم يتم ترحيله للمخزون</div>
+                            </>
                           )}
                         </td>
                         <td className="p-3" onClick={(e) => e.stopPropagation()}>
@@ -385,9 +390,16 @@ export default function DailyProductionListPage() {
                         <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-700">#{dayNo}</span>
                         <span className="text-sm font-bold text-zinc-900">{formatDate(r.productionDate)}</span>
                       </div>
-                      {r.status === 'POSTED' ? <Badge variant="success" dot>مُرحَّل</Badge>
-                        : r.status === 'CANCELLED' ? <Badge variant="danger" dot>ملغي</Badge>
-                        : <Badge variant="warning" dot>مسودة</Badge>}
+                      <div className="text-left">
+                        {r.status === 'POSTED' ? <Badge variant="success" dot>مُرحَّل</Badge>
+                          : r.status === 'CANCELLED' ? <Badge variant="danger" dot>ملغي</Badge>
+                          : <Badge variant="warning" dot>مسودة</Badge>}
+                        <div className={`text-[9px] mt-0.5 ${r.status === 'POSTED' ? 'text-emerald-700' : r.status === 'CANCELLED' ? 'text-zinc-500' : 'text-amber-700'}`}>
+                          {r.status === 'POSTED' ? 'تم تحديث المخزون'
+                            : r.status === 'CANCELLED' ? 'أُرجعت الكميات'
+                            : 'لم يتم ترحيله للمخزون'}
+                        </div>
+                      </div>
                     </div>
                     <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-dashed border-zinc-200">
                       <div>

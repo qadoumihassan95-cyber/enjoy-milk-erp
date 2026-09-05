@@ -188,7 +188,7 @@ export default function ProductionDetailPage() {
     await safeRefetch();
     invalidateProductionDependents();
     setSaving(false);
-    toast.success('تم حفظ ورقة الإنتاج');
+    toast.success('تم حفظ المسودة — لم يتم تعديل المخزون.');
   };
 
   /**
@@ -217,7 +217,7 @@ export default function ProductionDetailPage() {
       if (data.warnings?.length) {
         toast.success(`تم الترحيل مع تسجيل عجز في ${data.warnings.length} صنف`);
       } else {
-        toast.success('تم الترحيل للمخزون');
+        toast.success('تم ترحيل الإنتاج إلى المخزون بنجاح.');
       }
     } catch (e: any) {
       // STRICT_MODE، أو صلاحيات غير كافية في OVERRIDE_MODE، أو أي خطأ آخر:
@@ -230,7 +230,15 @@ export default function ProductionDetailPage() {
   };
 
   const doPost = async () => {
-    if (!confirm('ترحيل اليوم وتطبيقه على المخزون؟')) return;
+    if (!confirm(
+      'سيتم ترحيل الإنتاج إلى المخزون.\n\n' +
+      '• خصم مواد الإنتاج\n' +
+      '• خصم مواد التغليف\n' +
+      '• إضافة المنتجات النهائية\n' +
+      '• تسجيل حركات المخزون\n' +
+      '• تطبيق FIFO\n\n' +
+      'هل تريد المتابعة؟'
+    )) return;
     await runPost(false);
   };
 
@@ -391,14 +399,53 @@ export default function ProductionDetailPage() {
           </div>
         )}
 
+        {/* ─── STATUS BANNER ───────────────────────────────────────────
+            The customer saved this sheet three times and never posted it,
+            then reported "production does not update inventory". Saving is
+            a draft operation and moves nothing; only ترحيل does. That must
+            be impossible to miss. */}
+        {!cancelled && (
+          posted ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 flex items-start gap-3">
+              <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+              <div>
+                <div className="text-sm font-black text-emerald-900">مرحّل للمخزون</div>
+                <div className="text-xs text-emerald-800">
+                  تم ترحيل هذه الورقة — الكميات مطبَّقة على المخزون وحركات المخزون مسجَّلة.
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 flex items-start gap-3">
+              <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <div className="text-sm font-black text-amber-900">مسودة</div>
+                <div className="text-xs text-amber-900">
+                  تم حفظ البيانات كمسودة فقط — لم يتم ترحيل الكميات إلى المخزون.
+                  اضغط <b>«ترحيل للمخزون»</b> لتطبيقها.
+                </div>
+              </div>
+            </div>
+          )
+        )}
+
         <Card className="p-4 flex items-center justify-between flex-wrap gap-3 bg-zinc-50">
           <div className="flex gap-2 flex-wrap">
             {!disabled && (
               <>
-                <Button onClick={saveAll} loading={saving} title="Ctrl+S">
-                  <Save className="h-4 w-4" /> حفظ كل البيانات
+                {/* ترحيل is the action that actually moves inventory, so it
+                    is the PRIMARY button. Saving is a draft operation and is
+                    now visually and verbally secondary — the customer read
+                    "حفظ كل البيانات" as "production recorded" and never
+                    posted, so inventory never moved. */}
+                <Button variant="outline" onClick={saveAll} loading={saving} title="Ctrl+S">
+                  <Save className="h-4 w-4" /> حفظ كمسودة
                 </Button>
-                <Button variant="outline" onClick={doPost} loading={posting}>
+                <Button
+                  onClick={doPost}
+                  loading={posting}
+                  className="bg-emerald-600 hover:bg-emerald-700 border-emerald-600"
+                >
                   <CheckCircle2 className="h-4 w-4" /> ترحيل للمخزون
                 </Button>
               </>
