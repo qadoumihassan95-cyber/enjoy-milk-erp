@@ -43,7 +43,7 @@ const SAVED_FILTERS_KEY = 'inv-saved-filters-v1';
 const PAGE_SIZE = 50;
 
 const TYPE_LABEL: Record<string, string> = {
-  POWDER_BULK: 'بودرة بالجملة',
+  POWDER_BULK: 'مواد إنتاج',
   PACKAGING: 'مواد تغليف',
   POWDER_RETAIL: 'منتج نهائي',
   CONSUMABLE: 'مستهلكات',
@@ -1619,7 +1619,7 @@ function NewItemModal({
                 onChange={(e) => setForm({ ...form, type: e.target.value })}
                 className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
               >
-                <option value="POWDER_BULK">بودرة بالجملة</option>
+                <option value="POWDER_BULK">مواد إنتاج</option>
                 <option value="PACKAGING">مواد تغليف</option>
                 <option value="POWDER_RETAIL">منتج نهائي</option>
                 <option value="CONSUMABLE">مستهلكات</option>
@@ -1885,8 +1885,8 @@ function EditItemModal({
                 onChange={(e) => setForm({ ...form, type: e.target.value })}
                 className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
               >
-                <option value="POWDER_BULK">بودرة بالجملة (مواد إنتاج)</option>
-                <option value="PACKAGING">مواد تغليف (مواد إنتاج)</option>
+                <option value="POWDER_BULK">مواد إنتاج</option>
+                <option value="PACKAGING">مواد تغليف</option>
                 <option value="POWDER_RETAIL">منتج نهائي</option>
                 <option value="CONSUMABLE">مستهلكات</option>
               </select>

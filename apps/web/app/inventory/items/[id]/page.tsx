@@ -12,7 +12,7 @@ import { formatNumber, formatDate } from '@/lib/utils';
 import { extractApiMessage } from '@/lib/api-errors';
 
 const TYPE_LABEL: Record<string, string> = {
-  POWDER_BULK: 'بودرة بالجملة',
+  POWDER_BULK: 'مواد إنتاج',
   PACKAGING: 'مواد تغليف',
   POWDER_RETAIL: 'منتج نهائي',
   CONSUMABLE: 'مستهلكات',

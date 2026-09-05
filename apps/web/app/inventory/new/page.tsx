@@ -121,8 +121,8 @@ export default function NewItemPage() {
                     onChange={(e) => update('type', e.target.value)}
                     className="w-full rounded-lg border border-zinc-200 bg-white h-10 px-3 text-sm"
                   >
-                    <option value="POWDER_BULK">بودرة مستوردة</option>
-                    <option value="PACKAGING">تغليف</option>
+                    <option value="POWDER_BULK">مواد إنتاج</option>
+                    <option value="PACKAGING">مواد تغليف</option>
                     <option value="POWDER_RETAIL">منتج نهائي</option>
                     <option value="CONSUMABLE">مستهلكات</option>
                   </select>

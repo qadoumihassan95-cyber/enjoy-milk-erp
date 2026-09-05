@@ -337,8 +337,8 @@ function InventoryReport() {
         </div>
         <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="h-10 px-3 rounded-lg border border-zinc-200 text-sm">
           <option value="">كل التصنيفات</option>
-          <option value="POWDER_BULK">مواد خام</option>
-          <option value="PACKAGING">تغليف</option>
+          <option value="POWDER_BULK">مواد إنتاج</option>
+          <option value="PACKAGING">مواد تغليف</option>
           <option value="POWDER_RETAIL">منتج نهائي</option>
           <option value="CONSUMABLE">مستهلكات</option>
         </select>
