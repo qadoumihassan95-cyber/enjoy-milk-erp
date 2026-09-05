@@ -9,6 +9,7 @@ import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatNumber } from '@/lib/utils';
 import { extractApiMessage } from '@/lib/api-errors';
+import { sanitizeNumericInput, blurOnWheel } from '@/lib/numeric';
 
 export default function EmployeesPage() {
   const qc = useQueryClient();
@@ -317,10 +318,12 @@ function NewEmployeeForm({ onClose, onSaved }: { onClose: () => void; onSaved: (
           </div>
           <Input
             label="الراتب الأساسي (د.أ)"
-            type="number"
+            type="text"
+                  inputMode="decimal"
+                  dir="ltr"
             value={form.baseSalary}
-            onChange={(e) => setForm({ ...form, baseSalary: e.target.value })}
-          />
+            onChange={(e) => setForm({ ...form, baseSalary: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}onWheel={blurOnWheel}
+                />
           <div className="flex justify-end gap-3">
             <Button type="button" variant="ghost" onClick={onClose}>
               إلغاء
@@ -418,10 +421,12 @@ function EditEmployeeForm({
             />
             <Input
               label="الراتب الأساسي (د.أ)"
-              type="number"
+              type="text"
+                  inputMode="decimal"
+                  dir="ltr"
               value={form.baseSalary}
-              onChange={(e) => setForm({ ...form, baseSalary: e.target.value })}
-            />
+              onChange={(e) => setForm({ ...form, baseSalary: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}onWheel={blurOnWheel}
+                />
           </div>
           <Input
             label="ملاحظات"
@@ -552,7 +557,10 @@ function OvertimeModal({
                 className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
               />
             </div>
-            <Input label="عدد الساعات" type="number" step="0.5" value={hours} onChange={(e) => setHours(e.target.value)} placeholder="مثال: 3" />
+            <Input label="عدد الساعات" type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={hours} onChange={(e) => setHours(sanitizeNumericInput(e.target.value, { allowDecimal: true }))} placeholder="مثال: 3" onWheel={blurOnWheel}
+                />
             <div className="col-span-2">
               <Input label="ملاحظات (اختياري)" value={notes} onChange={(e) => setNotes(e.target.value)} />
             </div>
@@ -612,13 +620,14 @@ function OvertimeRow({
       <div className="w-16 text-xs text-zinc-500">{dateLabel}</div>
       {editing ? (
         <input
-          type="number"
-          step="0.5"
+          type="text"
+                  inputMode="decimal"
+                  dir="ltr"
           value={val}
-          onChange={(e) => setVal(e.target.value)}
-          className="w-20 h-8 px-2 rounded border border-zinc-200 text-sm"
+          onChange={(e) => setVal(sanitizeNumericInput(e.target.value, { allowDecimal: true }))} className="w-20 h-8 px-2 rounded border border-zinc-200 text-sm"
           autoFocus
-        />
+        onWheel={blurOnWheel}
+                />
       ) : (
         <div className="flex-1 text-sm">
           <b data-numeric>{entry.hours}</b> ساعة
@@ -725,10 +734,13 @@ function ExtraPaymentModal({
         <form onSubmit={submit} className="p-5 space-y-4">
           <Input
             label="المبلغ (د.أ) *"
-            type="number" step="0.01" value={amount}
+            type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={amount}
             onChange={(e) => setAmount(e.target.value)} required
             placeholder="مثال: 250"
-          />
+          onWheel={blurOnWheel}
+                />
           <Input
             label="السبب / الملاحظة *"
             value={reason}

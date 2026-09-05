@@ -24,8 +24,10 @@ import { Card, Button, Input, Badge } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { splitItemsBySection } from '@/lib/production-sections';
-import { formatDate, cn } from '@/lib/utils';
+import { formatDate, cn, formatNumber } from '@/lib/utils';
 import { extractApiMessage } from '@/lib/api-errors';
+import { sanitizeNumericInput, blurOnWheel } from '@/lib/numeric';
+import { milkMassBalance } from '@/lib/mass-balance';
 
 type Row = Record<string, any>;
 
@@ -488,16 +490,18 @@ export default function ProductionDetailPage() {
                     </div>
                     <div className="md:col-span-4">
                       <Input
-                        type="number"
+                        type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                         placeholder="الكمية"
                         value={r.quantity}
                         onChange={(e) => {
                           const v = [...cartonUsage];
-                          v[i] = { ...v[i], quantity: +e.target.value };
+                          v[i] = { ...v[i], quantity: +sanitizeNumericInput(e.target.value, { allowDecimal: true }) };
                           setCartonUsage(v);
-                        }}
-                        disabled={disabled}
-                      />
+                        }} disabled={disabled}
+                      onWheel={blurOnWheel}
+                />
                     </div>
                     <div className="md:col-span-1">
                       {!disabled && <RemoveBtn onClick={() => setCartonUsage(cartonUsage.filter((_, idx) => idx !== i))} />}
@@ -538,17 +542,18 @@ export default function ProductionDetailPage() {
                     <div className="md:col-span-4">
                       <div className="relative">
                         <Input
-                          type="number"
-                          step="0.001"
+                          type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                           placeholder="الكمية بالكيلو"
                           value={r.quantity}
                           onChange={(e) => {
                             const v = [...aluminumUsage];
-                            v[i] = { ...v[i], quantity: +e.target.value, unit: 'KG' };
+                            v[i] = { ...v[i], quantity: +sanitizeNumericInput(e.target.value, { allowDecimal: true }), unit: 'KG' };
                             setAluminumUsage(v);
-                          }}
-                          disabled={disabled}
-                        />
+                          }} disabled={disabled}
+                        onWheel={blurOnWheel}
+                />
                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-zinc-400 pointer-events-none">كغ</span>
                       </div>
                     </div>
@@ -606,11 +611,13 @@ export default function ProductionDetailPage() {
                     </div>
                     <div className="md:col-span-3">
                       <Input
-                        type="number"
+                        type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                         placeholder="عدد الأكياس"
                         value={r.count}
                         onChange={(e) => {
-                          const bags = +e.target.value;
+                          const bags = +sanitizeNumericInput(e.target.value, { allowDecimal: true });
                           const v = [...milkUsage];
                           // Preview only. The SERVER recomputes this from the
                           // item's own bagWeightKg and records the factor it
@@ -622,24 +629,25 @@ export default function ProductionDetailPage() {
                             unit: 'KG',
                           };
                           setMilkUsage(v);
-                        }}
-                        disabled={disabled}
-                      />
+                        }} disabled={disabled}
+                      onWheel={blurOnWheel}
+                />
                     </div>
                     <div className="md:col-span-3">
                       <div className="relative">
                         <Input
-                          type="number"
-                          step="0.001"
+                          type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                           placeholder="الكمية بالكغ"
                           value={r.quantity}
                           onChange={(e) => {
                             const v = [...milkUsage];
-                            v[i] = { ...v[i], quantity: +e.target.value, unit: 'KG' };
+                            v[i] = { ...v[i], quantity: +sanitizeNumericInput(e.target.value, { allowDecimal: true }), unit: 'KG' };
                             setMilkUsage(v);
-                          }}
-                          disabled={disabled}
-                        />
+                          }} disabled={disabled}
+                        onWheel={blurOnWheel}
+                />
                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-zinc-400 pointer-events-none">كغ</span>
                       </div>
                     </div>
@@ -648,6 +656,44 @@ export default function ProductionDetailPage() {
                     </div>
                   </div>
                 ))}
+                {(() => {
+                  // Raw-milk mass balance. Inventory is kept in SACKS; the
+                  // factory thinks in KG, so both are shown side by side and
+                  // the waste box below is entered in KG.
+                  const mb = milkMassBalance(milkUsage, wastages, bagWeightFor);
+                  if (!mb.hasMilk) return null;
+                  return (
+                    <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/60 p-3">
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-center">
+                        <div>
+                          <div className="text-[10px] text-zinc-500">عدد الشوالات المستخدمة</div>
+                          <div className="text-sm font-black">{formatNumber(mb.sacks, 2)} <span className="text-[10px] font-normal">شوال</span></div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-zinc-500">وزن الشوال</div>
+                          <div className="text-sm font-black">{formatNumber(mb.kgPerSack, 0)} <span className="text-[10px] font-normal">كغم</span></div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-zinc-500">إجمالي الحليب الخام</div>
+                          <div className="text-sm font-black text-emerald-800">{formatNumber(mb.grossKg, 2)} <span className="text-[10px] font-normal">كغم</span></div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-zinc-500">التوالف</div>
+                          <div className="text-sm font-black text-amber-700">{formatNumber(mb.wasteKg, 2)} <span className="text-[10px] font-normal">كغم</span></div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-zinc-500">الصافي بعد التوالف</div>
+                          <div className="text-sm font-black">{formatNumber(mb.netKg, 2)} <span className="text-[10px] font-normal">كغم</span></div>
+                        </div>
+                      </div>
+                      <div className="mt-2 text-[10px] text-zinc-600 text-center">
+                        نسبة التوالف: <b>{formatNumber(mb.wastePercent, 2)}%</b>
+                        <span className="mx-1">·</span>
+                        التوالف تُسجَّل بالكيلوغرام وهي ضمن الكمية المصروفة — لا تُخصم من المخزون مرة ثانية.
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </section>
@@ -693,17 +739,19 @@ export default function ProductionDetailPage() {
                   </div>
                   <div className="md:col-span-3">
                     <Input
-                      type="number"
+                      type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                       placeholder="الكراتين"
                       value={r.cartonsTotal}
                       onChange={(e) => {
                         const v = [...produced];
-                        v[i] = { ...v[i], cartonsTotal: +e.target.value };
+                        v[i] = { ...v[i], cartonsTotal: +sanitizeNumericInput(e.target.value, { allowDecimal: true }) };
                         setProduced(v);
-                      }}
-                      disabled={disabled}
+                      }} disabled={disabled}
                       className="font-bold"
-                    />
+                    onWheel={blurOnWheel}
+                />
                   </div>
                   <div className="md:col-span-1">
                     {!disabled && <RemoveBtn onClick={() => setProduced(produced.filter((_, idx) => idx !== i))} />}
@@ -750,15 +798,17 @@ export default function ProductionDetailPage() {
                   </div>
                   <div className="md:col-span-3">
                     <Input
-                      type="number"
+                      type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                       value={r.quantity}
                       onChange={(e) => {
                         const v = [...wastages];
-                        v[i] = { ...v[i], quantity: +e.target.value };
+                        v[i] = { ...v[i], quantity: +sanitizeNumericInput(e.target.value, { allowDecimal: true }) };
                         setWastages(v);
-                      }}
-                      disabled={disabled}
-                    />
+                      }} disabled={disabled}
+                    onWheel={blurOnWheel}
+                />
                   </div>
                   <div className="md:col-span-2">
                     <select

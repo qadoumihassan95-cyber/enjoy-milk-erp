@@ -10,6 +10,7 @@ import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatNumber, formatDate, cn } from '@/lib/utils';
 import { extractApiMessage } from '@/lib/api-errors';
+import { sanitizeNumericInput, blurOnWheel } from '@/lib/numeric';
 
 const STATUS_LABEL: Record<string, { label: string; variant: 'default' | 'warning' | 'success' | 'danger' }> = {
   DRAFT:       { label: 'مسودة', variant: 'default' },
@@ -201,10 +202,13 @@ function CountLineRow({ line, readOnly, onSave }: { line: any; readOnly: boolean
       <td className="p-2.5 text-zinc-600">{line.warehouse?.name}</td>
       <td className="p-2.5 font-bold" data-numeric>{formatNumber(expected, 0)}</td>
       <td className="p-2.5">
-        <input type="number" step="0.001" value={actual} onChange={(e) => setActual(e.target.value)} onBlur={commit}
+        <input type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={actual} onChange={(e) => setActual(sanitizeNumericInput(e.target.value, { allowDecimal: true }))} onBlur={commit}
           disabled={readOnly}
           className="w-24 h-8 px-2 rounded border border-zinc-200 text-sm"
-        />
+        onWheel={blurOnWheel}
+                />
       </td>
       <td className={cn('p-2.5 font-bold', data_numeric_class(variance))} data-numeric>
         {variance == null ? '—' : (variance > 0 ? '+' : '') + formatNumber(variance, 2)}

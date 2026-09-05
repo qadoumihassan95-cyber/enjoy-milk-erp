@@ -22,6 +22,7 @@ import { api } from '@/lib/api';
 import { useToast } from '@/components/toast';
 import { FACTORY_NAME, FACTORY_SUB } from '@/lib/branding';
 import { extractApiMessage } from '@/lib/api-errors';
+import { sanitizeNumericInput, blurOnWheel } from '@/lib/numeric';
 
 type PaymentMethod = 'cash' | 'check' | 'debit' | '';
 
@@ -352,11 +353,13 @@ export function InvoiceForm({
                     <tr key={i}>
                       <td className="border border-zinc-300 p-1">
                         <input
-                          type="number" step="0.01"
+                          type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                           value={l.qty || ''}
-                          onChange={(e) => setLine(i, { qty: +e.target.value })}
-                          className="w-full text-center border-0 focus:ring-0 no-print-border"
-                        />
+                          onChange={(e) => setLine(i, { qty: +sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full text-center border-0 focus:ring-0 no-print-border"
+                        onWheel={blurOnWheel}
+                />
                       </td>
                       <td className="border border-zinc-300 p-1">
                         <input
@@ -369,12 +372,13 @@ export function InvoiceForm({
                       </td>
                       <td className="border border-zinc-300 p-1">
                         <input
-                          type="number" step="0.01"
+                          type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                           value={l.unitPrice || ''}
-                          onChange={(e) => setLine(i, { unitPrice: +e.target.value })}
-                          className="w-full text-center border-0 focus:ring-0 no-print-border"
-                          dir="ltr"
-                        />
+                          onChange={(e) => setLine(i, { unitPrice: +sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full text-center border-0 focus:ring-0 no-print-border"
+                        onWheel={blurOnWheel}
+                />
                       </td>
                       <td className="border border-zinc-300 p-1 text-center font-bold" dir="ltr">
                         {fmtMoney(total)}
@@ -450,10 +454,12 @@ export function InvoiceForm({
               <div className="flex items-center justify-between">
                 <span className="text-zinc-600">Discount</span>
                 <input
-                  type="number" step="0.01"
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                   value={inv.discount || ''}
-                  onChange={(e) => setInv({ ...inv, discount: +e.target.value })}
-                  className="w-28 text-right border border-zinc-200 rounded px-2 py-0.5 no-print-border"
+                  onChange={(e) => setInv({ ...inv, discount: +sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-28 text-right border border-zinc-200 rounded px-2 py-0.5 no-print-border"
+                onWheel={blurOnWheel}
                 />
               </div>
               <div className="h-px bg-zinc-300 my-1" />

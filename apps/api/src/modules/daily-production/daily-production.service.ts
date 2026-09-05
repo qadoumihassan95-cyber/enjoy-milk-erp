@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import { classifyWaste, wasteDeductsStock, massBalance, validateWasteKg } from './production-mass-balance';
 import {
   resolveConversion,
   normaliseUnit,
@@ -646,12 +647,23 @@ export class DailyProductionService {
         dp.produced.map((p: any) => p.itemId).filter(Boolean),
       );
       const wasteRows: any[] = dp.wastages ?? [];
-      const finishedWaste = wasteRows.filter(
-        (w: any) => w.itemId && producedItemIds.has(w.itemId),
+
+      // Item ids ISSUED to this sheet (milk / carton / aluminium inputs).
+      // Waste of any of these is already inside the quantity withdrawn above,
+      // so it must NOT move stock or consume FIFO a second time.
+      const consumedItemIds = new Set<string>(
+        rawRows.map((r: any) => r.itemId).filter(Boolean),
       );
-      const rawWaste = wasteRows.filter(
-        (w: any) => w.itemId && !producedItemIds.has(w.itemId),
-      );
+      const kindOf = (w: any) =>
+        classifyWaste({ itemId: w.itemId, consumedItemIds, producedItemIds });
+
+      // Every bucket requires a linked item. Unlinked rows are rejected by
+      // requireItem() below BEFORE anything is written — they must never
+      // reach a FIFO call, which is why itemId is checked here too.
+      const finishedWaste = wasteRows.filter((w: any) => w.itemId && kindOf(w) === 'FINISHED_GOOD');
+      // Independent losses only — an item never issued or produced here.
+      const rawWaste = wasteRows.filter((w: any) => w.itemId && kindOf(w) === 'OTHER');
+      const issuedMaterialWaste = wasteRows.filter((w: any) => w.itemId && kindOf(w) === 'ISSUED_MATERIAL');
 
       let rawCostTotal = 0;
       for (const r of rawRows) {
@@ -670,8 +682,13 @@ export class DailyProductionService {
         );
         rawCostTotal += consumed.totalCost;
       }
-      // توالف المواد الخام — تُستهلك من دفعات المادة نفسها وتدخل في
-      // أساس التكلفة. لا بد أن تسبق حساب perCartonCost أدناه.
+      // توالف مواد لم تُصرف على هذه الورقة — خسارة مستقلة تُستهلك من
+      // دفعات المادة نفسها وتدخل في أساس التكلفة.
+      //
+      // NOTE: waste of material ALREADY ISSUED to this sheet is excluded
+      // here by construction (rawWaste holds only 'OTHER'). Its cost is
+      // already inside rawCostTotal via the consumption rows above —
+      // charging it again would double-count both stock and cost.
       let rawWasteCost = 0;
       const rawWasteSorted = [...rawWaste].sort((a, b) =>
         a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0,
@@ -760,10 +777,29 @@ export class DailyProductionService {
       // الإنتاج أعلاه، ولهذا يأتي هذا الجزء بعدها وليس قبلها.
       let finishedWasteCost = 0;
       const finishedWasteIds = new Set(finishedWaste.map((w: any) => w.id));
+      const issuedWasteIds = new Set(issuedMaterialWaste.map((w: any) => w.id));
       for (const w of dp.wastages) {
         requireItem(w, 'توالف');
         if (!w.itemId) continue;
         const wh = w.warehouseId ?? mainWh.id;
+
+        // ── ISSUED-MATERIAL WASTE: record only, never deduct ──────────
+        // The material left the warehouse with the consumption rows. This
+        // row measures how much of it was lost, in KG, for yield reporting.
+        // Creating a WASTE movement here would remove the same material
+        // twice — and in the item's canonical unit, so "35 kg" would have
+        // removed 35 SACKS (875 kg).
+        if (issuedWasteIds.has(w.id)) {
+          await this.recordStockAudit(tx, {
+            tenantId, dailyProductionId: dp.id, itemId: w.itemId,
+            itemName: w.itemName ?? '', section: 'توالف (ضمن المصروف)',
+            quantityRequested: Number(w.quantity ?? 0),
+            previousStock: 0, resultingStock: 0,
+            postingMode: mode, postedById: userId,
+          });
+          continue;
+        }
+
         await tx.stockMovement.create({
           data: {
             tenantId,

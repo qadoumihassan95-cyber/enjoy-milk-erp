@@ -9,6 +9,7 @@ import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { extractApiMessage } from '@/lib/api-errors';
+import { sanitizeNumericInput, blurOnWheel } from '@/lib/numeric';
 
 /**
  * صفحة الرخص — الآن تدعم:
@@ -364,12 +365,14 @@ function LicenseForm({
             />
             <Input
               label="أيام التذكير قبل الانتهاء"
-              type="number"
+              type="text"
+                  inputMode="decimal"
+                  dir="ltr"
               min={0}
               value={form.renewalReminderDays}
-              onChange={(e) => setF('renewalReminderDays', e.target.value)}
-              hint="افتراضي 30 يوماً"
-            />
+              onChange={(e) => setF('renewalReminderDays', sanitizeNumericInput(e.target.value, { allowDecimal: true }))} hint="افتراضي 30 يوماً"
+            onWheel={blurOnWheel}
+                />
           </div>
 
           {preview && (

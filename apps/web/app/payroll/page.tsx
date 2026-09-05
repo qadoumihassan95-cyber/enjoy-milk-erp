@@ -13,6 +13,7 @@ import { api } from '@/lib/api';
 import { FACTORY_NAME } from '@/lib/branding';
 import { computePayrollRow, computePayrollTotals } from '@/lib/payroll-calc';
 import { extractApiMessage } from '@/lib/api-errors';
+import { sanitizeNumericInput, blurOnWheel } from '@/lib/numeric';
 
 /**
  * الصفحة الرئيسية للرواتب (Payroll) — واجهة محاسبية تفاعلية.
@@ -465,15 +466,16 @@ function TdInput({
   return (
     <td className={`${bg} whitespace-nowrap`}>
       <input
-        type="number"
-        step="0.001"
+        type="text"
+                  inputMode="decimal"
+                  dir="ltr"
         min={0}
         defaultValue={value.toFixed(3)}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={(e) => { if (Number(e.target.value) < 0) e.target.value = '0'; }}
+        onChange={(e) => onChange(sanitizeNumericInput(e.target.value, { allowDecimal: true }))} onBlur={(e) => { if (Number(e.target.value) < 0) e.target.value = '0'; }}
         disabled={disabled}
         className="pay-cell"
-      />
+      onWheel={blurOnWheel}
+                />
     </td>
   );
 }
@@ -899,14 +901,15 @@ function Field({ label, value, onChange }: { label: string; value: number; onCha
       <input
         // inputMode="decimal" triggers the numeric keyboard on iOS/Android
         // even though the visual keyboard uses a comma or dot per locale.
-        type="number" step="0.001" min={0}
+        type="text"
+        dir="ltr"
         inputMode="decimal"
         pattern="[0-9]*[.,]?[0-9]*"
         defaultValue={value.toFixed(3)}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={(e) => { if (Number(e.target.value) < 0) e.target.value = '0'; }}
+        onChange={(e) => onChange(sanitizeNumericInput(e.target.value, { allowDecimal: true }))} onBlur={(e) => { if (Number(e.target.value) < 0) e.target.value = '0'; }}
         className="w-full h-11 md:h-10 px-3 rounded-lg border border-zinc-200 text-sm font-mono"
-      />
+      onWheel={blurOnWheel}
+                />
     </div>
   );
 }

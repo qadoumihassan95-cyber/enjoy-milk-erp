@@ -10,6 +10,7 @@ import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDate, cn } from '@/lib/utils';
 import { extractApiMessage } from '@/lib/api-errors';
+import { sanitizeNumericInput, blurOnWheel } from '@/lib/numeric';
 
 const PAYMENT_METHODS = [
   { value: 'CASH', label: 'كاش' },
@@ -1065,8 +1066,14 @@ function EditOrderMetaModal({
             <Input label="رقم الشحنة" value={form.shipmentTrackingNumber} onChange={(e) => setForm({ ...form, shipmentTrackingNumber: e.target.value })} />
             <Input label="تاريخ الشحن المتوقع" type="date" value={form.expectedShippingDate} onChange={(e) => setForm({ ...form, expectedShippingDate: e.target.value })} />
             <Input label="تاريخ الوصول المتوقع" type="date" value={form.expectedArrivalDate} onChange={(e) => setForm({ ...form, expectedArrivalDate: e.target.value })} />
-            <Input label="سعر الطن (د.أ)" type="number" step="0.01" value={form.tonPrice} onChange={(e) => setForm({ ...form, tonPrice: e.target.value })} />
-            <Input label="أجور الشحن (د.أ)" type="number" step="0.01" value={form.shippingCost} onChange={(e) => setForm({ ...form, shippingCost: e.target.value })} />
+            <Input label="سعر الطن (د.أ)" type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={form.tonPrice} onChange={(e) => setForm({ ...form, tonPrice: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}onWheel={blurOnWheel}
+                />
+            <Input label="أجور الشحن (د.أ)" type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={form.shippingCost} onChange={(e) => setForm({ ...form, shippingCost: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}onWheel={blurOnWheel}
+                />
           </div>
           <Input label="ملاحظات" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
           <div className="rounded-lg bg-amber-50 border border-amber-100 p-3 text-xs text-amber-800">
@@ -1185,10 +1192,12 @@ function PaymentsModal({
               <div className="col-span-3">
                 <label className="text-[10px] font-bold text-zinc-500 uppercase">المبلغ</label>
                 <input
-                  type="number" step="0.01"
-                  value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })}
-                  className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
+                  value={form.amount} onChange={(e) => setForm({ ...form, amount: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
                   placeholder={balance > 0 ? balance.toFixed(2) : '0.00'}
+                onWheel={blurOnWheel}
                 />
               </div>
               <div className="col-span-3">
@@ -1475,20 +1484,22 @@ function NewOrderForm({
           <div className="grid md:grid-cols-2 gap-3 mt-3">
             <Input
               label="سعر الطن — Ton Price"
-              type="number"
-              step="0.01"
+              type="text"
+                  inputMode="decimal"
+                  dir="ltr"
               value={form.tonPrice}
-              onChange={(e) => setForm({ ...form, tonPrice: e.target.value })}
-              hint="افتراضي لجميع الأسطر ذات وحدة TON — يمكن تجاوزه لكل سطر"
-            />
+              onChange={(e) => setForm({ ...form, tonPrice: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} hint="افتراضي لجميع الأسطر ذات وحدة TON — يمكن تجاوزه لكل سطر"
+            onWheel={blurOnWheel}
+                />
             <Input
               label="أجور الشحن — Shipping Cost"
-              type="number"
-              step="0.01"
+              type="text"
+                  inputMode="decimal"
+                  dir="ltr"
               value={form.shippingCost}
-              onChange={(e) => setForm({ ...form, shippingCost: e.target.value })}
-              hint="يُضاف إلى إجمالي البضاعة لينتج الإجمالي النهائي"
-            />
+              onChange={(e) => setForm({ ...form, shippingCost: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} hint="يُضاف إلى إجمالي البضاعة لينتج الإجمالي النهائي"
+            onWheel={blurOnWheel}
+                />
           </div>
 
           {/* ─── العملة وسعر الصرف ─ */}
@@ -1506,13 +1517,14 @@ function NewOrderForm({
             </div>
             <Input
               label="سعر الصرف (لكل 1 من العملة → JOD)"
-              type="number"
-              step="0.000001"
+              type="text"
+                  inputMode="decimal"
+                  dir="ltr"
               value={form.exchangeRate}
-              onChange={(e) => setForm({ ...form, exchangeRate: e.target.value })}
-              disabled={form.currency === 'JOD'}
+              onChange={(e) => setForm({ ...form, exchangeRate: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} disabled={form.currency === 'JOD'}
               hint={form.currency === 'USD' ? 'مثال: 0.709 يعني 1 USD = 0.709 JOD' : 'JOD = العملة الأساسية (1)'}
-            />
+            onWheel={blurOnWheel}
+                />
             {form.currency !== 'JOD' && (
               <div className="rounded-lg bg-blue-50 border border-blue-100 p-2 text-xs text-blue-800 flex flex-col justify-center">
                 <div className="font-bold">المكافئ بالـ JOD:</div>
@@ -1584,29 +1596,32 @@ function NewOrderForm({
                 <div className="md:col-span-2">
                   <Input
                     label={i === 0 ? 'الكمية' : undefined}
-                    type="number"
+                    type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                     placeholder="الكمية"
                     value={l.quantity}
                     onChange={(e) => {
                       const v = [...lines];
-                      v[i] = { ...v[i], quantity: +e.target.value };
+                      v[i] = { ...v[i], quantity: +sanitizeNumericInput(e.target.value, { allowDecimal: true }) };
                       setLines(v);
-                    }}
-                  />
+                    }}onWheel={blurOnWheel}
+                />
                 </div>
                 <div className="md:col-span-2">
                   <Input
                     label={i === 0 ? 'السعر' : undefined}
-                    type="number"
-                    step="0.01"
+                    type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                     placeholder="السعر"
                     value={l.unitPrice}
                     onChange={(e) => {
                       const v = [...lines];
-                      v[i] = { ...v[i], unitPrice: +e.target.value };
+                      v[i] = { ...v[i], unitPrice: +sanitizeNumericInput(e.target.value, { allowDecimal: true }) };
                       setLines(v);
-                    }}
-                  />
+                    }}onWheel={blurOnWheel}
+                />
                 </div>
                 <div className="md:col-span-1 flex items-center gap-1">
                   <span className="text-xs text-zinc-500" data-numeric>
@@ -1648,16 +1663,17 @@ function NewOrderForm({
                     <option value="ROLL">رول</option>
                   </select>
                   <Input
-                    type="number"
-                    step="0.01"
+                    type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                     placeholder="سعر الطن لهذا السطر (اختياري)"
                     value={l.tonPrice ?? ''}
                     onChange={(e) => {
                       const v = [...lines];
-                      v[i] = { ...v[i], tonPrice: e.target.value };
+                      v[i] = { ...v[i], tonPrice: sanitizeNumericInput(e.target.value, { allowDecimal: true }) };
                       setLines(v);
-                    }}
-                  />
+                    }}onWheel={blurOnWheel}
+                />
                 </div>
               </div>
             ))}
@@ -1674,11 +1690,12 @@ function NewOrderForm({
           </div>
           <Input
             label="المدفوع"
-            type="number"
-            step="0.01"
+            type="text"
+                  inputMode="decimal"
+                  dir="ltr"
             value={form.paid}
-            onChange={(e) => setForm({ ...form, paid: +e.target.value })}
-          />
+            onChange={(e) => setForm({ ...form, paid: +sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}onWheel={blurOnWheel}
+                />
           <div
             className={cn(
               'rounded-xl border-2 p-4',

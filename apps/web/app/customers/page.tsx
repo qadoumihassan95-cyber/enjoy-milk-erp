@@ -8,6 +8,7 @@ import { AppShell } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle, Button, Input, Badge } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatNumber } from '@/lib/utils';
+import { sanitizeNumericInput, blurOnWheel } from '@/lib/numeric';
 
 export default function CustomersPage() {
   const qc = useQueryClient();
@@ -206,16 +207,20 @@ function NewCustomerForm({ onClose, onSaved }: { onClose: () => void; onSaved: (
           <div className="grid md:grid-cols-2 gap-4">
             <Input
               label="حد الائتمان (د.أ)"
-              type="number"
+              type="text"
+                  inputMode="decimal"
+                  dir="ltr"
               value={form.creditLimit}
-              onChange={(e) => setForm({ ...form, creditLimit: e.target.value })}
-            />
+              onChange={(e) => setForm({ ...form, creditLimit: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}onWheel={blurOnWheel}
+                />
             <Input
               label="مهلة السداد (يوم)"
-              type="number"
+              type="text"
+                  inputMode="decimal"
+                  dir="ltr"
               value={form.paymentTerms}
-              onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })}
-            />
+              onChange={(e) => setForm({ ...form, paymentTerms: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}onWheel={blurOnWheel}
+                />
           </div>
           <div className="flex justify-end gap-3">
             <Button type="button" variant="ghost" onClick={onClose}>

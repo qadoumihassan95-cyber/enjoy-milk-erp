@@ -9,6 +9,7 @@ import { Card, CardHeader, CardTitle, CardContent, Button, Input } from '@/compo
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { extractApiMessage } from '@/lib/api-errors';
+import { sanitizeNumericInput, blurOnWheel } from '@/lib/numeric';
 
 const ADJUST_TYPES = [
   { value: 'ADD', label: 'إضافة كمية', color: 'emerald' },
@@ -122,11 +123,13 @@ export default function AdjustStockPage() {
               <div className="grid md:grid-cols-2 gap-4">
                 <Input
                   label={form.type === 'COUNT' ? 'الكمية الفعلية (المطلقة) *' : form.type === 'CORRECTION' ? 'قيمة الدلتا (+/-) *' : 'الكمية *'}
-                  type="number"
-                  step="0.001"
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                   value={form.quantity}
-                  onChange={(e) => setForm({ ...form, quantity: e.target.value })}
+                  onChange={(e) => setForm({ ...form, quantity: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}
                   required
+                onWheel={blurOnWheel}
                 />
                 <Input
                   label="السبب *"

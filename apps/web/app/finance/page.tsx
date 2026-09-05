@@ -24,6 +24,7 @@ import { Card, CardContent, CardHeader, CardTitle, Stat, Badge } from '@/compone
 import { api } from '@/lib/api';
 import { formatNumber, formatCurrency, formatDate } from '@/lib/utils';
 import { extractApiMessage } from '@/lib/api-errors';
+import { sanitizeNumericInput, blurOnWheel } from '@/lib/numeric';
 
 export default function FinancePage() {
   const qc = useQueryClient();
@@ -319,14 +320,15 @@ export default function FinancePage() {
             <div>
               <label className="text-[10px] font-bold text-zinc-500 uppercase">المبلغ (د.أ)</label>
               <input
-                type="number"
-                step="0.01"
+                type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                 value={expForm.amount}
-                onChange={(e) => setExpForm({ ...expForm, amount: e.target.value })}
-                className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
+                onChange={(e) => setExpForm({ ...expForm, amount: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm mt-1"
                 placeholder="0.00"
                 required
-              />
+              onWheel={blurOnWheel}
+                />
             </div>
             <div>
               <label className="text-[10px] font-bold text-zinc-500 uppercase">التصنيف</label>
@@ -470,13 +472,14 @@ export default function FinancePage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <input
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                   value={transferForm.amount}
-                  onChange={(e) => setTransferForm({ ...transferForm, amount: e.target.value })}
-                  className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+                  onChange={(e) => setTransferForm({ ...transferForm, amount: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
                   placeholder="المبلغ"
                   required
+                onWheel={blurOnWheel}
                 />
                 <input
                   value={transferForm.description}
@@ -529,13 +532,14 @@ export default function FinancePage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <input
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                   value={moveForm.amount}
-                  onChange={(e) => setMoveForm({ ...moveForm, amount: e.target.value })}
-                  className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
+                  onChange={(e) => setMoveForm({ ...moveForm, amount: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} className="w-full h-10 px-3 rounded-lg border border-zinc-200 text-sm"
                   placeholder="المبلغ"
                   required
+                onWheel={blurOnWheel}
                 />
                 <input
                   value={moveForm.description}

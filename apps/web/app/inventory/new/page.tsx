@@ -7,6 +7,7 @@ import { AppShell } from '@/components/app-shell';
 import { Button, Card, CardContent, CardHeader, CardTitle, Input } from '@/components/ui';
 import { api } from '@/lib/api';
 import { extractApiMessage } from '@/lib/api-errors';
+import { sanitizeNumericInput, blurOnWheel } from '@/lib/numeric';
 
 export default function NewItemPage() {
   const router = useRouter();
@@ -152,9 +153,11 @@ export default function NewItemPage() {
               <div className="grid md:grid-cols-2 gap-4">
                 <Input
                   label="الوزن (غرام)"
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                   value={form.netWeightGrams}
-                  onChange={(e) => update('netWeightGrams', e.target.value)}
+                  onChange={(e) => update('netWeightGrams', sanitizeNumericInput(e.target.value, { allowDecimal: true }))}onWheel={blurOnWheel}
                 />
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-zinc-700 block">التغليف</label>
@@ -182,47 +185,57 @@ export default function NewItemPage() {
               <div className="grid md:grid-cols-2 gap-4">
                 <Input
                   label="حد إعادة الطلب"
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                   value={form.reorderLevel}
-                  onChange={(e) => update('reorderLevel', e.target.value)}
-                  hint="حد أدنى قبل التنبيه بإعادة الشراء"
+                  onChange={(e) => update('reorderLevel', sanitizeNumericInput(e.target.value, { allowDecimal: true }))} hint="حد أدنى قبل التنبيه بإعادة الشراء"
+                onWheel={blurOnWheel}
                 />
                 <Input
                   label="حد إعادة طلب الإنتاج"
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                   value={form.productionReorderLevel}
-                  onChange={(e) => update('productionReorderLevel', e.target.value)}
-                  hint="يُستخدم لتخطيط الإنتاج (مستقل عن إعادة الشراء)"
+                  onChange={(e) => update('productionReorderLevel', sanitizeNumericInput(e.target.value, { allowDecimal: true }))} hint="يُستخدم لتخطيط الإنتاج (مستقل عن إعادة الشراء)"
+                onWheel={blurOnWheel}
                 />
               </div>
               <div className="grid md:grid-cols-2 gap-4">
                 <Input
                   label="مدة الصلاحية (يوم)"
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                   value={form.shelfLifeDays}
-                  onChange={(e) => update('shelfLifeDays', e.target.value)}
+                  onChange={(e) => update('shelfLifeDays', sanitizeNumericInput(e.target.value, { allowDecimal: true }))}onWheel={blurOnWheel}
                 />
                 <Input
                   label="حبات في الكرتون"
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                   value={form.packsPerCarton}
-                  onChange={(e) => update('packsPerCarton', e.target.value)}
+                  onChange={(e) => update('packsPerCarton', sanitizeNumericInput(e.target.value, { allowDecimal: true }))}onWheel={blurOnWheel}
                 />
               </div>
               <div className="grid md:grid-cols-2 gap-4">
                 <Input
                   label="سعر التكلفة (د.أ)"
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                   value={form.costPrice}
-                  onChange={(e) => update('costPrice', e.target.value)}
+                  onChange={(e) => update('costPrice', sanitizeNumericInput(e.target.value, { allowDecimal: true }))}onWheel={blurOnWheel}
                 />
                 <Input
                   label="سعر البيع (د.أ)"
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                   value={form.sellPrice}
-                  onChange={(e) => update('sellPrice', e.target.value)}
+                  onChange={(e) => update('sellPrice', sanitizeNumericInput(e.target.value, { allowDecimal: true }))}onWheel={blurOnWheel}
                 />
               </div>
             </CardContent>

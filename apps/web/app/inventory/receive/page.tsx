@@ -9,6 +9,7 @@ import { Card, CardHeader, CardTitle, CardContent, Button, Input, Badge } from '
 import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { extractApiMessage } from '@/lib/api-errors';
+import { sanitizeNumericInput, blurOnWheel } from '@/lib/numeric';
 
 /* ─────────────────────────────────────────────
    الوحدات المدعومة في نافذة "إضافة مادة"
@@ -252,14 +253,19 @@ export default function ReceiveStockPage() {
               </div>
               <div className="grid md:grid-cols-2 gap-4">
                 <Input
-                  label="الكمية *" type="number" step="0.001"
+                  label="الكمية *" type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                   value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} required
+                onWheel={blurOnWheel}
                 />
                 <Input
                   label="سعر الوحدة"
-                  type="number" step="0.01"
-                  value={form.unitCost} onChange={(e) => setForm({ ...form, unitCost: e.target.value })}
-                  hint={currentSource?.showSupplier ? 'يُستخدم لتحديث متوسط تكلفة الصنف' : undefined}
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
+                  value={form.unitCost} onChange={(e) => setForm({ ...form, unitCost: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} hint={currentSource?.showSupplier ? 'يُستخدم لتحديث متوسط تكلفة الصنف' : undefined}
+                onWheel={blurOnWheel}
                 />
               </div>
 
@@ -517,31 +523,34 @@ function AddItemModal({
                 {isMilkBag && (
                   <Input
                     label="وزن الشوال (كغ) *"
-                    type="number"
-                    step="0.01"
+                    type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                     value={form.bagWeightKg}
-                    onChange={(e) => setForm({ ...form, bagWeightKg: e.target.value })}
-                    hint="افتراضي 25 كغ"
-                  />
+                    onChange={(e) => setForm({ ...form, bagWeightKg: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} hint="افتراضي 25 كغ"
+                  onWheel={blurOnWheel}
+                />
                 )}
                 {(form.unit === 'KG' || form.unit === 'G') && (
                   <Input
                     label="غرام لكل وحدة"
-                    type="number"
-                    step="1"
+                    type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                     value={form.gramsPerUnit}
-                    onChange={(e) => setForm({ ...form, gramsPerUnit: e.target.value })}
-                    hint="1 كغ = 1000 غ"
-                  />
+                    onChange={(e) => setForm({ ...form, gramsPerUnit: sanitizeNumericInput(e.target.value, { allowDecimal: false }) })} hint="1 كغ = 1000 غ"
+                  onWheel={blurOnWheel}
+                />
                 )}
                 {isCarton && (
                   <Input
                     label="عدد الحبات داخل الكرتون"
-                    type="number"
-                    step="1"
+                    type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                     value={form.packsPerCarton}
-                    onChange={(e) => setForm({ ...form, packsPerCarton: e.target.value })}
-                  />
+                    onChange={(e) => setForm({ ...form, packsPerCarton: sanitizeNumericInput(e.target.value, { allowDecimal: false }) })}onWheel={blurOnWheel}
+                />
                 )}
               </div>
             </div>
@@ -565,18 +574,20 @@ function AddItemModal({
           <div className="grid md:grid-cols-2 gap-4">
             <Input
               label="الحد الأدنى للمخزون"
-              type="number"
-              step="0.01"
+              type="text"
+                  inputMode="decimal"
+                  dir="ltr"
               value={form.minStock}
-              onChange={(e) => setForm({ ...form, minStock: e.target.value })}
-            />
+              onChange={(e) => setForm({ ...form, minStock: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}onWheel={blurOnWheel}
+                />
             <Input
               label="سعر الشراء الافتراضي (د.أ)"
-              type="number"
-              step="0.01"
+              type="text"
+                  inputMode="decimal"
+                  dir="ltr"
               value={form.costPrice}
-              onChange={(e) => setForm({ ...form, costPrice: e.target.value })}
-            />
+              onChange={(e) => setForm({ ...form, costPrice: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}onWheel={blurOnWheel}
+                />
           </div>
 
           <div className="space-y-1.5">

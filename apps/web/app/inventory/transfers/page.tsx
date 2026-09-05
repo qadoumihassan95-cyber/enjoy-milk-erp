@@ -10,6 +10,7 @@ import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatNumber, formatDate } from '@/lib/utils';
 import { extractApiMessage } from '@/lib/api-errors';
+import { sanitizeNumericInput, blurOnWheel } from '@/lib/numeric';
 
 const STATUS_LABEL: Record<string, { label: string; variant: 'default' | 'warning' | 'success' | 'danger' }> = {
   PENDING:   { label: 'بانتظار الاعتماد', variant: 'warning' },
@@ -230,7 +231,10 @@ function NewTransferForm({ onClose, onSaved }: { onClose: () => void; onSaved: (
               </select>
             </div>
           </div>
-          <Input label="الكمية *" type="number" step="0.001" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} required />
+          <Input label="الكمية *" type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} required onWheel={blurOnWheel}
+                />
           <Input label="ملاحظات" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
           <div className="rounded-lg bg-amber-50 border border-amber-100 p-3 text-xs text-amber-800">
             ⚠ سيبقى الطلب في حالة «بانتظار» حتى يعتمده المدير. عند الاعتماد يُخصم من المُرسِل ويُضاف للمستقبل فوراً.

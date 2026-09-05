@@ -10,6 +10,7 @@ import { useToast } from '@/components/toast';
 import { api } from '@/lib/api';
 import { formatNumber, formatDate } from '@/lib/utils';
 import { extractApiMessage } from '@/lib/api-errors';
+import { sanitizeNumericInput, blurOnWheel } from '@/lib/numeric';
 
 const TYPE_LABEL: Record<string, string> = {
   POWDER_BULK: 'مواد إنتاج',
@@ -153,25 +154,45 @@ export default function ItemDetailPage() {
           </CardHeader>
           <CardContent>
             <div className="grid md:grid-cols-3 gap-4">
-              <Input label="الحد الأدنى" type="number" step="0.001" value={settings.minStock}
-                onChange={(e) => setSettings({ ...settings, minStock: e.target.value })} />
-              <Input label="الحد الأقصى" type="number" step="0.001" value={settings.maxStock}
-                onChange={(e) => setSettings({ ...settings, maxStock: e.target.value })} />
-              <Input label="نقطة إعادة الطلب" type="number" step="0.001" value={settings.reorderPoint}
-                onChange={(e) => setSettings({ ...settings, reorderPoint: e.target.value })} />
+              <Input label="الحد الأدنى" type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={settings.minStock}
+                onChange={(e) => setSettings({ ...settings, minStock: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}onWheel={blurOnWheel}
+                />
+              <Input label="الحد الأقصى" type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={settings.maxStock}
+                onChange={(e) => setSettings({ ...settings, maxStock: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}onWheel={blurOnWheel}
+                />
+              <Input label="نقطة إعادة الطلب" type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={settings.reorderPoint}
+                onChange={(e) => setSettings({ ...settings, reorderPoint: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}onWheel={blurOnWheel}
+                />
               <Input
                 label="نقطة إعادة طلب الإنتاج"
-                type="number" step="0.001"
+                type="text"
+                  inputMode="decimal"
+                  dir="ltr"
                 value={settings.productionReorderLevel}
-                onChange={(e) => setSettings({ ...settings, productionReorderLevel: e.target.value })}
-                hint="تُستخدم لتخطيط الإنتاج (مستقلة عن إعادة الشراء)"
-              />
-              <Input label="كمية إعادة الطلب" type="number" step="0.001" value={settings.reorderQty}
-                onChange={(e) => setSettings({ ...settings, reorderQty: e.target.value })} />
-              <Input label="مخزون الأمان" type="number" step="0.001" value={settings.safetyStock}
-                onChange={(e) => setSettings({ ...settings, safetyStock: e.target.value })} />
-              <Input label="مدة التوريد (أيام)" type="number" step="1" value={settings.leadTimeDays}
-                onChange={(e) => setSettings({ ...settings, leadTimeDays: e.target.value })} />
+                onChange={(e) => setSettings({ ...settings, productionReorderLevel: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })} hint="تُستخدم لتخطيط الإنتاج (مستقلة عن إعادة الشراء)"
+              onWheel={blurOnWheel}
+                />
+              <Input label="كمية إعادة الطلب" type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={settings.reorderQty}
+                onChange={(e) => setSettings({ ...settings, reorderQty: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}onWheel={blurOnWheel}
+                />
+              <Input label="مخزون الأمان" type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={settings.safetyStock}
+                onChange={(e) => setSettings({ ...settings, safetyStock: sanitizeNumericInput(e.target.value, { allowDecimal: true }) })}onWheel={blurOnWheel}
+                />
+              <Input label="مدة التوريد (أيام)" type="text"
+                  inputMode="decimal"
+                  dir="ltr" value={settings.leadTimeDays}
+                onChange={(e) => setSettings({ ...settings, leadTimeDays: sanitizeNumericInput(e.target.value, { allowDecimal: false }) })}onWheel={blurOnWheel}
+                />
             </div>
             <div className="flex justify-end mt-4">
               <Button loading={saveSettings.isPending} onClick={() => saveSettings.mutate(settings)}>
