@@ -131,6 +131,21 @@ export default function ProductionDetailPage() {
     const w = Number(it?.bagWeightKg ?? 0);
     return w > 0 ? w : LEGACY_BAG_KG;
   };
+  const itemUnitFor = (itemId?: string): string | undefined => {
+    const it: any = (items ?? []).find((x: any) => x.id === itemId);
+    return it?.unit ?? undefined;
+  };
+  // The waste box is measured, not withdrawn, so its unit is the unit the
+  // factory measures in — kilograms for anything stocked by weight (a sack
+  // of milk powder, aluminium), pieces for anything counted. Leaving the
+  // old fixed "PCS" default on a milk row produced a unit the server has
+  // no weight meaning for and now refuses to post.
+  const suggestedWasteUnit = (itemId?: string): string => {
+    const u = (itemUnitFor(itemId) ?? '').toString().trim().toUpperCase();
+    if (u === 'BAG' || u === 'SACK' || u === 'KG') return 'KG';
+    if (u === 'G') return 'G';
+    return 'PCS';
+  };
   const anyMilkItemUnconfigured = milkUsage.some(
     (r: any) => r.itemId && !(Number((items ?? []).find((x: any) => x.id === r.itemId)?.bagWeightKg ?? 0) > 0),
   );
@@ -707,7 +722,7 @@ export default function ProductionDetailPage() {
                   // Raw-milk mass balance. Inventory is kept in SACKS; the
                   // factory thinks in KG, so both are shown side by side and
                   // the waste box below is entered in KG.
-                  const mb = milkMassBalance(milkUsage, wastages, bagWeightFor);
+                  const mb = milkMassBalance(milkUsage, wastages, bagWeightFor, itemUnitFor);
                   if (!mb.hasMilk) return null;
                   return (
                     <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/60 p-3">
@@ -738,6 +753,11 @@ export default function ProductionDetailPage() {
                         <span className="mx-1">·</span>
                         التوالف تُسجَّل بالكيلوغرام وهي ضمن الكمية المصروفة — لا تُخصم من المخزون مرة ثانية.
                       </div>
+                      {mb.hasUnconvertibleWaste && (
+                        <div className="mt-2 rounded-lg bg-amber-100 border border-amber-300 px-3 py-2 text-[11px] text-amber-900 text-center">
+                          هناك سطر توالف على الحليب بوحدة لا تُقاس بالوزن. غيّر الوحدة إلى «كغ» أو «غم» — الترحيل سيُرفض بغير ذلك.
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
@@ -836,7 +856,17 @@ export default function ProductionDetailPage() {
                       value={r}
                       onChange={(updated: any) => {
                         const v = [...wastages];
-                        v[i] = { ...v[i], ...updated };
+                        // Picking the item also picks the unit it is
+                        // measured in. The operator can still override it.
+                        const nextId = updated?.itemId ?? v[i]?.itemId;
+                        v[i] = {
+                          ...v[i],
+                          ...updated,
+                          unit:
+                            updated?.itemId && updated.itemId !== v[i]?.itemId
+                              ? suggestedWasteUnit(nextId)
+                              : v[i]?.unit ?? 'PCS',
+                        };
                         setWastages(v);
                       }}
                       disabled={disabled}

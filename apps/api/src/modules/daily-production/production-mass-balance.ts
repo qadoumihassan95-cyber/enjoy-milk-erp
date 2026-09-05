@@ -24,6 +24,9 @@
  * a damaged finished carton) remains a real, separate stock loss.
  */
 
+import { normaliseUnit, resolveConversion, LEGACY_BAG_KG } from '../inventory/unit-conversion';
+
+
 /** How a waste row relates to the sheet it belongs to. */
 export type WasteKind =
   /** Item was consumed by this sheet — waste is inside the issued quantity. */
@@ -108,7 +111,12 @@ export class WasteValidationError extends Error {}
  * Rejects negatives, NaN, Infinity and anything above the gross issued
  * weight. Zero is valid — a run with no loss is normal.
  */
-export function validateWasteKg(value: unknown, grossKg: number): number {
+export function validateWasteKg(
+  value: unknown,
+  grossKg: number,
+  label = 'الحليب الخام',
+  unitLabel = 'كغم',
+): number {
   // Reject non-primitives outright. `String([])` is '' and `Number('')` is 0,
   // so an array or object would otherwise sail through as "no waste" instead
   // of being reported as the malformed payload it is.
@@ -127,8 +135,137 @@ export function validateWasteKg(value: unknown, grossKg: number): number {
   }
   if (Number.isFinite(grossKg) && grossKg >= 0 && n > grossKg + 1e-9) {
     throw new WasteValidationError(
-      `التوالف (${n} كغم) أكبر من إجمالي الحليب الخام (${grossKg} كغم)`,
+      `التوالف (${n} ${unitLabel}) أكبر من إجمالي ${label} (${grossKg} ${unitLabel})`,
     );
   }
   return round4(n);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//  R4 STORAGE MODEL — reading a persisted waste row
+// ═════════════════════════════════════════════════════════════════════
+//
+// Issued-material waste is a YIELD MEASUREMENT, not an inventory
+// withdrawal, so it is stored exactly as the operator measured it:
+//
+//     quantity = 5      unit = KG      (raw milk, Item.unit = BAG)
+//
+// It is deliberately NOT canonicalised into the item's inventory unit.
+// Canonicalising turned "5 kg lost" into "0.2 sacks lost" and the
+// production screen then reported 0.20 كغم of waste on a 1,525 كغم run —
+// a 25× under-statement of the loss.
+//
+// The row stays historically unambiguous without a schema change because
+// `unitFactor` snapshots how ONE measured unit related to the item's
+// inventory unit at entry time (5 KG → factor 0.04 → 0.2 BAG → 25 kg per
+// sack). Reporting therefore never depends on a later edit to
+// Item.bagWeightKg.
+//
+// INVARIANT (both storage shapes): `unit` always describes `quantity`,
+// and `unitFactor` always converts the measured unit into the item's
+// inventory unit.
+
+
+export interface WasteRowLike {
+  quantity?: any;
+  unit?: string | null;
+  unitFactor?: any;
+  factorSource?: string | null;
+}
+
+export interface WeighableItem {
+  unit?: string | null;
+  bagWeightKg?: any;
+  packsPerCarton?: number | null;
+  gramsPerUnit?: any;
+}
+
+/** Read a Decimal-ish value as a finite number, or null. */
+function fin(v: any): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'object' && !(typeof v?.toString === 'function')) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** The unit a stored row's `quantity` is actually expressed in. */
+export function rowUnit(row: WasteRowLike, item: WeighableItem): string {
+  const raw = row?.unit;
+  const blank = raw === null || raw === undefined || String(raw).trim() === '';
+  return normaliseUnit(blank ? item?.unit : raw);
+}
+
+/**
+ * Kilograms represented by ONE unit of the item's own stocked unit, or
+ * null when the item has no weight interpretation (PCS / CTN / ROLL).
+ */
+export function kgPerItemUnit(item: WeighableItem): number | null {
+  const u = normaliseUnit(item?.unit);
+  if (u === 'KG') return 1;
+  if (u === 'G') return 0.001;
+  if (u === 'BAG') {
+    const w = fin(item?.bagWeightKg);
+    return w !== null && w > 0 ? w : LEGACY_BAG_KG;
+  }
+  return null;
+}
+
+/**
+ * Express a stored waste row in KILOGRAMS.
+ *
+ * Throws WasteValidationError on a malformed quantity, a unit with no
+ * weight meaning for this item, or conversion metadata that cannot
+ * reconcile the two — which is exactly the "invalid unit / invalid
+ * conversion metadata" rejection the posting gate needs.
+ */
+export function wasteRowKg(row: WasteRowLike, item: WeighableItem): number {
+  const qty = fin(row?.quantity);
+  if (qty === null) throw new WasteValidationError('كمية التوالف غير صالحة');
+  if (qty < 0) throw new WasteValidationError('لا يمكن أن تكون التوالف بالسالب');
+
+  const u = rowUnit(row, item);
+  if (u === 'KG') return round4(qty);
+  if (u === 'G') return round4(qty / 1000);
+
+  const kgPer = kgPerItemUnit(item);
+  const itemUnit = normaliseUnit(item?.unit);
+  if (u === itemUnit && kgPer !== null) return round4(qty * kgPer);
+
+  // Different units: try a live conversion, then fall back to the factor
+  // snapshotted on the row itself (which survives item reconfiguration).
+  if (kgPer !== null) {
+    try {
+      return round4(resolveConversion(item as any, qty, u).quantity * kgPer);
+    } catch {
+      /* fall through to the stored snapshot */
+    }
+    const f = fin(row?.unitFactor);
+    if (f !== null && f > 0) return round4(qty * f * kgPer);
+  }
+  throw new WasteValidationError(
+    `وحدة التوالف "${u}" لا يمكن تحويلها إلى كيلوغرام لهذا الصنف`,
+  );
+}
+
+/**
+ * Express a stored waste row in the ITEM's inventory unit — what a real
+ * stock loss must deduct.
+ *
+ * Unlike wasteRowKg this degrades rather than throws: a nonsense
+ * historical unit label (300 "L" against a PCS item exists in live data)
+ * must not make an old sheet unpostable. The quantity passes through and
+ * the caller records it as-is, exactly as before this change.
+ */
+export function wasteQtyInItemUnit(row: WasteRowLike, item: WeighableItem): number {
+  const qty = fin(row?.quantity) ?? 0;
+  if (!item) return qty;
+  const u = rowUnit(row, item);
+  if (u === normaliseUnit(item?.unit)) return qty;
+  try {
+    return round4(resolveConversion(item as any, qty, u).quantity);
+  } catch {
+    const f = fin(row?.unitFactor);
+    if (f !== null && f > 0) return round4(qty * f);
+    return qty;
+  }
 }

@@ -6,7 +6,17 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../core/prisma/prisma.service';
-import { classifyWaste, wasteDeductsStock, massBalance, validateWasteKg } from './production-mass-balance';
+import {
+  classifyWaste,
+  wasteDeductsStock,
+  massBalance,
+  validateWasteKg,
+  wasteRowKg,
+  wasteQtyInItemUnit,
+  kgPerItemUnit,
+  WasteValidationError,
+  type WasteKind,
+} from './production-mass-balance';
 import {
   resolveConversion,
   normaliseUnit,
@@ -49,7 +59,7 @@ export class DailyProductionService {
     const items = await tx.item.findMany({
       where: { tenantId, id: { in: ids } },
       select: {
-        id: true, unit: true, bagWeightKg: true,
+        id: true, name: true, unit: true, bagWeightKg: true,
         packsPerCarton: true, gramsPerUnit: true,
       },
     });
@@ -86,7 +96,11 @@ export class DailyProductionService {
         unit: itemUnit,
       };
     } catch {
-      return { quantity: qty, unitFactor: null, factorSource: 'UNCONVERTIBLE', unit: itemUnit };
+      // The quantity was NOT converted, so labelling it with the item's
+      // unit would be a lie the readers below act on (a PCS number tagged
+      // BAG gets multiplied by 25 kg). Keep the unit that actually
+      // describes the number and let the reconciliation report list it.
+      return { quantity: qty, unitFactor: null, factorSource: 'UNCONVERTIBLE', unit: from };
     }
   }
 
@@ -111,6 +125,65 @@ export class DailyProductionService {
       unit: normaliseUnit(item?.unit ?? row.unit),
       count,
     };
+  }
+
+  /**
+   * Persist a waste row.
+   *
+   * ISSUED-MATERIAL WASTE IS NOT CANONICALISED — this is the R4 storage
+   * rule and the reason this method exists separately from
+   * convertToItemUnit.
+   *
+   * The factory issues raw milk in SACKS and measures the loss in
+   * KILOGRAMS. Running "5 KG" through convertToItemUnit stored 0.2 BAG,
+   * because BAG is the item's inventory unit — and every downstream
+   * reader then showed 0.20 كغم of waste on a 1,525 كغم run. The number
+   * the operator measured must survive a save/reload round trip
+   * unchanged, so the row keeps `quantity = 5, unit = KG`.
+   *
+   * That is safe precisely BECAUSE the row never moves stock: waste of
+   * material already issued to this sheet left the warehouse with the
+   * consumption rows (see post()). Storing a measurement in its own unit
+   * would be indefensible for a row that deducts inventory — which is
+   * why FINISHED_GOOD and OTHER waste still go through the normal
+   * canonicalising path untouched.
+   *
+   * `unitFactor` still snapshots how one measured unit related to the
+   * item's inventory unit at entry time (KG → BAG on a 25 kg sack gives
+   * 0.04), so the historical row stays unambiguous even if
+   * Item.bagWeightKg is edited later. No schema change is required:
+   * `unit` and `factorSource` are plain string columns.
+   */
+  private resolveWasteRow(
+    item: any | undefined,
+    w: { quantity?: any; unit?: string | null },
+    kind: WasteKind,
+  ): { quantity: number; unitFactor: number | null; factorSource: FactorSource; unit: string } {
+    const qty = Number(w.quantity ?? 0);
+    if (kind !== 'ISSUED_MATERIAL') {
+      // Real stock loss — must be expressed in the unit stock is kept in.
+      return this.convertToItemUnit(item, qty, w.unit);
+    }
+
+    const blank = w.unit === null || w.unit === undefined || String(w.unit).trim() === '';
+    const measured = normaliseUnit(blank ? item?.unit : w.unit);
+    if (!item) {
+      return { quantity: qty, unitFactor: null, factorSource: 'MANUAL', unit: measured };
+    }
+    try {
+      // Factor for ONE measured unit → the item's inventory unit. This is
+      // the snapshot, not an applied conversion: `quantity` stays as
+      // measured and `unit` names the unit it is measured in.
+      const one = resolveConversion(item, 1, measured);
+      return {
+        quantity: qty,
+        unitFactor: one.factor,
+        factorSource: one.factorSource,
+        unit: measured,
+      };
+    } catch {
+      return { quantity: qty, unitFactor: null, factorSource: 'UNCONVERTIBLE', unit: measured };
+    }
   }
 
   constructor(
@@ -351,15 +424,42 @@ export class DailyProductionService {
 
       // التوالف
       if (data.wastages?.length) {
+        // Classified with the SAME function post() uses, from the payload
+        // being saved — so the storage shape a row gets and the posting
+        // treatment it later receives can never disagree.
+        const consumedItemIds = new Set<string>(
+          [
+            ...(data.cartonUsage ?? []),
+            ...(data.aluminumUsage ?? []),
+            ...(data.milkUsage ?? []),
+          ]
+            .map((r: any) => r?.itemId)
+            .filter(Boolean) as string[],
+        );
+        const producedItemIds = new Set<string>(
+          (data.produced ?? []).map((p: any) => p?.itemId).filter(Boolean) as string[],
+        );
+
         await tx.productionWaste.createMany({
           data: data.wastages.map((w) => {
-            // نفس التطبيع المطبَّق على المواد الخام. سطر توالف بوحدة لا
-            // تُحوَّل إلى وحدة الصنف (موجود فعلاً في البيانات: 300 "L"
-            // على صنف PCS) يمرّ كما هو ويُوسَم UNCONVERTIBLE ليظهر في
-            // تقرير المطابقة، بدل أن يمنع الترحيل أو يمرّ بصمت.
-            const c = this.convertToItemUnit(
-              itemsById.get(w.itemId ?? ''), Number(w.quantity ?? 0), w.unit,
-            );
+            // A malformed number must never reach the column — Decimal(NaN)
+            // fails deep inside Prisma with an opaque error, and a silent
+            // coercion to 0 would erase a real loss.
+            const raw = Number(w.quantity ?? 0);
+            if (!Number.isFinite(raw) || raw < 0) {
+              throw new BadRequestException(
+                `كمية توالف غير صالحة للصنف "${w.itemName ?? ''}"`,
+              );
+            }
+            // Issued-material waste keeps the operator's unit (see
+            // resolveWasteRow). Finished-goods and independent losses are
+            // canonicalised exactly as before: they deduct real stock.
+            const kind = classifyWaste({
+              itemId: w.itemId,
+              consumedItemIds,
+              producedItemIds,
+            });
+            const c = this.resolveWasteRow(itemsById.get(w.itemId ?? ''), w, kind);
             return {
               tenantId,
               dailyProductionId: id,
@@ -390,6 +490,88 @@ export class DailyProductionService {
   }
 
   // ─── POST — تطبيق على المخزون ─────────────────────
+  /**
+   * SERVER-SIDE MASS-BALANCE GATE — runs before the posting transaction
+   * opens, so a rejection writes nothing.
+   *
+   * The web screen shows the operator a mass balance, but a screen is not
+   * a control: the API is reachable directly and a stale tab posts old
+   * numbers. This recomputes the balance from the persisted rows and
+   * refuses the posting when it does not hold.
+   *
+   *   61 sacks × 25 kg = 1,525 kg gross
+   *   5 kg waste       →   1,520 kg net,  0.3279 %
+   *
+   * Only ISSUED-MATERIAL waste participates: waste of something never
+   * issued here is an independent stock loss, bounded by stock (which the
+   * shortage check already covers), not by this sheet's gross weight.
+   *
+   * Items with no weight meaning (cartons in PCS) are still bounded — in
+   * their own unit — so "120 cartons issued, 200 wasted" is refused too.
+   */
+  private async assertMassBalance(tenantId: string, dp: any): Promise<void> {
+    const usageRows: any[] = [
+      ...(dp.cartonUsage ?? []),
+      ...(dp.aluminumUsage ?? []),
+      ...(dp.milkUsage ?? []),
+    ];
+    const wasteRows: any[] = dp.wastages ?? [];
+    if (!wasteRows.length) return;
+
+    const consumedItemIds = new Set<string>(
+      usageRows.map((r) => r?.itemId).filter(Boolean) as string[],
+    );
+    const producedItemIds = new Set<string>(
+      (dp.produced ?? []).map((p: any) => p?.itemId).filter(Boolean) as string[],
+    );
+
+    const issued = new Map<string, number>();
+    for (const r of usageRows) {
+      if (!r?.itemId) continue;
+      issued.set(r.itemId, (issued.get(r.itemId) ?? 0) + Number(r.quantity ?? 0));
+    }
+    if (!issued.size) return;
+
+    const items = await this.loadItems(this.prisma, tenantId, [
+      ...usageRows,
+      ...wasteRows,
+    ]);
+
+    for (const [itemId, issuedQty] of issued) {
+      const item = items.get(itemId);
+      if (!item) continue;
+      const rows = wasteRows.filter(
+        (w) =>
+          w?.itemId === itemId &&
+          classifyWaste({ itemId: w.itemId, consumedItemIds, producedItemIds }) ===
+            'ISSUED_MATERIAL',
+      );
+      if (!rows.length) continue;
+
+      const label = item.name ?? '';
+      const kgPerUnit = kgPerItemUnit(item);
+      try {
+        if (kgPerUnit !== null) {
+          // Weight-bearing material — balance in kilograms.
+          let wasteKg = 0;
+          for (const w of rows) wasteKg += wasteRowKg(w, item);
+          const mb = massBalance(issuedQty, kgPerUnit, wasteKg);
+          validateWasteKg(wasteKg, mb.grossKg, label, 'كغم');
+        } else {
+          // Countable material — balance in the item's own unit.
+          let qty = 0;
+          for (const w of rows) qty += wasteQtyInItemUnit(w, item);
+          validateWasteKg(qty, issuedQty, label, normaliseUnit(item.unit));
+        }
+      } catch (e) {
+        if (e instanceof WasteValidationError) {
+          throw new BadRequestException(e.message);
+        }
+        throw e;
+      }
+    }
+  }
+
   /**
    * SINGLE-WAREHOUSE MODEL
    * ---------------------
@@ -468,6 +650,11 @@ export class DailyProductionService {
         };
       }
     }
+
+    // ─── MASS-BALANCE GATE (no writes) ──────────────────────────────
+    // Independent of the web screen and of allowShortage: an impossible
+    // yield is a data error, not a stock shortage the operator may waive.
+    await this.assertMassBalance(tenantId, dp);
 
     const allowShortage = shortages.length > 0 && !!opts.allowShortage;
 
@@ -690,11 +877,18 @@ export class DailyProductionService {
       // already inside rawCostTotal via the consumption rows above —
       // charging it again would double-count both stock and cost.
       let rawWasteCost = 0;
+      // A deducting waste row must be expressed in the unit stock is kept
+      // in. saveAll already canonicalises those rows, so this is normally
+      // identity — but a sheet edited so an item is no longer issued
+      // changes a row's class without rewriting it, and consuming a KG
+      // measurement as if it were sacks is exactly the bug this release
+      // exists to remove.
+      const wasteItems = await this.loadItems(tx, tenantId, dp.wastages ?? []);
       const rawWasteSorted = [...rawWaste].sort((a, b) =>
         a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0,
       );
       for (const w of rawWasteSorted) {
-        const qty = Number(w.quantity ?? 0);
+        const qty = wasteQtyInItemUnit(w, wasteItems.get(w.itemId));
         if (!(qty > 0)) continue;
         const consumed = await this.fifo.consumeForProduction(
           tenantId,
@@ -800,13 +994,14 @@ export class DailyProductionService {
           continue;
         }
 
+        const wasteQty = wasteQtyInItemUnit(w, wasteItems.get(w.itemId));
         await tx.stockMovement.create({
           data: {
             tenantId,
             type: 'WASTE',
             itemId: w.itemId,
             fromWarehouseId: wh,
-            quantity: w.quantity,
+            quantity: new Prisma.Decimal(wasteQty),
             reasonCode: 'PROD_WASTE',
             refType: 'DailyProduction',
             refId: dp.id,
@@ -814,11 +1009,11 @@ export class DailyProductionService {
             performedById: userId,
           },
         });
-        const eff_w = await this.adjustStock(tx, tenantId, w.itemId, wh, -Number(w.quantity), { allowNegative: allowShortage });
+        const eff_w = await this.adjustStock(tx, tenantId, w.itemId, wh, -wasteQty, { allowNegative: allowShortage });
         await this.recordStockAudit(tx, {
           tenantId, dailyProductionId: dp.id, itemId: w.itemId,
           itemName: w.itemName ?? '', section: 'توالف',
-          quantityRequested: Number(w.quantity),
+          quantityRequested: wasteQty,
           previousStock: eff_w.before, resultingStock: eff_w.after,
           postingMode: mode, postedById: userId,
         });
@@ -827,7 +1022,7 @@ export class DailyProductionService {
         // مستقلة. لا تُضاف إلى rawCostTotal: الكرتون كُلِّف عند إنتاجه،
         // وإعادة تحميله على باقي الكراتين ازدواج في الاحتساب.
         if (finishedWasteIds.has(w.id)) {
-          const qty = Number(w.quantity ?? 0);
+          const qty = wasteQty;
           if (qty > 0) {
             const consumed = await this.fifo.consumeForProduction(
               tenantId,
@@ -1520,7 +1715,45 @@ export class DailyProductionService {
     collect(dp.cartonUsage, 'كرتون');
     collect(dp.aluminumUsage, 'ألمنيوم');
     collect(dp.milkUsage, 'حليب');
-    collect(dp.wastages, 'توالف');
+
+    // ─── التوالف: فقط ما يُخصم فعلاً من الرصيد ────────────────────
+    // Waste of material ALREADY ISSUED to this sheet withdraws nothing —
+    // post() records it and moves on. Counting it here demanded stock
+    // that is never taken: with waste measured in KG on a sack item it
+    // asked for 61 + 5 = 66 sacks against a 61-sack issue, and STRICT_MODE
+    // would refuse a perfectly valid sheet. Deducting waste is still
+    // counted, converted into the unit stock is kept in.
+    {
+      const wasteRows: any[] = dp.wastages ?? [];
+      if (wasteRows.length) {
+        const consumedItemIds = new Set<string>(
+          [
+            ...(dp.cartonUsage ?? []),
+            ...(dp.aluminumUsage ?? []),
+            ...(dp.milkUsage ?? []),
+          ]
+            .map((r: any) => r?.itemId)
+            .filter(Boolean) as string[],
+        );
+        const producedItemIds = new Set<string>(
+          (dp.produced ?? []).map((p: any) => p?.itemId).filter(Boolean) as string[],
+        );
+        const wasteItems = await this.loadItems(this.prisma, tenantId, wasteRows);
+        const deducting = wasteRows
+          .filter(
+            (w) =>
+              w?.itemId &&
+              wasteDeductsStock(
+                classifyWaste({ itemId: w.itemId, consumedItemIds, producedItemIds }),
+              ),
+          )
+          .map((w) => ({
+            ...w,
+            quantity: wasteQtyInItemUnit(w, wasteItems.get(w.itemId)),
+          }));
+        collect(deducting, 'توالف');
+      }
+    }
 
     // ─── ما هو "المتاح" فعلياً؟ ───────────────────────────────
     // كان هذا الفحص يقرأ StockLevel فقط، وهذا خطأ: الترحيل يستهلك

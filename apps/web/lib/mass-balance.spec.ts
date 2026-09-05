@@ -69,3 +69,75 @@ describe('milkMassBalance', () => {
     expect(milkMassBalance([milk(61)], [waste(35)], kg25).wastePercent).toBeLessThan(3);
   });
 });
+
+/**
+ * THE SAVE/RELOAD BUG.
+ *
+ * Before this release the API canonicalised the waste row into the item's
+ * unit on the way in, so the same sheet read differently depending on
+ * whether it had been reloaded:
+ *
+ *   in React state (just typed)   { quantity: 5,   unit: 'KG' }   → 5 كغم
+ *   read back from the database   { quantity: 0.2, unit: 'BAG' }  → 0.20 كغم
+ *
+ * The API now stores the measurement as measured. These tests assert the
+ * two shapes agree, and that the reader is not simply summing quantities.
+ */
+describe('save → reload agreement', () => {
+  const unitOf = () => 'BAG';
+  const TYPED = { itemId: 'milk', quantity: 5, unit: 'KG' };
+  const PERSISTED = { itemId: 'milk', quantity: 5, unit: 'KG', unitFactor: 0.04, factorSource: 'ITEM' };
+
+  it('shows 1,525 / 5 / 1,520 / 0.33% before the save', () => {
+    const mb = milkMassBalance([milk(61)], [TYPED], kg25, unitOf);
+    expect(mb.grossKg).toBe(1525);
+    expect(mb.wasteKg).toBe(5);
+    expect(mb.netKg).toBe(1520);
+    expect(mb.wastePercent).toBeCloseTo(0.3279, 3);
+  });
+
+  it('shows the SAME figures after the reload', () => {
+    const mb = milkMassBalance([milk(61)], [PERSISTED], kg25, unitOf);
+    expect(mb.grossKg).toBe(1525);
+    expect(mb.wasteKg).toBe(5);
+    expect(mb.netKg).toBe(1520);
+    expect(mb.wastePercent).toBeCloseTo(0.3279, 3);
+  });
+
+  it('never reads the old 0.2-sack shape as 0.20 kg', () => {
+    // A legacy row written by the previous build really is 0.2 SACKS —
+    // which is 5 kg. Reading it as 0.20 kg is the 25× understatement.
+    const legacy = { itemId: 'milk', quantity: 0.2, unit: 'BAG' };
+    const mb = milkMassBalance([milk(61)], [legacy], kg25, unitOf);
+    expect(mb.wasteKg).toBe(5);
+    expect(mb.wasteKg).not.toBe(0.2);
+  });
+
+  it('never reads a 5-kg row as 125 kg', () => {
+    const mb = milkMassBalance([milk(61)], [TYPED], kg25, unitOf);
+    expect(mb.wasteKg).not.toBe(125);
+  });
+
+  it('converts a grams row', () => {
+    const mb = milkMassBalance([milk(61)], [{ itemId: 'milk', quantity: 5000, unit: 'G' }], kg25, unitOf);
+    expect(mb.wasteKg).toBe(5);
+  });
+
+  it('flags a unit the server will refuse, instead of inventing a number', () => {
+    const mb = milkMassBalance([milk(61)], [{ itemId: 'milk', quantity: 5, unit: 'PCS' }], kg25, unitOf);
+    expect(mb.hasUnconvertibleWaste).toBe(true);
+    expect(mb.wasteKg).toBe(0);
+  });
+
+  it('accepts Arabic-Indic and Persian digits in a persisted KG row', () => {
+    for (const [input, expected] of [['٥', 5], ['٥٫٥', 5.5], ['۵', 5], ['۵.۵', 5.5]] as const) {
+      const mb = milkMassBalance(
+        [milk(61)],
+        [{ itemId: 'milk', quantity: input, unit: 'KG' }],
+        kg25,
+        unitOf,
+      );
+      expect(mb.wasteKg).toBe(expected);
+    }
+  });
+});

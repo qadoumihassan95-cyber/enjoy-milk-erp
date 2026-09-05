@@ -12,6 +12,7 @@
 
 import {
   classifyWaste, wasteDeductsStock, massBalance, validateWasteKg, WasteValidationError,
+  wasteRowKg, wasteQtyInItemUnit, kgPerItemUnit,
 } from './production-mass-balance';
 
 const S = (...ids: string[]) => new Set(ids);
@@ -150,5 +151,94 @@ describe('61 sacks + 35 kg waste — inventory effect', () => {
     expect(mb.grossKg).toBe(1525);
     expect(mb.netKg).toBe(1490);
     expect(mb.wastePercent).toBeCloseTo(2.2951, 3);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  R4 STORAGE MODEL — reading a row back
+// ═══════════════════════════════════════════════════════════════════
+describe('reading a persisted waste row', () => {
+  const SACK = { unit: 'BAG', bagWeightKg: 25 };
+  const UNCONFIGURED_SACK = { unit: 'BAG', bagWeightKg: null };
+  const KILOS = { unit: 'KG' };
+  const PIECES = { unit: 'PCS' };
+
+  describe('kgPerItemUnit', () => {
+    it('reads the item\'s own sack weight, never a global constant', () => {
+      expect(kgPerItemUnit(SACK)).toBe(25);
+      expect(kgPerItemUnit({ unit: 'BAG', bagWeightKg: 30 })).toBe(30);
+    });
+    it('falls back to the legacy default only when the item is unconfigured', () => {
+      expect(kgPerItemUnit(UNCONFIGURED_SACK)).toBe(25);
+    });
+    it('is 1 for a KG item and 0.001 for a G item', () => {
+      expect(kgPerItemUnit(KILOS)).toBe(1);
+      expect(kgPerItemUnit({ unit: 'G' })).toBe(0.001);
+    });
+    it('is null for anything with no weight meaning', () => {
+      expect(kgPerItemUnit(PIECES)).toBeNull();
+      expect(kgPerItemUnit({ unit: 'CTN' })).toBeNull();
+      expect(kgPerItemUnit({ unit: 'ROLL' })).toBeNull();
+    });
+  });
+
+  describe('wasteRowKg — the number the yield report needs', () => {
+    it('reads a KG measurement on a SACK item as kilograms', () => {
+      // THE regression: 5 must stay 5, not become 0.2 and not become 125.
+      expect(wasteRowKg({ quantity: 5, unit: 'KG' }, SACK)).toBe(5);
+    });
+    it('reads a row stored in the item\'s own unit as sacks', () => {
+      expect(wasteRowKg({ quantity: 5, unit: 'BAG' }, SACK)).toBe(125);
+    });
+    it('treats a blank unit as the item\'s unit — how the old build stored it', () => {
+      expect(wasteRowKg({ quantity: 5, unit: null }, SACK)).toBe(125);
+      expect(wasteRowKg({ quantity: 5, unit: '  ' }, SACK)).toBe(125);
+    });
+    it('converts grams', () => {
+      expect(wasteRowKg({ quantity: 5000, unit: 'G' }, SACK)).toBe(5);
+    });
+    it('accepts Decimal-ish values as strings', () => {
+      expect(wasteRowKg({ quantity: '5.5000', unit: 'KG' }, SACK)).toBe(5.5);
+    });
+    it('falls back to the row\'s own snapshot when the item can no longer convert', () => {
+      // Item reconfigured to a unit that has no live BAG conversion; the
+      // factor written at entry time still describes the row.
+      const row = { quantity: 5, unit: 'KG', unitFactor: 0.04 };
+      expect(wasteRowKg(row, { unit: 'BAG', bagWeightKg: 25 })).toBe(5);
+    });
+    it('REJECTS a unit with no weight meaning for the item', () => {
+      expect(() => wasteRowKg({ quantity: 5, unit: 'PCS' }, SACK)).toThrow(WasteValidationError);
+      expect(() => wasteRowKg({ quantity: 5, unit: 'PCS' }, SACK)).toThrow(/لا يمكن تحويلها إلى كيلوغرام/);
+    });
+    it('REJECTS a malformed or negative quantity', () => {
+      expect(() => wasteRowKg({ quantity: 'abc', unit: 'KG' }, SACK)).toThrow(WasteValidationError);
+      expect(() => wasteRowKg({ quantity: NaN, unit: 'KG' }, SACK)).toThrow(WasteValidationError);
+      expect(() => wasteRowKg({ quantity: Infinity, unit: 'KG' }, SACK)).toThrow(WasteValidationError);
+      expect(() => wasteRowKg({ quantity: -1, unit: 'KG' }, SACK)).toThrow(/بالسالب/);
+    });
+  });
+
+  describe('wasteQtyInItemUnit — the number a real stock loss deducts', () => {
+    it('is the quantity itself when the row is already canonical', () => {
+      expect(wasteQtyInItemUnit({ quantity: 7, unit: 'PCS' }, PIECES)).toBe(7);
+    });
+    it('converts a KG measurement into sacks before deducting', () => {
+      // Defence in depth: a sheet edited so milk is no longer issued turns
+      // a 5 KG measurement into a real loss. Deducting 5 SACKS (125 kg)
+      // instead of 0.2 is precisely the bug this release removes.
+      expect(wasteQtyInItemUnit({ quantity: 5, unit: 'KG' }, SACK)).toBe(0.2);
+    });
+    it('degrades rather than throwing on a nonsense historical unit', () => {
+      // 300 "L" against a PCS item exists in live data. An old sheet must
+      // stay postable; the reconciliation report lists the row instead.
+      expect(wasteQtyInItemUnit({ quantity: 300, unit: 'L' }, PIECES)).toBe(300);
+    });
+  });
+
+  describe('validateWasteKg names the item it is talking about', () => {
+    it('keeps the "أكبر من إجمالي" contract with a custom label and unit', () => {
+      expect(() => validateWasteKg(200, 120, 'كرتون 750 غم', 'PCS')).toThrow(/أكبر من إجمالي/);
+      expect(() => validateWasteKg(200, 120, 'كرتون 750 غم', 'PCS')).toThrow(/كرتون 750 غم/);
+    });
   });
 });

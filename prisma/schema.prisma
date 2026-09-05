@@ -1079,13 +1079,28 @@ model ProductionWaste {
   itemId            String?
   itemName          String             // الصنف
   quantity          Decimal @db.Decimal(18, 4)  // العدد / الوزن
-  unit              String  @default("PCS")    // PCS | KG | L
+  unit              String  @default("PCS")    // PCS | KG | G | BAG | CTN
   warehouseId       String?
-  // ─── لقطة التحويل وقت الترحيل (Stage 4) ───────────────────────────
-  // الكمية أعلاه مخزّنة بوحدة الصنف نفسها. هذه الحقول تسجّل كيف وصلنا
-  // إليها، حتى تبقى الورقة التاريخية قابلة لإعادة الإنتاج حتى لو تغيّر
-  // إعداد الصنف لاحقاً. factorSource: ITEM | LEGACY_DEFAULT | PHYSICAL |
-  // IDENTITY | MANUAL | UNCONVERTIBLE
+  // ─── لقطة التحويل (Stage 4 + R4) ──────────────────────────────────
+  // INVARIANT: `unit` always describes `quantity`, and `unitFactor` always
+  // converts ONE unit of `unit` into the item's own inventory unit.
+  //
+  // Two storage shapes, decided by how the row relates to its sheet:
+  //
+  //   • Waste that DEDUCTS stock (finished goods, an independent loss) is
+  //     canonicalised into the item's inventory unit — stock can only be
+  //     removed in the unit it is kept in.
+  //   • Waste of material ALREADY ISSUED to this sheet is a yield
+  //     MEASUREMENT and never moves stock, so it is kept exactly as the
+  //     operator measured it: raw milk stocked in BAG, lost in KG, stores
+  //     quantity = 5, unit = KG, unitFactor = 0.04 (i.e. 25 kg/sack).
+  //     Canonicalising it stored 0.2 BAG and every reader then called that
+  //     0.20 كغم — a 25× understatement of the loss.
+  //
+  // unitFactor is a SNAPSHOT: reporting on an old sheet must not change
+  // when Item.bagWeightKg is edited later.
+  // factorSource: ITEM | LEGACY_DEFAULT | PHYSICAL | IDENTITY | MANUAL |
+  // UNCONVERTIBLE
   unitFactor        Decimal? @db.Decimal(18, 6)
   factorSource      String?
 
